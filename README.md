@@ -10,7 +10,7 @@
 
 > 🔍 Enable AI assistants to search and access arXiv papers through a simple MCP interface.
 
-The ArXiv MCP Server provides a bridge between AI assistants and arXiv's research repository through the Message Control Protocol (MCP). It allows AI models to search for papers and access their content in a programmatic way.
+The ArXiv MCP Server provides a bridge between AI assistants and arXiv's research repository through the Model Context Protocol (MCP). It allows AI models to search for papers and access their content in a programmatic way.
 
 <div align="center">
   
