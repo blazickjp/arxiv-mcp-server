@@ -11,6 +11,8 @@ import mcp.types as types
 from ..config import Settings
 import pymupdf4llm
 import logging
+import requests
+from markdownify import markdownify as md
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -59,12 +61,33 @@ def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
 
 
 def convert_pdf_to_markdown(paper_id: str, pdf_path: Path) -> None:
-    """Convert PDF to Markdown in a separate thread."""
+    """Convert arXiv paper to Markdown using HTML first, falling back to PDF if needed."""
     try:
-        logger.info(f"Starting conversion for {paper_id}")
-        markdown = pymupdf4llm.to_markdown(pdf_path, show_progress=False)
-        md_path = get_paper_path(paper_id, ".md")
+        logger.info(f"Starting HTML to Markdown conversion for {paper_id}")
+        # from arXiv get HTML
+        html_url = f"https://export.arxiv.org/html/{paper_id}"
+        response = requests.get(html_url, timeout=10)
+        response.raise_for_status()
+        html_content = response.text
 
+        # using markdownify to convert HTML to Markdown
+        markdown = md(
+            html_content,
+            heading_style="ATX",
+            autolinks=True,
+            table_infer_header=True,
+            mathjax=True,
+            code_language_callback=lambda el: el.get("class", [""])[0].replace(
+                "language-", ""
+            )
+            if el.has_attr("class")
+            else None,
+            newline_style="BACKSLASH",
+            strip=["script", "style"],
+            bullet_style="-",
+        )
+
+        md_path = get_paper_path(paper_id, ".md")
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown)
 
@@ -73,16 +96,44 @@ def convert_pdf_to_markdown(paper_id: str, pdf_path: Path) -> None:
             status.status = "success"
             status.completed_at = datetime.now()
 
-        # Clean up PDF after successful conversion
-        logger.info(f"Conversion completed for {paper_id}")
+        logger.info(f"HTML to Markdown conversion completed for {paper_id}")
 
     except Exception as e:
-        logger.error(f"Conversion failed for {paper_id}: {str(e)}")
-        status = conversion_statuses.get(paper_id)
-        if status:
-            status.status = "error"
-            status.completed_at = datetime.now()
-            status.error = str(e)
+        logger.error(f"HTML to Markdown conversion failed for {paper_id}: {str(e)}")
+        logger.info(f"Falling back to PDF conversion for {paper_id}")
+        try:
+            # Convert PDF to Markdown using pymupdf4llm, ignore images and graphics
+            # for pymupdf4llm's bad OCR performance and speed up
+            markdown = pymupdf4llm.to_markdown(
+                pdf_path,
+                table_strategy="lines_strict",
+                ignore_images=True,
+                ignore_graphics=True,
+            )
+
+            # Save Markdown output
+            md_path = get_paper_path(paper_id, ".md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(markdown)
+
+            # Update conversion status
+            status = conversion_statuses.get(paper_id)
+            if status:
+                status.status = "success"
+                status.completed_at = datetime.now()
+                status.error = None
+
+            logger.info(f"PDF to Markdown conversion successful for {paper_id}")
+
+        except Exception as pdf_e:
+            logger.error(
+                f"PDF to Markdown conversion failed for {paper_id}: {str(pdf_e)}"
+            )
+            status = conversion_statuses.get(paper_id)
+            if status:
+                status.status = "error"
+                status.completed_at = datetime.now()
+                status.error = str(pdf_e)
 
 
 async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
