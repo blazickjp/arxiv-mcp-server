@@ -91,6 +91,10 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         paper_id = arguments["paper_id"]
         check_status = arguments.get("check_status", False)
 
+        # Format correctly the paper_id if the prefix 'arXiv:' has been forgotten (which may happen for some LLMs)
+        if not paper_id.startswith("arXiv:"):
+            paper_id = f"arXiv:{paper_id}"
+
         # If only checking status
         if check_status:
             status = conversion_statuses.get(paper_id)
