@@ -102,7 +102,6 @@ def convert_pdf_to_markdown(paper_id: str, pdf_path: Path) -> None:
         logger.error(f"HTML to Markdown conversion failed for {paper_id}: {str(e)}")
         logger.info(f"Falling back to PDF conversion for {paper_id}")
         try:
-
             # Convert PDF to Markdown using pymupdf4llm, ignore images and graphics
             # for pymupdf4llm's bad OCR performance and speed up
             markdown = pymupdf4llm.to_markdown(
@@ -127,7 +126,9 @@ def convert_pdf_to_markdown(paper_id: str, pdf_path: Path) -> None:
             logger.info(f"PDF to Markdown conversion successful for {paper_id}")
 
         except Exception as pdf_e:
-            logger.error(f"PDF to Markdown conversion failed for {paper_id}: {str(pdf_e)}")
+            logger.error(
+                f"PDF to Markdown conversion failed for {paper_id}: {str(pdf_e)}"
+            )
             status = conversion_statuses.get(paper_id)
             if status:
                 status.status = "error"
