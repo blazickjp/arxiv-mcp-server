@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 from datetime import datetime, timezone
 from dateutil import parser
 import mcp.types as types
+from mcp.types import ToolAnnotations
 from ..config import Settings
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -38,6 +39,7 @@ VALID_CATEGORIES = {
 
 search_tool = types.Tool(
     name="search_papers",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description="""Search for papers on arXiv with advanced filtering and query optimization.
 
 QUERY CONSTRUCTION GUIDELINES:
