@@ -5,12 +5,14 @@ from pathlib import Path
 import arxiv
 from typing import Dict, Any, List, Optional
 import mcp.types as types
+from mcp.types import ToolAnnotations
 from ..config import Settings
 
 settings = Settings()
 
 list_tool = types.Tool(
     name="list_papers",
+    annotations=ToolAnnotations(readOnlyHint=True),
     description="List all existing papers available as resources",
     inputSchema={
         "type": "object",

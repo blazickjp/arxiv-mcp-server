@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import mcp.types as types
+from mcp.types import ToolAnnotations
 from ..config import Settings
 import pymupdf4llm
 import logging
@@ -32,6 +33,7 @@ class ConversionStatus:
 
 download_tool = types.Tool(
     name="download_paper",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description="Download a paper and create a resource for it",
     inputSchema={
         "type": "object",
