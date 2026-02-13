@@ -12,6 +12,7 @@ from ..config import Settings
 import pymupdf4llm
 import fitz
 import logging
+from .semantic_search import index_paper_by_id, index_paper_from_result
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -145,6 +146,8 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
 
         # Check if paper is already converted
         if get_paper_path(paper_id, ".md").exists():
+            # Best-effort index refresh for existing papers
+            asyncio.create_task(asyncio.to_thread(index_paper_by_id, paper_id))
             return [
                 types.TextContent(
                     type="text",
@@ -186,6 +189,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Download PDF
         paper = next(client.results(arxiv.Search(id_list=[paper_id])))
         paper.download_pdf(dirpath=pdf_path.parent, filename=pdf_path.name)
+        asyncio.create_task(asyncio.to_thread(index_paper_from_result, paper))
 
         # Update status and start conversion
         status = conversion_statuses[paper_id]

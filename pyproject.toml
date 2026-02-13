@@ -41,6 +41,10 @@ test = [
 dev = [
     "black>=23.3.0"
 ]
+pro = [
+    "sentence-transformers>=3.0.0",
+    "numpy>=1.26.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
