@@ -20,6 +20,8 @@ from .tools import (
     handle_reindex,
     semantic_search_tool,
     reindex_tool,
+    handle_citation_graph,
+    citation_graph_tool,
 )
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
@@ -54,6 +56,7 @@ async def list_tools() -> List[types.Tool]:
         read_tool,
         semantic_search_tool,
         reindex_tool,
+        citation_graph_tool,
     ]
 
 
@@ -74,6 +77,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_semantic_search(arguments)
         elif name == "reindex":
             return await handle_reindex(arguments)
+        elif name == "citation_graph":
+            return await handle_citation_graph(arguments)
         else:
             return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
     except Exception as e:

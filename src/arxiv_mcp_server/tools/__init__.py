@@ -10,6 +10,7 @@ from .semantic_search import (
     reindex_tool,
     handle_reindex,
 )
+from .citation_graph import citation_graph_tool, handle_citation_graph
 
 __all__ = [
     "search_tool",
@@ -24,4 +25,6 @@ __all__ = [
     "handle_semantic_search",
     "reindex_tool",
     "handle_reindex",
+    "citation_graph_tool",
+    "handle_citation_graph",
 ]
