@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+import httpx
+from markdownify import markdownify as md
 import mcp.types as types
 from ..config import Settings
 import pymupdf4llm
@@ -49,6 +51,12 @@ download_tool = types.Tool(
                 "description": "If true, only check conversion status without downloading",
                 "default": False,
             },
+            "format": {
+                "type": "string",
+                "enum": ["auto", "pdf", "html"],
+                "description": "Download format: 'auto' tries HTML first then PDF fallback, 'html' for HTML only, 'pdf' for PDF only",
+                "default": "auto",
+            },
         },
         "required": ["paper_id"],
     },
@@ -60,6 +68,22 @@ def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
     storage_path = Path(settings.STORAGE_PATH)
     storage_path.mkdir(parents=True, exist_ok=True)
     return storage_path / f"{paper_id}{suffix}"
+
+
+async def fetch_html_as_markdown(paper_id: str) -> Path:
+    """Fetch arXiv HTML paper and convert to markdown.
+
+    Raises httpx.HTTPStatusError on non-2xx responses (e.g. 404 for papers without HTML).
+    """
+    url = f"https://arxiv.org/html/{paper_id}"
+    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+
+    markdown = md(resp.text, heading_style="ATX", strip=["img", "script", "style"])
+    md_path = get_paper_path(paper_id, ".md")
+    md_path.write_text(markdown, encoding="utf-8")
+    return md_path
 
 
 def convert_pdf_to_markdown(paper_id: str, pdf_path: Path) -> None:
@@ -174,7 +198,59 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 )
             ]
 
-        # Start new download and conversion
+        fmt = arguments.get("format", "auto")
+
+        # Try HTML download for "auto" and "html" formats
+        if fmt in ("auto", "html"):
+            try:
+                logger.info(f"Fetching HTML for {paper_id}")
+                md_path = await fetch_html_as_markdown(paper_id)
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "status": "success",
+                                "message": "Paper downloaded from HTML",
+                                "resource_uri": f"file://{md_path}",
+                            }
+                        ),
+                    )
+                ]
+            except httpx.HTTPStatusError as e:
+                if fmt == "html":
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "status": "error",
+                                    "message": f"HTML version not available (HTTP {e.response.status_code})",
+                                }
+                            ),
+                        )
+                    ]
+                logger.info(
+                    f"HTML not available for {paper_id} (HTTP {e.response.status_code}), falling back to PDF"
+                )
+            except Exception as e:
+                if fmt == "html":
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "status": "error",
+                                    "message": f"HTML download failed: {str(e)}",
+                                }
+                            ),
+                        )
+                    ]
+                logger.info(
+                    f"HTML fetch failed for {paper_id}: {e}, falling back to PDF"
+                )
+
+        # PDF download path (for "pdf" format or "auto" fallback)
         pdf_path = get_paper_path(paper_id, ".pdf")
         client = arxiv.Client()
 

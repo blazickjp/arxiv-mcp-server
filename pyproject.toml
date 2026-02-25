@@ -28,6 +28,7 @@ dependencies = [
     "anyio>=4.2.0",
     "black>=25.1.0",
     "pymupdf-layout>=1.26.6",
+    "markdownify>=0.14.0",
 ]
 
 [project.optional-dependencies]
