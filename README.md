@@ -72,8 +72,26 @@ Add this configuration to your MCP client config file:
             "args": [
                 "tool",
                 "run",
+                "arxiv-mcp-server"
+            ]
+        }
+    }
+}
+```
+
+If you want a custom storage location, pass `--storage-path`:
+
+```json
+{
+    "mcpServers": {
+        "arxiv-mcp-server": {
+            "command": "uv",
+            "args": [
+                "tool",
+                "run",
                 "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
+                "--storage-path",
+                "/path/to/paper/storage"
             ]
         }
     }
@@ -91,8 +109,7 @@ For Development:
                 "--directory",
                 "path/to/cloned/arxiv-mcp-server",
                 "run",
-                "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
+                "arxiv-mcp-server"
             ]
         }
     }
@@ -167,11 +184,16 @@ This prompt includes:
 
 ## ⚙️ Configuration
 
-Configure through environment variables:
+Storage path resolution order:
 
-| Variable | Purpose | Default |
+1. `--storage-path` command line argument
+2. `ARXIV_STORAGE_PATH` environment variable
+3. Default location in the project source folder: `<repo>/storage/papers`
+
+| Option | Purpose | Example |
 |----------|---------|---------|
-| `ARXIV_STORAGE_PATH` | Paper storage location | ~/.arxiv-mcp-server/papers |
+| `--storage-path` | Override storage path at startup | `--storage-path /tmp/arxiv-papers` |
+| `ARXIV_STORAGE_PATH` | Set storage path via environment variable | `ARXIV_STORAGE_PATH=/tmp/arxiv-papers` |
 
 ## 🧪 Testing
 

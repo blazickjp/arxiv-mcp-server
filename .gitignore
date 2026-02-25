@@ -38,3 +38,6 @@ ENV/
 
 # Local development settings
 .env
+
+# Local paper storage
+/storage/

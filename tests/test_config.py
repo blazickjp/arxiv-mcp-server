@@ -3,42 +3,54 @@
 import os
 import sys
 from pathlib import Path
-from arxiv_mcp_server.config import Settings
 from unittest.mock import patch
+
+from arxiv_mcp_server.config import Settings
 
 
 @patch.object(Path, "mkdir")
-@patch.object(Path, "resolve")
-def test_storage_path_default(mock_resolve, mock_mkdir):
+def test_storage_path_default(mock_mkdir):
     """Test that the default storage path is correctly constructed."""
-    # Setup the mock to return the path itself when resolved
-    mock_resolve.side_effect = lambda: Path.home() / ".arxiv-mcp-server" / "papers"
+    expected_path = Path(__file__).resolve().parents[1] / "storage" / "papers"
 
-    settings = Settings()
-    expected_path = Path.home() / ".arxiv-mcp-server" / "papers"
-    assert settings.STORAGE_PATH == expected_path.resolve()
+    with patch.object(sys, "argv", ["program"]), patch.dict(os.environ, {}, clear=True):
+        settings = Settings()
+        assert settings.STORAGE_PATH == expected_path.resolve()
+
     # Verify mkdir was called with parents=True and exist_ok=True
     mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
 
 @patch.object(Path, "mkdir")
-@patch.object(Path, "resolve")
-def test_storage_path_from_args(mock_resolve, mock_mkdir):
-    """Test that the storage path from command line args is correctly parsed."""
-    test_path = "/tmp/test_storage"
-    mock_resolve.side_effect = lambda: Path(test_path)
+def test_storage_path_from_env(mock_mkdir):
+    """Test that the storage path from env var is correctly parsed."""
+    test_path = "/tmp/test_storage_env"
 
-    with patch.object(sys, "argv", ["program", "--storage-path", test_path]):
+    with patch.object(sys, "argv", ["program"]), patch.dict(
+        os.environ, {"ARXIV_STORAGE_PATH": test_path}, clear=True
+    ):
         settings = Settings()
         assert settings.STORAGE_PATH == Path(test_path).resolve()
+
     mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
 
 @patch.object(Path, "mkdir")
-@patch.object(Path, "resolve")
-def test_storage_path_platform_compatibility(mock_resolve, mock_mkdir):
-    """Test that the storage path works correctly on different platforms."""
-    # Test with a path format that would be valid on both Windows and Unix
+def test_storage_path_from_args(mock_mkdir):
+    """Test that the storage path from command line args is correctly parsed."""
+    test_path = "/tmp/test_storage"
+
+    with patch.object(sys, "argv", ["program", "--storage-path", test_path]), patch.dict(
+        os.environ, {"ARXIV_STORAGE_PATH": "/tmp/ignored_env"}, clear=True
+    ):
+        settings = Settings()
+        assert settings.STORAGE_PATH == Path(test_path).resolve()
+
+    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+
+
+def test_storage_path_platform_compatibility():
+    """Test that command-line path parsing works for different path formats."""
     test_paths = [
         # Unix-style path
         "/path/to/storage",
@@ -51,22 +63,12 @@ def test_storage_path_platform_compatibility(mock_resolve, mock_mkdir):
     ]
 
     for test_path in test_paths:
-        # Reset mocks for each iteration
-        mock_resolve.reset_mock()
-        mock_mkdir.reset_mock()
-
-        # Set up the mock to return the path itself
-        mock_resolve.side_effect = lambda: Path(test_path)
-
         with patch.object(sys, "argv", ["program", "--storage-path", test_path]):
             settings = Settings()
-            resolved_path = settings.STORAGE_PATH
+            parsed_path = settings._get_storage_path_from_args()
 
-            # Verify that Path constructor was called with the test path
-            assert resolved_path == Path(test_path).resolve()
-
-            # Verify that mkdir was called
-            mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+            # Verify that Path constructor handled the test path format
+            assert parsed_path == Path(test_path).expanduser()
 
 
 def test_storage_path_creates_missing_directory():
