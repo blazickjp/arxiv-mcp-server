@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
 import arxiv
 from pathlib import Path
+from arxiv_mcp_server import config as _config
 
 
 class MockAuthor:
@@ -16,6 +17,14 @@ class MockAuthor:
 class MockLink:
     def __init__(self, href):
         self.href = href
+
+
+@pytest.fixture(autouse=True)
+def reset_arxiv_client():
+    """Reset the shared arxiv client singleton between tests."""
+    _config._arxiv_client = None
+    yield
+    _config._arxiv_client = None
 
 
 @pytest.fixture

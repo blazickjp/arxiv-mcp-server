@@ -5,7 +5,7 @@ from pathlib import Path
 import arxiv
 from typing import Dict, Any, List, Optional
 import mcp.types as types
-from ..config import Settings
+from ..config import Settings, get_arxiv_client
 
 settings = Settings()
 
@@ -32,7 +32,7 @@ async def handle_list_papers(
     try:
         papers = list_papers()
 
-        client = arxiv.Client()
+        client = get_arxiv_client()
 
         results = client.results(arxiv.Search(id_list=papers))
 

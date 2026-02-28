@@ -26,7 +26,6 @@ dependencies = [
     "uvicorn>=0.30.0",
     "sse-starlette>=1.8.2",
     "anyio>=4.2.0",
-    "black>=25.1.0",
     "pymupdf-layout>=1.26.6",
 ]
 

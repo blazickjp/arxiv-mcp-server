@@ -5,8 +5,10 @@ from mcp.types import Prompt, PromptMessage, TextContent, GetPromptResult
 from .prompts import PROMPTS
 from .deep_research_analysis_prompt import PAPER_ANALYSIS_PROMPT
 
-
 # Legacy global research context - used as fallback when no session_id is provided
+_MAX_CONTEXT_ENTRIES = 50
+
+
 class ResearchContext:
     """Maintains context throughout a research session."""
 
@@ -20,6 +22,10 @@ class ResearchContext:
         if "expertise_level" in args:
             self.expertise_level = args["expertise_level"]
         if "paper_id" in args and args["paper_id"] not in self.explored_papers:
+            # Cap entries to prevent unbounded memory growth
+            if len(self.explored_papers) >= _MAX_CONTEXT_ENTRIES:
+                oldest = next(iter(self.explored_papers))
+                del self.explored_papers[oldest]
             self.explored_papers[args["paper_id"]] = {"id": args["paper_id"]}
 
 
@@ -89,6 +95,9 @@ async def get_prompt(
             previous_papers_context = f"\nI've previously analyzed papers: {', '.join(previous_ids)}. If relevant, note connections to these works."
 
     # Track this analysis in context (for global context only)
+    if len(_research_context.paper_analyses) >= _MAX_CONTEXT_ENTRIES:
+        oldest = next(iter(_research_context.paper_analyses))
+        del _research_context.paper_analyses[oldest]
     _research_context.paper_analyses[paper_id] = {"analysis": "complete"}
 
     return GetPromptResult(

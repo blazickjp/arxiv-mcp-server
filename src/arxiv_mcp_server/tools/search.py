@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from dateutil import parser
 import mcp.types as types
-from ..config import Settings
+from ..config import Settings, get_arxiv_client
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -432,7 +432,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
         # For non-date queries, use the arxiv package (more robust parsing)
-        client = arxiv.Client()
+        client = get_arxiv_client()
 
         # Build query components
         query_parts = []

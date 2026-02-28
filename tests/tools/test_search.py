@@ -14,7 +14,9 @@ from arxiv_mcp_server.tools.search import (
 @pytest.mark.asyncio
 async def test_basic_search(mock_client):
     """Test basic paper search functionality."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search({"query": "test query", "max_results": 1})
 
         assert len(result) == 1
@@ -29,7 +31,9 @@ async def test_basic_search(mock_client):
 @pytest.mark.asyncio
 async def test_search_with_categories(mock_client):
     """Test paper search with category filtering."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search(
             {"query": "test query", "categories": ["cs.AI", "cs.LG"], "max_results": 1}
         )
@@ -168,7 +172,9 @@ async def test_raw_arxiv_search_builds_correct_url():
 @pytest.mark.asyncio
 async def test_search_with_invalid_categories(mock_client):
     """Test search with invalid categories."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search(
             {
                 "query": "test query",
@@ -183,7 +189,9 @@ async def test_search_with_invalid_categories(mock_client):
 @pytest.mark.asyncio
 async def test_search_empty_query(mock_client):
     """Test search with empty query but categories."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search(
             {"query": "", "categories": ["cs.AI"], "max_results": 1}
         )
@@ -202,7 +210,9 @@ async def test_search_arxiv_error(mock_client):
     error = arxiv.ArxivError("http://example.com", retry=3, message="API Error")
     mock_client.results.side_effect = error
 
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search({"query": "test", "max_results": 1})
 
         assert "ArXiv API error" in result[0].text
@@ -211,7 +221,9 @@ async def test_search_arxiv_error(mock_client):
 @pytest.mark.asyncio
 async def test_search_max_results_limiting(mock_client):
     """Test that max_results is properly limited."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         # Test that very large max_results gets capped
         result = await handle_search({"query": "test", "max_results": 1000})
 
@@ -223,7 +235,9 @@ async def test_search_max_results_limiting(mock_client):
 @pytest.mark.asyncio
 async def test_search_sort_by_relevance(mock_client):
     """Test search with relevance sorting (default)."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search({"query": "test", "sort_by": "relevance"})
 
         content = json.loads(result[0].text)
@@ -233,7 +247,9 @@ async def test_search_sort_by_relevance(mock_client):
 @pytest.mark.asyncio
 async def test_search_sort_by_date(mock_client):
     """Test search with date sorting."""
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search({"query": "test", "sort_by": "date"})
 
         content = json.loads(result[0].text)

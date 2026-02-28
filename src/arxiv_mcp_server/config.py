@@ -7,6 +7,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Lazy shared arxiv client
+_arxiv_client = None
+
+
+def get_arxiv_client():
+    """Return a shared arxiv.Client instance, creating it on first call."""
+    global _arxiv_client
+    if _arxiv_client is None:
+        import arxiv
+
+        _arxiv_client = arxiv.Client()
+    return _arxiv_client
+
 
 class Settings(BaseSettings):
     """Server configuration settings."""
