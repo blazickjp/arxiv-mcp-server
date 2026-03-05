@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![PyPI Version](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
+[![MCP Shield](https://img.shields.io/badge/MCP_Shield-A--_(86)-brightgreen)](https://github.com/thuggeelya/mcp-shield)
 
 # ArXiv MCP Server
 
