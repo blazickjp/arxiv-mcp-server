@@ -47,6 +47,7 @@ This is an **MCP (Message Control Protocol) server** that provides AI models acc
    - `download.py`: Paper download and storage management  
    - `list_papers.py`: List locally stored papers
    - `read_paper.py`: Read paper content from storage
+   - `get_abstract.py`: Get paper abstract/metadata via arXiv API without downloading (token-saving alternative to download+read)
 3. **Resource Management** (`resources/papers.py`): `PaperManager` class handles paper storage, PDF-to-markdown conversion using pymupdf4llm, and local caching
 4. **Configuration** (`config.py`): Pydantic-based settings with environment variable support
 
