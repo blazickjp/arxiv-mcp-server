@@ -28,6 +28,11 @@ from .model_benchmarks import model_benchmarks_tool, handle_model_benchmarks
 from .venue_lookup import venue_lookup_tool, handle_venue_lookup
 from .patent_search import patent_search_tool, handle_patent_search
 
+# --- Phase 1: Practitioner sources (no auth) ---
+from .hn_tools import hn_tool, handle_hn
+from .community_tools import community_tool, handle_community
+from .package_tools import packages_tool, handle_packages
+
 # --- Backwards-compat imports (old tools still importable) ---
 from .advanced_query import advanced_query_tool, handle_advanced_query
 from .citations import citation_graph_tool, handle_citation_graph
@@ -66,6 +71,10 @@ __all__ = [
     "model_benchmarks_tool", "handle_model_benchmarks",
     "venue_lookup_tool", "handle_venue_lookup",
     "patent_search_tool", "handle_patent_search",
+    # Phase 1: Practitioner sources
+    "hn_tool", "handle_hn",
+    "community_tool", "handle_community",
+    "packages_tool", "handle_packages",
     # Backwards-compat
     "advanced_query_tool", "handle_advanced_query",
     "citation_graph_tool", "handle_citation_graph",

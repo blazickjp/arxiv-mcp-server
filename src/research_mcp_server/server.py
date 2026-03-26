@@ -45,6 +45,11 @@ from .tools import model_benchmarks_tool, handle_model_benchmarks
 from .tools import venue_lookup_tool, handle_venue_lookup
 from .tools import patent_search_tool, handle_patent_search
 
+# --- Phase 1: Practitioner sources (no auth) ---
+from .tools import hn_tool, handle_hn
+from .tools import community_tool, handle_community
+from .tools import packages_tool, handle_packages
+
 # --- Backwards-compat handlers (old tool names still routable) ---
 from .tools import handle_advanced_query
 from .tools import handle_citation_graph, handle_citation_context
@@ -84,7 +89,7 @@ async def get_prompt(
 async def list_tools() -> List[types.Tool]:
     """List available research tools.
 
-    Returns consolidated v2 tools (18 tools, down from 31).
+    Returns v2 tools (25 tools).
     Old tool names are still routable via backwards-compat aliases in _TOOL_HANDLERS.
     """
     return [
@@ -97,9 +102,11 @@ async def list_tools() -> List[types.Tool]:
         trend_analysis_tool, digest_tool,
         # Knowledge & Memory
         kb_tool, kg_query_tool, memory_tool,
-        # External Sources
+        # Academic Sources
         hf_trending_tool, pwc_search_tool, model_benchmarks_tool,
         venue_lookup_tool, patent_search_tool, export_tool,
+        # Practitioner Sources (Phase 1)
+        hn_tool, community_tool, packages_tool,
         # Meta
         suggest_tools_tool,
     ]
@@ -126,13 +133,17 @@ _TOOL_HANDLERS: Dict[str, Any] = {
     "kb": handle_kb,
     "kg_query": handle_kg_query,
     "memory": handle_memory,
-    # External Sources
+    # Academic Sources
     "hf_trending": handle_hf_trending,
     "benchmarks": handle_pwc_search,
     "model_benchmarks": handle_model_benchmarks,
     "venue_lookup": handle_venue_lookup,
     "patent_search": handle_patent_search,
     "export": handle_export,
+    # Practitioner Sources (Phase 1)
+    "hn": handle_hn,
+    "community": handle_community,
+    "packages": handle_packages,
     # Meta
     "help": handle_suggest_tools,
 }
