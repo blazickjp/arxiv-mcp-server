@@ -8,6 +8,7 @@ import {
   RiFolder3Line,
   RiSearchLine,
   RiTimeLine,
+  RiHistoryLine,
 } from "@remixicon/react"
 import {
   Sidebar,
@@ -33,6 +34,7 @@ const navItems: NavItem[] = [
   { title: "Collections", href: "/collections", icon: RiFolder3Line },
   { title: "Search", href: "/search", icon: RiSearchLine },
   { title: "Sessions", href: "/sessions", icon: RiTimeLine },
+  { title: "History", href: "/history", icon: RiHistoryLine },
 ]
 
 function AppSidebar() {

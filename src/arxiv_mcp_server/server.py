@@ -6,6 +6,7 @@ This module implements an MCP server for interacting with arXiv.
 """
 
 import logging
+import time
 import mcp.types as types
 from typing import Dict, Any, List
 from mcp.server import Server
@@ -27,6 +28,9 @@ from .tools import research_lineage_tool, read_paper_chunks_tool, kg_query_tool,
 from .tools import handle_research_lineage, handle_read_paper_chunks, handle_kg_query, handle_research_context
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
+from .store.research_history import ResearchHistory
+
+_history = ResearchHistory()
 
 settings = Settings()
 logger = logging.getLogger("arxiv-mcp-server")
@@ -61,58 +65,68 @@ async def list_tools() -> List[types.Tool]:
     ]
 
 
+_TOOL_HANDLERS: Dict[str, Any] = {
+    "search_papers": handle_search,
+    "download_paper": handle_download,
+    "list_papers": handle_list_papers,
+    "read_paper": handle_read_paper,
+    "arxiv_advanced_query": handle_advanced_query,
+    "arxiv_export": handle_export,
+    "arxiv_semantic_search": handle_semantic_search,
+    "arxiv_compare_papers": handle_compare,
+    "arxiv_citation_graph": handle_citation_graph,
+    "arxiv_citation_context": handle_citation_context,
+    "arxiv_trend_analysis": handle_trend_analysis,
+    "arxiv_research_digest": handle_digest,
+    "kb_save": handle_kb_save,
+    "kb_search": handle_kb_search,
+    "kb_list": handle_kb_list,
+    "kb_annotate": handle_kb_annotate,
+    "kb_remove": handle_kb_remove,
+    "arxiv_research_lineage": handle_research_lineage,
+    "read_paper_chunks": handle_read_paper_chunks,
+    "kg_query": handle_kg_query,
+    "research_context": handle_research_context,
+}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle tool calls for arXiv research functionality."""
+    """Handle tool calls for arXiv research functionality.
+
+    Every call is auto-logged to research_history.db for audit trail.
+    """
     logger.debug(f"Calling tool {name} with arguments {arguments}")
+    start = time.monotonic()
+    is_error = False
+
     try:
-        if name == "search_papers":
-            return await handle_search(arguments)
-        elif name == "download_paper":
-            return await handle_download(arguments)
-        elif name == "list_papers":
-            return await handle_list_papers(arguments)
-        elif name == "read_paper":
-            return await handle_read_paper(arguments)
-        elif name == "arxiv_advanced_query":
-            return await handle_advanced_query(arguments)
-        elif name == "arxiv_export":
-            return await handle_export(arguments)
-        elif name == "arxiv_semantic_search":
-            return await handle_semantic_search(arguments)
-        elif name == "arxiv_compare_papers":
-            return await handle_compare(arguments)
-        elif name == "arxiv_citation_graph":
-            return await handle_citation_graph(arguments)
-        elif name == "arxiv_citation_context":
-            return await handle_citation_context(arguments)
-        elif name == "arxiv_trend_analysis":
-            return await handle_trend_analysis(arguments)
-        elif name == "arxiv_research_digest":
-            return await handle_digest(arguments)
-        elif name == "kb_save":
-            return await handle_kb_save(arguments)
-        elif name == "kb_search":
-            return await handle_kb_search(arguments)
-        elif name == "kb_list":
-            return await handle_kb_list(arguments)
-        elif name == "kb_annotate":
-            return await handle_kb_annotate(arguments)
-        elif name == "kb_remove":
-            return await handle_kb_remove(arguments)
-        elif name == "arxiv_research_lineage":
-            return await handle_research_lineage(arguments)
-        elif name == "read_paper_chunks":
-            return await handle_read_paper_chunks(arguments)
-        elif name == "kg_query":
-            return await handle_kg_query(arguments)
-        elif name == "research_context":
-            return await handle_research_context(arguments)
+        handler = _TOOL_HANDLERS.get(name)
+        if handler is None:
+            is_error = True
+            result = [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
         else:
-            return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
+            result = await handler(arguments)
     except Exception as e:
         logger.error(f"Tool error: {str(e)}")
-        return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+        is_error = True
+        result = [types.TextContent(type="text", text=f"Error: {str(e)}")]
+
+    # Auto-log to research history
+    duration_ms = int((time.monotonic() - start) * 1000)
+    response_text = "\n".join(r.text for r in result)
+    try:
+        await _history.log_call(
+            tool_name=name,
+            arguments=arguments,
+            response_text=response_text,
+            is_error=is_error,
+            duration_ms=duration_ms,
+        )
+    except Exception as log_err:
+        logger.warning(f"Failed to log tool call: {log_err}")
+
+    return result
 
 
 async def main():
