@@ -10,6 +10,7 @@ import numpy as np
 import mcp.types as types
 
 from ..store.knowledge_base import KnowledgeBase
+from ..store.knowledge_graph import KnowledgeGraph
 from .semantic_search import _load_model, MODEL_NAME
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -17,9 +18,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 kb_save_tool = types.Tool(
     name="kb_save",
     description=(
-        "Save a paper to your personal knowledge base. Supports arXiv papers "
-        "(auto-fetches metadata), DOI references, or manual entries. Optionally "
-        "add tags, notes, reading status, and assign to a collection."
+        "Save a paper to your local knowledge base for later retrieval via kb_search/kb_list. "
+        "Supports arXiv (auto-fetches metadata by ID), DOI, or manual entry. Generates an "
+        "embedding for semantic search. Optionally add tags, notes, reading status, and collection. "
+        "Examples: source=\"arxiv\", source_id=\"2401.12345\" | source=\"arxiv\", source_id=\"1706.03762\", "
+        "tags=[\"transformers\"], collection=\"thesis-refs\""
     ),
     inputSchema={
         "type": "object",
@@ -273,6 +276,15 @@ async def handle_kb_save(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 collection_created = True
             await kb.add_to_collection(collection, paper_id)
 
+        # Populate knowledge graph (non-blocking — failures don't break saving)
+        kg_extracted = False
+        try:
+            kg = KnowledgeGraph()
+            await kg.extract_from_paper(paper)
+            kg_extracted = True
+        except Exception as kg_err:
+            logger.warning(f"Knowledge graph extraction failed for {paper_id}: {kg_err}")
+
         # Fetch the saved paper to return full details
         saved_paper = await kb.get_paper(paper_id)
 
@@ -280,6 +292,7 @@ async def handle_kb_save(arguments: Dict[str, Any]) -> List[types.TextContent]:
             "status": "saved",
             "paper": saved_paper,
             "embedding_stored": embedding_stored,
+            "kg_extracted": kg_extracted,
         }
         if collection:
             result["collection"] = collection

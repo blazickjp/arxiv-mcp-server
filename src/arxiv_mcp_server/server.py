@@ -23,6 +23,8 @@ from .tools import semantic_search_tool, compare_tool
 from .tools import citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool
 from .tools import kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool
 from .tools import handle_kb_save, handle_kb_search, handle_kb_list, handle_kb_annotate, handle_kb_remove
+from .tools import research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool
+from .tools import handle_research_lineage, handle_read_paper_chunks, handle_kg_query, handle_research_context
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
 
@@ -55,6 +57,7 @@ async def list_tools() -> List[types.Tool]:
         semantic_search_tool, compare_tool,
         citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool,
         kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
+        research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool,
     ]
 
 
@@ -97,6 +100,14 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_kb_annotate(arguments)
         elif name == "kb_remove":
             return await handle_kb_remove(arguments)
+        elif name == "arxiv_research_lineage":
+            return await handle_research_lineage(arguments)
+        elif name == "read_paper_chunks":
+            return await handle_read_paper_chunks(arguments)
+        elif name == "kg_query":
+            return await handle_kg_query(arguments)
+        elif name == "research_context":
+            return await handle_research_context(arguments)
         else:
             return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
     except Exception as e:

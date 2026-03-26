@@ -12,17 +12,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 kb_annotate_tool = types.Tool(
     name="kb_annotate",
-    description="""Add or update annotations on a paper in your knowledge base.
+    description="""Update annotations on a paper already in your knowledge base (saved via kb_save). Use to add notes, manage tags, change reading status, or assign to collections. Paper must exist -- use kb_search or kb_list to find the paper_id first.
 
-Set notes, tags, reading status, and manage collection membership in a single call.
-Supports both replacing all tags and incremental add/remove operations.
+Supports replacing all tags or incremental add_tags/remove_tags. Multiple updates in one call.
 
-EXAMPLES:
-- Add reading notes: paper_id="2401.12345", notes="Key insight: combines RL with LLM planning"
-- Tag a paper: paper_id="2401.12345", add_tags=["reinforcement-learning", "agents"]
-- Mark as completed: paper_id="2401.12345", reading_status="completed"
-- Add to collection: paper_id="2401.12345", add_to_collection="thesis-references"
-- Combined: paper_id="2401.12345", notes="...", add_tags=["rl"], reading_status="reading"
+Examples: paper_id="2401.12345", notes="Key insight: RL + LLM planning" | paper_id="2401.12345", add_tags=["agents"], reading_status="completed" | paper_id="2401.12345", add_to_collection="thesis-refs"
 """,
     inputSchema={
         "type": "object",

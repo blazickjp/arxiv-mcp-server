@@ -18,15 +18,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 kb_search_tool = types.Tool(
     name="kb_search",
-    description="""Search your personal knowledge base using semantic similarity, keyword matching, or both.
+    description="""Search your local knowledge base (papers saved via kb_save). Unlike search_papers/arxiv_semantic_search which search arXiv, this searches only YOUR saved papers. Fully local, no API calls.
 
-All searches are local — no API calls. Three modes:
-- "hybrid" (default): combines semantic vector similarity with keyword matching for best results
-- "semantic": pure embedding-based search — finds conceptually similar papers even with different wording
-- "keyword": text matching in titles and abstracts
+Modes: "hybrid" (default, best results), "semantic" (meaning-based), "keyword" (text match). Filter by tags, categories, reading_status, or collection.
 
-Use filters to narrow results by tags, categories, reading status, or collection.
-Falls back to keyword-only if the embedding model is unavailable.""",
+Examples: query="attention mechanisms" | query="RL for robotics", tags=["agents"], mode="semantic\"""",
     inputSchema={
         "type": "object",
         "properties": {

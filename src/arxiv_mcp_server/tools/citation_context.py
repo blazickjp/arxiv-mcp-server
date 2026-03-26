@@ -16,20 +16,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 citation_context_tool = types.Tool(
     name="arxiv_citation_context",
-    description="""Analyze the citation landscape of an arXiv paper using the Semantic Scholar API.
+    description="""Analyze WHERE an arXiv paper sits in the research landscape. Use when you need deeper insight than a simple citation list (use arxiv_citation_graph for that). Returns: foundational papers (most-cited refs), bridge papers (shared across citers), citation clusters (groups sharing refs), temporal impact curve, and citation velocity.
 
-Goes beyond simple citation listing to provide structural analysis:
-- Foundational papers: highest-cited references (intellectual foundations)
-- Bridge papers: works shared between the root paper's references and its citers' references
-- Citation clusters: groups of citing papers that share similar references (same research thread)
-- Temporal impact: citation adoption curve by year
-- Citation velocity: citations per year since publication
+Makes many Semantic Scholar API calls -- slower than arxiv_citation_graph. Omit version suffix from IDs.
 
-Use this to understand WHERE a paper sits in the research landscape, not just WHAT it cites.
-
-EXAMPLES:
-- Analyze a paper's position: paper_id="2401.12345"
-- Deeper analysis with more citations: paper_id="2401.12345", max_citations=100""",
+Examples: paper_id="2401.12345" | paper_id="1706.03762", max_citations=100""",
     inputSchema={
         "type": "object",
         "properties": {

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -72,6 +73,104 @@ def _extract_themes(
         {"keyword": kw, "count": count}
         for kw, count in word_counts.most_common(top_n)
     ]
+
+
+# Regex patterns for gap analysis extraction
+_METHOD_PATTERN = re.compile(
+    r"(?:propose|present|introduce|use|employ|leverage|based on|using|with)"
+    r"\s+([a-zA-Z\s]{3,30}?)(?:\.|,|;|to |for |that )",
+    re.IGNORECASE,
+)
+_DATASET_PATTERN = re.compile(
+    r"(?:on|evaluated on|benchmark|dataset)"
+    r"\s+([A-Z][a-zA-Z0-9\-\s]{2,25}?)(?:\.|,|;| dataset| benchmark)",
+)
+
+
+def _analyze_gaps(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Identify research gaps from method-dataset combinations across papers.
+
+    Extracts methods and datasets mentioned in abstracts, builds a co-occurrence
+    matrix, and identifies untested combinations and underexplored items.
+
+    Args:
+        papers: List of paper dicts with 'abstract' fields.
+
+    Returns:
+        List of gap dicts with type, details, and suggestion.
+    """
+    # Track which methods and datasets each paper mentions
+    method_counts: Counter[str] = Counter()
+    dataset_counts: Counter[str] = Counter()
+    combinations: set[tuple[str, str]] = set()
+
+    for paper in papers:
+        abstract = paper.get("abstract", "")
+        if not abstract:
+            continue
+
+        # Extract methods
+        methods_found: List[str] = []
+        for match in _METHOD_PATTERN.finditer(abstract):
+            method = match.group(1).strip().lower()
+            if len(method) > 2:
+                methods_found.append(method)
+                method_counts[method] += 1
+
+        # Extract datasets
+        datasets_found: List[str] = []
+        for match in _DATASET_PATTERN.finditer(abstract):
+            dataset = match.group(1).strip()
+            if len(dataset) > 2:
+                datasets_found.append(dataset)
+                dataset_counts[dataset] += 1
+
+        # Record combinations seen in this paper
+        for m in methods_found:
+            for d in datasets_found:
+                combinations.add((m, d))
+
+    gaps: List[Dict[str, Any]] = []
+
+    # Only analyze gaps if we have enough data
+    all_methods = [m for m, c in method_counts.items() if c >= 1]
+    all_datasets = [d for d, c in dataset_counts.items() if c >= 1]
+
+    # Identify untested method-dataset combinations (limit to top methods/datasets)
+    top_methods = [m for m, _ in method_counts.most_common(10)]
+    top_datasets = [d for d, _ in dataset_counts.most_common(10)]
+
+    for method in top_methods:
+        for dataset in top_datasets:
+            if (method, dataset) not in combinations:
+                gaps.append({
+                    "type": "untested_combination",
+                    "method": method,
+                    "dataset": dataset,
+                    "suggestion": f"No paper combines {method} with {dataset}",
+                })
+
+    # Identify underexplored methods (used only once)
+    for method, count in method_counts.items():
+        if count == 1:
+            gaps.append({
+                "type": "underexplored_method",
+                "method": method,
+                "paper_count": count,
+                "suggestion": f"Only 1 paper uses {method}",
+            })
+
+    # Identify underexplored datasets (used only once)
+    for dataset, count in dataset_counts.items():
+        if count == 1:
+            gaps.append({
+                "type": "underexplored_dataset",
+                "dataset": dataset,
+                "paper_count": count,
+                "suggestion": f"Only 1 paper evaluates on {dataset}",
+            })
+
+    return gaps
 
 
 def _format_digest_markdown(digest: Dict[str, Any]) -> str:
@@ -146,18 +245,11 @@ def _format_digest_markdown(digest: Dict[str, Any]) -> str:
 
 digest_tool = types.Tool(
     name="arxiv_research_digest",
-    description="""Generate a structured research digest for a topic.
+    description="""Generate a weekly/periodic research digest for a topic. Use for a "what's new in X" summary rather than searching for specific papers. Unlike arxiv_trend_analysis (long-term trends over months), this focuses on recent papers (1-90 days) with highlights and themes.
 
-Searches arXiv for recent papers on a topic, optionally enriches them with
-citation counts from Semantic Scholar, and produces a comprehensive digest
-including:
-- Highlights (top papers by citations or recency)
-- Full paper list grouped by category
-- Key themes extracted from titles and abstracts
-- Statistics (top categories, top authors)
+Returns: top papers by citations, full paper list by category, key themes, top authors/categories. Saved to local storage. Output includes both markdown and JSON.
 
-The digest is saved to local storage for later reference. Returns both
-human-readable markdown and structured JSON.""",
+Examples: topic="AI agents", time_range_days=7 | topic="diffusion models", categories=["cs.CV"], max_papers=30, time_range_days=30""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -368,6 +460,9 @@ async def handle_digest(
         # Extract themes
         themes = _extract_themes(papers, top_n=15)
 
+        # Analyze research gaps
+        gap_analysis = _analyze_gaps(papers)
+
         # Compute stats
         category_counts: Counter[str] = Counter()
         author_counts: Counter[str] = Counter()
@@ -413,6 +508,7 @@ async def handle_digest(
                 "top_categories": top_categories,
                 "top_authors": top_authors,
             },
+            "gap_analysis": gap_analysis,
         }
 
         if s2_note:

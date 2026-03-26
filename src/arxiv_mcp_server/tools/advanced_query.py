@@ -18,10 +18,12 @@ logger = logging.getLogger("arxiv-mcp-server")
 advanced_query_tool = types.Tool(
     name="arxiv_advanced_query",
     description=(
-        "Structured query builder for arXiv. Accepts individual search fields "
-        "(title, author, abstract, etc.) and combines them into an optimised "
-        "arXiv query. Prefer this over search_papers when you know the specific "
-        "fields you want to search."
+        "Structured field-by-field arXiv search. Use instead of search_papers when you know "
+        "specific fields (title, author, abstract) to search separately -- this builds the "
+        "optimal query automatically. Unlike search_papers (free-text) or arxiv_semantic_search "
+        "(meaning-based), this gives precise control over which fields match which terms. "
+        "Max 50 results. Examples: title=\"attention mechanism\", author=\"Vaswani\" | "
+        "abstract=\"protein folding\", categories=[\"q-bio.BM\"], date_from=\"2023-01-01\""
     ),
     inputSchema={
         "type": "object",

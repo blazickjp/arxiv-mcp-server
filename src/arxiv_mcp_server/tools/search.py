@@ -230,53 +230,11 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
 search_tool = types.Tool(
     name="search_papers",
-    description="""Search for papers on arXiv with advanced filtering and query optimization.
+    description="""Quick keyword search on arXiv. Use when you have a free-text query, keywords, or boolean expressions. Unlike arxiv_advanced_query (structured field-by-field search) or arxiv_semantic_search (meaning-based re-ranking), this is best for direct keyword/phrase queries with optional date and category filters.
 
-QUERY CONSTRUCTION GUIDELINES:
-- Use QUOTED PHRASES for exact matches: "multi-agent systems", "neural networks", "machine learning"
-- Combine related concepts with OR: "AI agents" OR "software agents" OR "intelligent agents"  
-- Use field-specific searches for precision:
-  - ti:"exact title phrase" - search in titles only
-  - au:"author name" - search by author
-  - abs:"keyword" - search in abstracts only
-- Use ANDNOT to exclude unwanted results: "machine learning" ANDNOT "survey"
-- For best results, use 2-4 core concepts rather than long keyword lists
+Supports: quoted phrases ("neural networks"), boolean operators (AND, OR, ANDNOT), field prefixes (ti:, au:, abs:, cat:). Max 50 results. Rate limited to 1 req/3s.
 
-ADVANCED SEARCH PATTERNS:
-- Field + phrase: ti:"transformer architecture" for papers with exact title phrase
-- Multiple fields: au:"Smith" AND ti:"quantum" for author Smith's quantum papers  
-- Exclusions: "deep learning" ANDNOT ("survey" OR "review") to exclude survey papers
-- Broad + narrow: "artificial intelligence" AND (robotics OR "computer vision")
-
-CATEGORY FILTERING (highly recommended for relevance):
-- cs.AI: Artificial Intelligence
-- cs.MA: Multi-Agent Systems  
-- cs.LG: Machine Learning
-- cs.CL: Computation and Language (NLP)
-- cs.CV: Computer Vision
-- cs.RO: Robotics
-- cs.HC: Human-Computer Interaction
-- cs.CR: Cryptography and Security
-- cs.DB: Databases
-
-EXAMPLES OF EFFECTIVE QUERIES:
-- ti:"reinforcement learning" with categories: ["cs.LG", "cs.AI"] - for RL papers by title
-- au:"Hinton" AND "deep learning" with categories: ["cs.LG"] - for Hinton's deep learning work
-- "multi-agent" ANDNOT "survey" with categories: ["cs.MA"] - exclude survey papers
-- abs:"transformer" AND ti:"attention" with categories: ["cs.CL"] - attention papers with transformer abstracts
-
-DATE FILTERING: Use YYYY-MM-DD format for historical research:
-- date_to: "2015-12-31" - for foundational/classic work (pre-2016)
-- date_from: "2020-01-01" - for recent developments (post-2020)
-- Both together for specific time periods
-
-RESULT QUALITY: Results sorted by RELEVANCE (most relevant papers first), not just newest papers.
-This ensures you get the most pertinent results regardless of publication date.
-
-TIPS FOR FOUNDATIONAL RESEARCH:
-- Use date_to: "2010-12-31" to find classic papers on BDI, SOAR, ACT-R
-- Combine with field searches: ti:"BDI" AND abs:"belief desire intention"  
-- Try author searches: au:"Rao" AND "BDI" for Anand Rao's foundational BDI work""",
+Examples: query='"multi-agent systems" ANDNOT survey', categories=["cs.MA"] | query='au:"Hinton" AND "deep learning"' | query='ti:"transformer"', date_from='2023-01-01'""",
     inputSchema={
         "type": "object",
         "properties": {

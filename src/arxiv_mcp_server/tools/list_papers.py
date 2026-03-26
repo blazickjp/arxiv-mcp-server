@@ -11,7 +11,7 @@ settings = Settings()
 
 list_tool = types.Tool(
     name="list_papers",
-    description="List all existing papers available as resources",
+    description="List all papers previously downloaded via download_paper. Returns titles, authors, abstracts, and links. Use this to see what papers are available locally before calling read_paper. Takes no arguments.",
     inputSchema={
         "type": "object",
         "properties": {},

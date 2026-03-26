@@ -13,9 +13,10 @@ logger = logging.getLogger("arxiv-mcp-server")
 kb_remove_tool = types.Tool(
     name="kb_remove",
     description=(
-        "Remove a paper from the personal knowledge base. "
-        "Requires explicit confirmation to prevent accidental deletions. "
-        "Call with confirm=false first to preview what will be deleted."
+        "Permanently remove a paper from your knowledge base. Two-step process: "
+        "first call with confirm=false to preview the paper, then confirm=true to delete. "
+        "Removes all associated data (tags, notes, embeddings, collection memberships). "
+        "Example: paper_id=\"2401.12345\", confirm=false (preview) then confirm=true (delete)"
     ),
     inputSchema={
         "type": "object",

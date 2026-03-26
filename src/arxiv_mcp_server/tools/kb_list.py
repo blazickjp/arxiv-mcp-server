@@ -16,15 +16,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 kb_list_tool = types.Tool(
     name="kb_list",
-    description="""Browse your personal knowledge base with filters and optional statistics.
+    description="""Browse your local knowledge base (papers saved via kb_save). Use to see what you have saved, check reading progress, or get KB statistics. Unlike kb_search (query-based), this is for browsing/filtering without a search query.
 
-List papers filtered by tags, categories, reading status, collection, or source.
-Sort by date added, last updated, title, or publication date.
+Filter by tags, categories, reading_status, collection, or source. Supports pagination. Set show_stats=true for paper counts, top tags, and collection info. Defaults to stats + 10 recent papers when called with no arguments.
 
-Set show_stats=true to include KB statistics (paper counts by source/status,
-top tags, collection count, embedding coverage).
-
-With no filters and show_stats=false, defaults to showing stats + 10 most recent papers.""",
+Examples: (no args) | reading_status="unread", limit=20 | collection="thesis-refs", show_stats=true""",
     inputSchema={
         "type": "object",
         "properties": {

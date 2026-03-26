@@ -17,6 +17,10 @@ from .kb_search import kb_search_tool, handle_kb_search
 from .kb_list import kb_list_tool, handle_kb_list
 from .kb_annotate import kb_annotate_tool, handle_kb_annotate
 from .kb_remove import kb_remove_tool, handle_kb_remove
+from .research_lineage import research_lineage_tool, handle_research_lineage
+from .read_paper_chunks import read_paper_chunks_tool, handle_read_paper_chunks
+from .kg_query import kg_query_tool, handle_kg_query
+from .research_context import research_context_tool, handle_research_context
 
 __all__ = [
     "search_tool",
@@ -53,4 +57,12 @@ __all__ = [
     "handle_kb_remove",
     "citation_context_tool",
     "handle_citation_context",
+    "research_lineage_tool",
+    "handle_research_lineage",
+    "read_paper_chunks_tool",
+    "handle_read_paper_chunks",
+    "kg_query_tool",
+    "handle_kg_query",
+    "research_context_tool",
+    "handle_research_context",
 ]

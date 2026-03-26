@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -22,6 +23,79 @@ BGE_QUERY_PREFIX = "Represent this sentence: "
 
 # Lazy-loaded model — only initialized on first use
 _model: Optional[Any] = None
+
+# Stopwords for query decomposition
+_QUERY_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
+    "been", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "can", "not", "no", "so", "if",
+    "then", "than", "too", "very", "just", "also", "more", "most", "some",
+    "such", "only", "how", "what", "which", "who", "when", "where", "why",
+    "there", "here", "i", "we", "they", "it", "its", "this", "that",
+    "these", "those", "my", "your", "our", "their",
+}
+
+# Connectors used to split queries into noun phrases
+_QUERY_CONNECTORS = re.compile(
+    r"\b(?:for|with|using|about|how to|that|which|and|or|in|on|of|by)\b",
+    re.IGNORECASE,
+)
+
+
+def _decompose_query(query: str, model: Any) -> List[str]:
+    """Decompose a natural language query into 2-4 core scientific concepts.
+
+    Splits the query on common connectors, removes stopwords from each phrase,
+    and keeps phrases that are 1-4 words long.
+
+    Args:
+        query: Natural language research query.
+        model: Loaded SentenceTransformer model (unused currently, reserved for
+            future model-based decomposition).
+
+    Returns:
+        List of concept strings. Falls back to [query] if fewer than 2 concepts
+        are extracted.
+    """
+    # Split on connectors
+    fragments = _QUERY_CONNECTORS.split(query)
+
+    concepts: List[str] = []
+    for fragment in fragments:
+        # Clean and remove stopwords
+        words = fragment.strip().split()
+        cleaned_words = [
+            w for w in words
+            if w.lower().strip(".,;:!?()") not in _QUERY_STOPWORDS
+            and len(w.strip(".,;:!?()")) > 1
+        ]
+        if not cleaned_words:
+            continue
+
+        phrase = " ".join(w.strip(".,;:!?()") for w in cleaned_words)
+        # Keep phrases that are 1-4 words long
+        word_count = len(cleaned_words)
+        if 1 <= word_count <= 4 and phrase:
+            concepts.append(phrase)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_concepts: List[str] = []
+    for c in concepts:
+        c_lower = c.lower()
+        if c_lower not in seen:
+            seen.add(c_lower)
+            unique_concepts.append(c)
+
+    # Cap at 4 concepts
+    unique_concepts = unique_concepts[:4]
+
+    # Fall back to original query if fewer than 2 concepts
+    if len(unique_concepts) < 2:
+        return [query]
+
+    return unique_concepts
 
 
 def _load_model() -> Any:
@@ -48,18 +122,11 @@ def _load_model() -> Any:
 
 semantic_search_tool = types.Tool(
     name="arxiv_semantic_search",
-    description="""Embedding-based semantic search over arXiv papers.
+    description="""Meaning-based arXiv search using embeddings (BAAI/bge-small-en-v1.5). Use when keyword search (search_papers) misses relevant papers due to different terminology, or when you want to find conceptually similar work. Searches arXiv by keyword first, then re-ranks by semantic similarity.
 
-Performs a broad keyword search on arXiv, then re-ranks results using semantic
-similarity (sentence-transformers/all-MiniLM-L6-v2). This finds papers whose
-meaning is close to your query even if they use different terminology.
+Unlike search_papers (exact keyword matching) or arxiv_advanced_query (structured fields), this finds papers by meaning. Max 30 results from a pool of up to 200. Falls back to keyword-only if embedding model is unavailable.
 
-Uses BAAI/bge-small-en-v1.5, a model tuned for retrieval tasks on scientific text.
-
-Use this when keyword search misses relevant papers, or when you want to find
-conceptually similar work rather than exact keyword matches.
-
-Falls back to keyword-only results if the embedding model is unavailable.""",
+Examples: query="how do language models reason about math" | query="efficient training of large neural networks", categories=["cs.LG"]""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -228,17 +295,28 @@ async def handle_semantic_search(
                         pid, MODEL_NAME, emb_vector.astype(np.float32).tobytes()
                     )
 
-        # Encode query (BGE models need instruction prefix for queries, not documents)
-        query_emb = model.encode(
-            [BGE_QUERY_PREFIX + query], normalize_embeddings=True
-        )[0]
+        # Decompose query into concepts for multi-vector scoring
+        concepts = _decompose_query(query, model)
+        logger.debug(f"Query decomposed into {len(concepts)} concepts: {concepts}")
 
-        # Step 4: Compute cosine similarity (dot product since normalized)
+        # Encode each concept (or the full query if only 1 concept)
+        concept_embeddings = []
+        for concept in concepts:
+            emb = model.encode(
+                [BGE_QUERY_PREFIX + concept], normalize_embeddings=True
+            )[0]
+            concept_embeddings.append(emb)
+
+        # Step 4: Compute cosine similarity — use MAX across concept embeddings
         similarities: List[tuple[int, float]] = []
         for i, paper in enumerate(pool):
             pid = paper_ids[i]
             if pid in cached_embeddings:
-                sim = float(np.dot(query_emb, cached_embeddings[pid]))
+                paper_emb = cached_embeddings[pid]
+                sim = max(
+                    float(np.dot(c_emb, paper_emb))
+                    for c_emb in concept_embeddings
+                )
             else:
                 sim = 0.0
             similarities.append((i, sim))

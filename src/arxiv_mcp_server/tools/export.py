@@ -24,9 +24,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 export_tool = types.Tool(
     name="arxiv_export",
     description=(
-        "Export arXiv paper metadata in BibTeX, Markdown, JSON, or CSV format. "
-        "Accepts a list of paper IDs and returns formatted output. "
-        "Optionally includes citation counts from Semantic Scholar."
+        "Export metadata for known arXiv paper IDs as BibTeX, Markdown, JSON, or CSV. "
+        "Use when you need citations for a bibliography, formatted references, or structured "
+        "data export. Does NOT search -- you must already have paper IDs (from search_papers, "
+        "arxiv_advanced_query, etc.). 1-50 IDs per request. Optionally adds citation counts "
+        "from Semantic Scholar. Example: paper_ids=[\"1706.03762\"], format=\"bibtex\""
     ),
     inputSchema={
         "type": "object",

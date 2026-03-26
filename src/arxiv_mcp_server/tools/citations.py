@@ -14,18 +14,11 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 citation_graph_tool = types.Tool(
     name="arxiv_citation_graph",
-    description="""Explore the citation graph of an arXiv paper using the Semantic Scholar API.
+    description="""Get citations and references for an arXiv paper via Semantic Scholar. Use to find who cited a paper, what it builds on, or both. Unlike arxiv_citation_context (structural analysis of citation landscape), this returns raw citation/reference lists.
 
-Returns citations (papers that cite this paper), references (papers this paper cites),
-or both directions. Supports up to depth=2 for recursive traversal.
+Supports depth=2 for recursive traversal (WARNING: slow, many API calls -- use max_per_level to limit). Omit arXiv version suffix from IDs.
 
-WARNING: depth=2 makes many API calls and can be slow. Use max_per_level to limit.
-
-EXAMPLES:
-- Get all citation info for a paper: paper_id="2401.12345", direction="both"
-- Find who cited a paper: paper_id="2401.12345", direction="citations"
-- See what a paper builds on: paper_id="2401.12345", direction="references"
-- Deep graph (slow): paper_id="2401.12345", direction="citations", depth=2, max_per_level=10""",
+Examples: paper_id="2401.12345", direction="citations" | paper_id="1706.03762", direction="both" | paper_id="2401.12345", depth=2, max_per_level=10""",
     inputSchema={
         "type": "object",
         "properties": {
