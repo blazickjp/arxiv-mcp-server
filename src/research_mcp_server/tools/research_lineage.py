@@ -14,7 +14,7 @@ logger = logging.getLogger("research-mcp-server")
 
 
 research_lineage_tool = types.Tool(
-    name="arxiv_research_lineage",
+    name="lineage",
     description="""Build a directed acyclic graph (DAG) of intellectual influence around an arXiv paper.
 
 Traces the lineage of ideas both backward (what the paper builds on) and forward

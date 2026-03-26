@@ -1,8 +1,10 @@
 """
-Arxiv MCP Server
-===============
+Research MCP Server
+===================
 
-This module implements an MCP server for interacting with arXiv.
+Multi-source research intelligence server. Provides unified tools for
+academic paper search, citation analysis, knowledge management, and
+(planned) practitioner community intelligence.
 """
 
 import logging
@@ -14,24 +16,42 @@ from mcp.server.models import InitializationOptions
 from mcp.server import NotificationOptions
 from mcp.server.stdio import stdio_server
 from .config import Settings
-from .tools import handle_search, handle_download, handle_list_papers, handle_read_paper
-from .tools import handle_advanced_query, handle_export
-from .tools import handle_semantic_search, handle_compare
-from .tools import handle_citation_graph, handle_citation_context, handle_trend_analysis, handle_digest
-from .tools import search_tool, download_tool, list_tool, read_tool
-from .tools import advanced_query_tool, export_tool
-from .tools import semantic_search_tool, compare_tool
-from .tools import citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool
-from .tools import kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool
-from .tools import handle_kb_save, handle_kb_search, handle_kb_list, handle_kb_annotate, handle_kb_remove
-from .tools import research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool
-from .tools import handle_research_lineage, handle_read_paper_chunks, handle_kg_query, handle_research_context
-from .tools import multi_search_tool, pwc_search_tool
-from .tools import handle_multi_search, handle_pwc_search
-from .tools import hf_trending_tool, model_benchmarks_tool, venue_lookup_tool, patent_search_tool
-from .tools import handle_hf_trending, handle_model_benchmarks, handle_venue_lookup, handle_patent_search
-from .tools import research_memory_tool, suggest_tools_tool
-from .tools import handle_research_memory, handle_suggest_tools
+
+# --- Consolidated v2 tools ---
+from .tools import search_tool, handle_search
+from .tools import kb_tool, handle_kb
+from .tools import memory_tool, handle_memory
+from .tools import citations_tool, handle_citations
+
+# --- Renamed tools (dropped arxiv_ prefix) ---
+from .tools import semantic_search_tool, handle_semantic_search
+from .tools import compare_tool, handle_compare
+from .tools import trend_analysis_tool, handle_trend_analysis
+from .tools import digest_tool, handle_digest
+from .tools import research_lineage_tool, handle_research_lineage
+from .tools import export_tool, handle_export
+from .tools import multi_search_tool, handle_multi_search
+from .tools import pwc_search_tool, handle_pwc_search
+from .tools import suggest_tools_tool, handle_suggest_tools
+
+# --- Unchanged tools ---
+from .tools import download_tool, handle_download
+from .tools import list_tool, handle_list_papers
+from .tools import read_tool, handle_read_paper
+from .tools import read_paper_chunks_tool, handle_read_paper_chunks
+from .tools import kg_query_tool, handle_kg_query
+from .tools import hf_trending_tool, handle_hf_trending
+from .tools import model_benchmarks_tool, handle_model_benchmarks
+from .tools import venue_lookup_tool, handle_venue_lookup
+from .tools import patent_search_tool, handle_patent_search
+
+# --- Backwards-compat handlers (old tool names still routable) ---
+from .tools import handle_advanced_query
+from .tools import handle_citation_graph, handle_citation_context
+from .tools import handle_kb_save, handle_kb_search, handle_kb_list
+from .tools import handle_kb_annotate, handle_kb_remove
+from .tools import handle_research_context, handle_research_memory
+
 from .tools.suggest_tools import register_all_tools
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
@@ -62,58 +82,107 @@ async def get_prompt(
 
 @server.list_tools()
 async def list_tools() -> List[types.Tool]:
-    """List available arXiv research tools."""
+    """List available research tools.
+
+    Returns consolidated v2 tools (18 tools, down from 31).
+    Old tool names are still routable via backwards-compat aliases in _TOOL_HANDLERS.
+    """
     return [
-        search_tool, download_tool, list_tool, read_tool,
-        advanced_query_tool, export_tool,
-        semantic_search_tool, compare_tool,
-        citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool,
-        kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
-        research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool,
-        multi_search_tool, pwc_search_tool,
-        hf_trending_tool, model_benchmarks_tool, venue_lookup_tool, patent_search_tool,
-        research_memory_tool, suggest_tools_tool,
+        # Search & Discovery
+        search_tool, semantic_search_tool, multi_search_tool,
+        # Paper Management
+        download_tool, list_tool, read_tool, read_paper_chunks_tool,
+        # Analysis
+        citations_tool, research_lineage_tool, compare_tool,
+        trend_analysis_tool, digest_tool,
+        # Knowledge & Memory
+        kb_tool, kg_query_tool, memory_tool,
+        # External Sources
+        hf_trending_tool, pwc_search_tool, model_benchmarks_tool,
+        venue_lookup_tool, patent_search_tool, export_tool,
+        # Meta
+        suggest_tools_tool,
     ]
 
 
+# --- Primary handlers (v2 tool names) ---
 _TOOL_HANDLERS: Dict[str, Any] = {
-    "search_papers": handle_search,
+    # Search & Discovery
+    "search": handle_search,
+    "semantic_search": handle_semantic_search,
+    "cross_search": handle_multi_search,
+    # Paper Management
     "download_paper": handle_download,
     "list_papers": handle_list_papers,
     "read_paper": handle_read_paper,
-    "arxiv_advanced_query": handle_advanced_query,
-    "arxiv_export": handle_export,
-    "arxiv_semantic_search": handle_semantic_search,
-    "arxiv_compare_papers": handle_compare,
-    "arxiv_citation_graph": handle_citation_graph,
-    "arxiv_citation_context": handle_citation_context,
-    "arxiv_trend_analysis": handle_trend_analysis,
-    "arxiv_research_digest": handle_digest,
-    "kb_save": handle_kb_save,
-    "kb_search": handle_kb_search,
-    "kb_list": handle_kb_list,
-    "kb_annotate": handle_kb_annotate,
-    "kb_remove": handle_kb_remove,
-    "arxiv_research_lineage": handle_research_lineage,
     "read_paper_chunks": handle_read_paper_chunks,
+    # Analysis
+    "citations": handle_citations,
+    "lineage": handle_research_lineage,
+    "compare": handle_compare,
+    "trends": handle_trend_analysis,
+    "digest": handle_digest,
+    # Knowledge & Memory
+    "kb": handle_kb,
     "kg_query": handle_kg_query,
-    "research_context": handle_research_context,
-    "multi_search": handle_multi_search,
-    "papers_with_code_search": handle_pwc_search,
-    "hf_trending_papers": handle_hf_trending,
+    "memory": handle_memory,
+    # External Sources
+    "hf_trending": handle_hf_trending,
+    "benchmarks": handle_pwc_search,
     "model_benchmarks": handle_model_benchmarks,
     "venue_lookup": handle_venue_lookup,
     "patent_search": handle_patent_search,
-    "research_memory": handle_research_memory,
-    "suggest_tools": handle_suggest_tools,
+    "export": handle_export,
+    # Meta
+    "help": handle_suggest_tools,
 }
+
+# --- Backwards-compat aliases (old tool names → same handlers) ---
+_COMPAT_ALIASES: Dict[str, str] = {
+    "search_papers": "search",
+    "arxiv_advanced_query": "search",
+    "arxiv_semantic_search": "semantic_search",
+    "arxiv_compare_papers": "compare",
+    "arxiv_citation_graph": "citations",
+    "arxiv_citation_context": "citations",
+    "arxiv_trend_analysis": "trends",
+    "arxiv_research_digest": "digest",
+    "arxiv_research_lineage": "lineage",
+    "arxiv_export": "export",
+    "multi_search": "cross_search",
+    "papers_with_code_search": "benchmarks",
+    "hf_trending_papers": "hf_trending",
+    "suggest_tools": "help",
+    "kb_save": "kb",
+    "kb_search": "kb",
+    "kb_list": "kb",
+    "kb_annotate": "kb",
+    "kb_remove": "kb",
+    "research_context": "memory",
+    "research_memory": "memory",
+}
+
+# Register backwards-compat aliases — old names route to the same handlers
+# For kb_* aliases, we need to inject the action param
+_KB_ACTION_MAP = {
+    "kb_save": "save",
+    "kb_search": "search",
+    "kb_list": "list",
+    "kb_annotate": "annotate",
+    "kb_remove": "remove",
+}
+
+for _old_name, _new_name in _COMPAT_ALIASES.items():
+    if _old_name not in _KB_ACTION_MAP and _old_name not in ("research_context", "research_memory"):
+        _TOOL_HANDLERS[_old_name] = _TOOL_HANDLERS[_new_name]
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle tool calls for arXiv research functionality.
+    """Handle tool calls for research functionality.
 
     Every call is auto-logged to research_history.db for audit trail.
+    Supports backwards-compat aliases for old tool names.
     """
     logger.debug(f"Calling tool {name} with arguments {arguments}")
     start = time.monotonic()
@@ -121,6 +190,18 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
     try:
         handler = _TOOL_HANDLERS.get(name)
+
+        # Handle backwards-compat for kb_* aliases (inject action param)
+        if handler is None and name in _KB_ACTION_MAP:
+            arguments = {**arguments, "action": _KB_ACTION_MAP[name]}
+            handler = _TOOL_HANDLERS["kb"]
+
+        # Handle backwards-compat for research_context/research_memory
+        if handler is None and name == "research_context":
+            handler = handle_research_context
+        elif handler is None and name == "research_memory":
+            handler = handle_research_memory
+
         if handler is None:
             is_error = True
             result = [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]

@@ -22,7 +22,7 @@ from ..utils.formatters import (
 logger = logging.getLogger("research-mcp-server")
 
 export_tool = types.Tool(
-    name="arxiv_export",
+    name="export",
     description=(
         "Export metadata for known arXiv paper IDs as BibTeX, Markdown, JSON, or CSV. "
         "Use when you need citations for a bibliography, formatted references, or structured "

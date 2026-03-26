@@ -163,7 +163,7 @@ def _ensure_index() -> ToolIndex:
 # ---------------------------------------------------------------------------
 
 suggest_tools_tool = types.Tool(
-    name="suggest_tools",
+    name="help",
     description=(
         "Recommend the most relevant tools for a natural-language research query. "
         "Uses semantic embeddings to match your intent against all available tool "

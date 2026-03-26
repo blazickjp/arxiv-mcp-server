@@ -8,6 +8,7 @@ import mcp.types as types
 
 from ..clients.s2_client import S2Client
 from ..utils.rate_limiter import s2_limiter
+from .citation_context import handle_citation_context
 
 logger = logging.getLogger("research-mcp-server")
 
@@ -52,6 +53,73 @@ Examples: paper_id="2401.12345", direction="citations" | paper_id="1706.03762", 
         "required": ["paper_id"],
     },
 )
+
+
+citations_tool = types.Tool(
+    name="citations",
+    description="""Get citations and references for a paper, optionally with structural analysis. Combines raw citation fetching with landscape analysis.
+
+Without analyze=true: returns citation/reference lists (fast, fewer API calls).
+With analyze=true: adds foundational papers, bridge papers, citation clusters, temporal impact, and velocity (slower, many API calls).
+
+Supports depth=2 for recursive traversal. Omit arXiv version suffix from IDs.
+
+Examples: paper_id="2401.12345" | paper_id="1706.03762", analyze=true | paper_id="2401.12345", direction="citations", depth=2""",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "paper_id": {
+                "type": "string",
+                "description": "arXiv paper ID (e.g., '2401.12345'). Do not include version suffix.",
+            },
+            "direction": {
+                "type": "string",
+                "enum": ["citations", "references", "both"],
+                "description": "Which direction to traverse. Default: 'both'.",
+            },
+            "depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2,
+                "description": "How many levels deep to traverse. Default: 1.",
+            },
+            "max_per_level": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 100,
+                "description": "Maximum papers per level. Default: 20.",
+            },
+            "fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Semantic Scholar fields to include.",
+            },
+            "analyze": {
+                "type": "boolean",
+                "description": "If true, adds structural analysis: foundational papers, bridge papers, citation clusters, temporal impact, velocity. Slower. Default: false.",
+            },
+            "max_citations": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 200,
+                "description": "Max citations to analyze (only used when analyze=true). Default: 50.",
+            },
+        },
+        "required": ["paper_id"],
+    },
+)
+
+
+async def handle_citations(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """Unified citation handler — dispatches to graph or context analysis."""
+    analyze = arguments.get("analyze", False)
+
+    if analyze:
+        # Delegate to citation context analysis
+        return await handle_citation_context(arguments)
+    else:
+        # Use the existing citation graph handler
+        return await handle_citation_graph(arguments)
 
 
 async def _fetch_level(

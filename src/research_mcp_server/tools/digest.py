@@ -245,7 +245,7 @@ def _format_digest_markdown(digest: Dict[str, Any]) -> str:
 
 
 digest_tool = types.Tool(
-    name="arxiv_research_digest",
+    name="digest",
     description="""Generate a weekly/periodic research digest for a topic. Use for a "what's new in X" summary rather than searching for specific papers. Unlike arxiv_trend_analysis (long-term trends over months), this focuses on recent papers (1-90 days) with highlights and themes.
 
 Returns: top papers by citations, full paper list by category, key themes, top authors/categories. Saved to local storage. Output includes both markdown and JSON.

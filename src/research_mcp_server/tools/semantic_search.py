@@ -121,7 +121,7 @@ def _load_model() -> Any:
 
 
 semantic_search_tool = types.Tool(
-    name="arxiv_semantic_search",
+    name="semantic_search",
     description="""Meaning-based arXiv search using embeddings (BAAI/bge-small-en-v1.5). Use when keyword search (search_papers) misses relevant papers due to different terminology, or when you want to find conceptually similar work. Searches arXiv by keyword first, then re-ranks by semantic similarity.
 
 Unlike search_papers (exact keyword matching) or arxiv_advanced_query (structured fields), this finds papers by meaning. Max 30 results from a pool of up to 200. Falls back to keyword-only if embedding model is unavailable.

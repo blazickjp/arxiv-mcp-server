@@ -172,7 +172,7 @@ def _identify_emerging_terms(
 
 
 trend_analysis_tool = types.Tool(
-    name="arxiv_trend_analysis",
+    name="trends",
     description="""Analyze how a research topic is evolving over time on arXiv. Use when you want to understand publication volume trends, identify emerging terms, or find prolific authors -- not for finding specific papers (use search_papers for that).
 
 Returns: publication volume (weekly/monthly), top keywords, emerging terms, top authors, and top papers with optional citation counts. Searches up to 200 papers over 1-36 months.

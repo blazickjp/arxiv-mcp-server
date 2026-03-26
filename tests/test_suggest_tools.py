@@ -18,18 +18,19 @@ from research_mcp_server.tools.suggest_tools import (
 # ---------------------------------------------------------------------------
 
 def _make_mock_tools() -> list[types.Tool]:
-    """Return ~10 Tool objects mimicking the real server tool set."""
+    """Return ~10 Tool objects mimicking the real server tool set (v2 names)."""
     return [
         types.Tool(
-            name="search_papers",
-            description="Search arXiv for papers matching a query string. Returns titles, abstracts, authors, and IDs.",
+            name="search",
+            description="Unified arXiv search — keyword/phrase queries AND structured field-by-field searches. Returns titles, abstracts, authors, and IDs.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query for arXiv papers"},
+                    "title": {"type": "string", "description": "Search in paper titles"},
+                    "author": {"type": "string", "description": "Search by author name"},
                     "max_results": {"type": "integer", "description": "Maximum results to return"},
                 },
-                "required": ["query"],
             },
         ),
         types.Tool(
@@ -44,21 +45,7 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_advanced_query",
-            description="Build structured arXiv API queries with field-specific filters (author, title, category, date range). More precise than keyword search.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Title keywords to search for"},
-                    "author": {"type": "string", "description": "Author name to filter by"},
-                    "category": {"type": "string", "description": "arXiv category like cs.AI"},
-                    "date_from": {"type": "string", "description": "Start date YYYY-MM-DD"},
-                    "date_to": {"type": "string", "description": "End date YYYY-MM-DD"},
-                },
-            },
-        ),
-        types.Tool(
-            name="arxiv_export",
+            name="export",
             description="Export metadata for known arXiv paper IDs as BibTeX, Markdown, JSON, or CSV for bibliography and references.",
             inputSchema={
                 "type": "object",
@@ -70,7 +57,7 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_semantic_search",
+            name="semantic_search",
             description="Find semantically similar papers using embedding-based vector search over downloaded paper abstracts.",
             inputSchema={
                 "type": "object",
@@ -82,7 +69,7 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_compare_papers",
+            name="compare",
             description="Compare two or more arXiv papers side-by-side, highlighting differences in methods, results, and contributions.",
             inputSchema={
                 "type": "object",
@@ -93,19 +80,20 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_citation_graph",
-            description="Explore the citation graph of a paper using Semantic Scholar. Find papers that cite it and papers it references.",
+            name="citations",
+            description="Get citations and references for a paper via Semantic Scholar. Optionally analyze citation landscape with structural analysis.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "paper_id": {"type": "string", "description": "arXiv paper ID"},
                     "direction": {"type": "string", "description": "citations or references"},
+                    "analyze": {"type": "boolean", "description": "Enable structural analysis"},
                 },
                 "required": ["paper_id"],
             },
         ),
         types.Tool(
-            name="hf_trending_papers",
+            name="hf_trending",
             description="Get trending machine learning papers from Hugging Face daily papers feed.",
             inputSchema={
                 "type": "object",
@@ -115,7 +103,7 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_research_digest",
+            name="digest",
             description="Generate a research digest summarizing recent papers in a topic area with key findings and trends.",
             inputSchema={
                 "type": "object",
@@ -127,7 +115,7 @@ def _make_mock_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="arxiv_trend_analysis",
+            name="trends",
             description="Analyze publication trends over time for a research topic, showing volume changes and emerging subtopics.",
             inputSchema={
                 "type": "object",
@@ -160,7 +148,7 @@ def _register_mock_tools():
 
 def test_tool_definition():
     """Verify the suggest_tools tool has the correct name and schema shape."""
-    assert suggest_tools_tool.name == "suggest_tools"
+    assert suggest_tools_tool.name == "help"
     schema = suggest_tools_tool.inputSchema
     assert "query" in schema["properties"]
     assert "top_k" in schema["properties"]
@@ -200,7 +188,7 @@ async def test_suggest_tools_returns_results():
     assert len(suggestions) > 0
 
     top_names = [s["tool_name"] for s in suggestions[:5]]
-    search_tools = {"search_papers", "arxiv_advanced_query", "arxiv_semantic_search"}
+    search_tools = {"search", "semantic_search"}
     assert any(
         name in top_names
         for name in search_tools
@@ -209,11 +197,11 @@ async def test_suggest_tools_returns_results():
 
 @pytest.mark.asyncio
 async def test_suggest_tools_export_query():
-    """Integration: querying about bibliography export should surface arxiv_export."""
+    """Integration: querying about bibliography export should surface export tool."""
     result = await handle_suggest_tools({"query": "export bibliography references"})
     data = json.loads(result[0].text)
     tool_names = [s["tool_name"] for s in data["suggestions"]]
-    assert "arxiv_export" in tool_names, f"Expected arxiv_export in results, got: {tool_names}"
+    assert "export" in tool_names, f"Expected export in results, got: {tool_names}"
 
 
 @pytest.mark.asyncio

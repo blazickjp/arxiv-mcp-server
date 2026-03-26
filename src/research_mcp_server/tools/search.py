@@ -229,43 +229,94 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
 
 search_tool = types.Tool(
-    name="search_papers",
-    description="""Quick keyword search on arXiv. Use when you have a free-text query, keywords, or boolean expressions. Unlike arxiv_advanced_query (structured field-by-field search) or arxiv_semantic_search (meaning-based re-ranking), this is best for direct keyword/phrase queries with optional date and category filters.
-
-Supports: quoted phrases ("neural networks"), boolean operators (AND, OR, ANDNOT), field prefixes (ti:, au:, abs:, cat:). Max 50 results. Rate limited to 1 req/3s.
-
-Examples: query='"multi-agent systems" ANDNOT survey', categories=["cs.MA"] | query='au:"Hinton" AND "deep learning"' | query='ti:"transformer"', date_from='2023-01-01'""",
+    name="search",
+    description=(
+        "Unified arXiv search — use for BOTH keyword/phrase queries AND structured "
+        "field-by-field searches. Replaces the old search_papers and arxiv_advanced_query tools.\n\n"
+        "Two modes:\n"
+        "1. Keyword search: provide `query` with free-text, quoted phrases, boolean operators "
+        "(AND, OR, ANDNOT), or field prefixes (ti:, au:, abs:, cat:).\n"
+        "2. Structured search: provide specific fields (`title`, `author`, `abstract`, "
+        "`all_fields`) for precise control over which fields match which terms.\n\n"
+        "Both modes support `categories`, `date_from`, `date_to`, `max_results`, and `sort_by`. "
+        "At least one search criterion is required. Max 50 results. Rate limited to 1 req/3s.\n\n"
+        "Examples:\n"
+        "  query='\"multi-agent systems\" ANDNOT survey', categories=[\"cs.MA\"]\n"
+        "  title=\"attention mechanism\", author=\"Vaswani\"\n"
+        "  query='ti:\"transformer\"', date_from='2023-01-01'\n"
+        "  abstract=\"protein folding\", categories=[\"q-bio.BM\"]"
+    ),
     inputSchema={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": 'Search query using quoted phrases for exact matches (e.g., \'"machine learning" OR "deep learning"\') or specific technical terms. Avoid overly broad or generic terms.',
+                "description": (
+                    "Free-text search query. Supports quoted phrases for exact matches "
+                    "(e.g., '\"machine learning\" OR \"deep learning\"'), boolean operators "
+                    "(AND, OR, ANDNOT), and field prefixes (ti:, au:, abs:, cat:). "
+                    "Use this for keyword-style searches."
+                ),
+            },
+            "title": {
+                "type": "string",
+                "description": "Search in paper titles (ti: prefix). Use for structured search mode.",
+            },
+            "author": {
+                "type": "string",
+                "description": "Search by author name (au: prefix). Use for structured search mode.",
+            },
+            "abstract": {
+                "type": "string",
+                "description": "Search in abstracts (abs: prefix). Use for structured search mode.",
+            },
+            "all_fields": {
+                "type": "string",
+                "description": "Search across all fields (all: prefix). Use for structured search mode.",
+            },
+            "exclude_terms": {
+                "type": "string",
+                "description": "Terms to exclude from results (ANDNOT). Use with structured search mode.",
             },
             "max_results": {
                 "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
                 "description": "Maximum number of results to return (default: 10, max: 50). Use 15-20 for comprehensive searches.",
             },
             "date_from": {
                 "type": "string",
-                "description": "Start date for papers (YYYY-MM-DD format). Use to find recent work, e.g., '2023-01-01' for last 2 years.",
+                "description": "Start date for papers (YYYY-MM-DD format). Use to find recent work, e.g., '2023-01-01'.",
             },
             "date_to": {
                 "type": "string",
-                "description": "End date for papers (YYYY-MM-DD format). Use with date_from to find historical work, e.g., '2020-12-31' for older research.",
+                "description": "End date for papers (YYYY-MM-DD format). Use with date_from for a date range.",
             },
             "categories": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Strongly recommended: arXiv categories to focus search (e.g., ['cs.AI', 'cs.MA'] for agent research, ['cs.LG'] for ML, ['cs.CL'] for NLP, ['cs.CV'] for vision). Greatly improves relevance.",
+                "maxItems": 10,
+                "description": (
+                    "arXiv categories to filter by (e.g., ['cs.AI', 'cs.MA'] for agent research, "
+                    "['cs.LG'] for ML, ['cs.CL'] for NLP, ['cs.CV'] for vision). Greatly improves relevance."
+                ),
             },
             "sort_by": {
                 "type": "string",
-                "enum": ["relevance", "date"],
-                "description": "Sort results by 'relevance' (most relevant first, default) or 'date' (newest first). Use 'relevance' for focused searches, 'date' for recent developments.",
+                "enum": ["relevance", "date", "lastUpdatedDate", "submittedDate"],
+                "description": (
+                    "Sort criterion. 'relevance' (default), 'date' or 'submittedDate' (newest first), "
+                    "'lastUpdatedDate' (recently updated first)."
+                ),
+            },
+            "sort_order": {
+                "type": "string",
+                "default": "descending",
+                "enum": ["ascending", "descending"],
+                "description": "Sort direction (default: descending). Only used in structured search mode.",
             },
         },
-        "required": ["query"],
+        "required": [],
     },
 )
 
@@ -325,19 +376,88 @@ def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
 
 
 async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle paper search requests with improved arXiv API integration.
+    """Handle unified search requests — keyword OR structured field-by-field.
 
-    Uses raw HTTP requests when date filtering is requested to avoid URL encoding
-    issues with the arxiv Python package. Falls back to the arxiv package for
-    non-date queries for better compatibility.
+    Routes to structured search (via ``advanced_search``) when any field-specific
+    params are provided (title, author, abstract, all_fields, exclude_terms).
+    Otherwise uses the keyword search path with raw HTTP or the arxiv package.
     """
     try:
         max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
-        base_query = arguments["query"]
+        base_query = arguments.get("query", "")
         date_from_arg = arguments.get("date_from")
         date_to_arg = arguments.get("date_to")
         categories = arguments.get("categories")
         sort_by_arg = arguments.get("sort_by", "relevance")
+
+        # Structured field params (from advanced_query)
+        title = arguments.get("title")
+        author = arguments.get("author")
+        abstract = arguments.get("abstract")
+        all_fields = arguments.get("all_fields")
+        exclude_terms = arguments.get("exclude_terms")
+        sort_order = arguments.get("sort_order", "descending")
+
+        has_structured_fields = any([title, author, abstract, all_fields, exclude_terms])
+
+        # --- Validation: at least one search criterion required ---
+        has_query = bool(base_query and base_query.strip())
+        has_dates = any([date_from_arg, date_to_arg])
+        if not has_query and not has_structured_fields and not categories and not has_dates:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=(
+                        "Error: At least one search criterion is required. Provide a "
+                        "`query`, structured fields (`title`, `author`, `abstract`, "
+                        "`all_fields`), `categories`, or a date range."
+                    ),
+                )
+            ]
+
+        # --- Route: structured search ---
+        if has_structured_fields:
+            from ..clients.arxiv_client import advanced_search
+
+            # Map 'date' shorthand to 'submittedDate' for advanced_search
+            structured_sort_by = sort_by_arg
+            if structured_sort_by == "date":
+                structured_sort_by = "submittedDate"
+
+            logger.info(
+                "Structured search — title=%s author=%s abstract=%s categories=%s "
+                "date_from=%s date_to=%s max_results=%d sort_by=%s",
+                title, author, abstract, categories,
+                date_from_arg, date_to_arg, max_results, structured_sort_by,
+            )
+
+            results = await advanced_search(
+                title=title,
+                author=author,
+                abstract=abstract,
+                all_fields=all_fields,
+                categories=categories,
+                exclude_terms=exclude_terms,
+                date_from=date_from_arg,
+                date_to=date_to_arg,
+                max_results=max_results,
+                sort_by=structured_sort_by,
+                sort_order=sort_order,
+            )
+
+            response_data = {
+                "total_results": len(results),
+                "papers": results,
+            }
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(response_data, indent=2),
+                )
+            ]
+
+        # --- Route: keyword search (original path) ---
 
         logger.debug(
             f"Starting search with query: '{base_query}', max_results: {max_results}"

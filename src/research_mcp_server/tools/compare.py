@@ -31,7 +31,7 @@ STOP_WORDS = frozenset({
 
 
 compare_tool = types.Tool(
-    name="arxiv_compare_papers",
+    name="compare",
     description="""Compare 2-5 arXiv papers side by side. Use when you need to contrast methodologies, scope, or impact across specific papers. Returns a markdown table + JSON with metadata, abstract snippets, citation counts (via Semantic Scholar), and keyword overlap analysis. You must already have paper IDs.
 
 Examples: paper_ids=["1706.03762", "2005.14165"] | paper_ids=["2401.12345", "2401.67890"], comparison_aspects=["methodology", "datasets"]""",

@@ -12,7 +12,7 @@ logger = logging.getLogger("research-mcp-server")
 
 
 pwc_search_tool = types.Tool(
-    name="papers_with_code_search",
+    name="benchmarks",
     description="""Search Papers With Code for papers with open-source implementations and benchmark results. Uniquely connects papers to runnable GitHub repos, SOTA benchmark rankings, methods, and datasets.
 
 Use when: user wants code for a paper, wants to find implementations, wants SOTA benchmark tables, or wants to know which frameworks/repos exist for a technique.

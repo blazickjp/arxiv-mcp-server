@@ -255,7 +255,7 @@ async def _search_crossref(
 
 
 multi_search_tool = types.Tool(
-    name="multi_search",
+    name="cross_search",
     description="""Search across multiple academic sources (arXiv, OpenAlex, Crossref) in parallel. Returns deduplicated, merged results sorted by citation count and recency.
 
 Use this when you want broader coverage than a single source. OpenAlex provides citation counts and open access info. Crossref provides DOI metadata and reference lists. arXiv provides full-text preprints.
