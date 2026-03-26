@@ -1,195 +1,191 @@
-[![Twitter Follow](https://img.shields.io/twitter/follow/JoeBlazick?style=social)](https://twitter.com/JoeBlazick)
-[![smithery badge](https://smithery.ai/badge/arxiv-mcp-server)](https://smithery.ai/server/arxiv-mcp-server)
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml/badge.svg)](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
-[![PyPI Version](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
+# arxiv-mcp-server
 
-# ArXiv MCP Server
+> Enhanced fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server) — a personal research OS for Claude.
 
-> 🔍 Enable AI assistants to search and access arXiv papers through a simple MCP interface.
+An MCP server that turns Claude into a research assistant with persistent memory. Search arXiv, build a personal knowledge base, track citations, analyze trends, and never lose a research finding again.
 
-The ArXiv MCP Server provides a bridge between AI assistants and arXiv's research repository through the Model Context Protocol (MCP). It allows AI models to search for papers and access their content in a programmatic way.
+## What It Does
 
-<div align="center">
-  
-🤝 **[Contribute](https://github.com/blazickjp/arxiv-mcp-server/blob/main/CONTRIBUTING.md)** • 
-📝 **[Report Bug](https://github.com/blazickjp/arxiv-mcp-server/issues)**
+**21 MCP tools** organized in 4 layers:
 
-<a href="https://www.pulsemcp.com/servers/blazickjp-arxiv-mcp-server"><img src="https://www.pulsemcp.com/badge/top-pick/blazickjp-arxiv-mcp-server" width="400" alt="Pulse MCP Badge"></a>
-</div>
+| Layer | Tools | Purpose |
+|-------|-------|---------|
+| **Core** | `search_papers`, `download_paper`, `list_papers`, `read_paper` | Upstream arXiv search and PDF reading |
+| **Intelligence** | `arxiv_advanced_query`, `arxiv_semantic_search`, `arxiv_compare_papers`, `arxiv_citation_graph`, `arxiv_citation_context`, `arxiv_research_lineage`, `arxiv_trend_analysis`, `arxiv_research_digest`, `arxiv_export`, `read_paper_chunks` | Semantic search, citation analysis, trend tracking, structured digests with gap analysis |
+| **Knowledge Base** | `kb_save`, `kb_search`, `kb_list`, `kb_annotate`, `kb_remove` | Persistent paper storage with tags, collections, notes, reading status, and local vector search |
+| **Meta** | `kg_query`, `research_context` | Knowledge graph traversal, research session tracking |
 
-## ✨ Core Features
+**Plus a web UI** at `/web` for browsing your knowledge base in a browser.
 
-- 🔎 **Paper Search**: Query arXiv papers with filters for date ranges and categories
-- 📄 **Paper Access**: Download and read paper content
-- 📋 **Paper Listing**: View all downloaded papers
-- 🗃️ **Local Storage**: Papers are saved locally for faster access
-- 📝 **Prompts**: A Set of Research Prompts
+## Quick Start
 
-## 🚀 Quick Start
+### Prerequisites
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Claude Code or Claude Desktop
 
-### Installing via Smithery
-
-To install ArXiv Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/arxiv-mcp-server):
+### Install
 
 ```bash
-npx -y @smithery/cli install arxiv-mcp-server --client claude
-```
-
-### Installing Manually
-Install using uv:
-
-```bash
-uv tool install arxiv-mcp-server
-```
-
-For development:
-
-```bash
-# Clone and set up development environment
-git clone https://github.com/blazickjp/arxiv-mcp-server.git
+git clone https://github.com/NamanAg0502/arxiv-mcp-server.git
 cd arxiv-mcp-server
-
-# Create and activate virtual environment
-uv venv
-source .venv/bin/activate
-
-# Install with test dependencies
+uv venv && source .venv/bin/activate
 uv pip install -e ".[test]"
 ```
 
-### 🔌 MCP Integration
+### Configure Claude Code
 
-Add this configuration to your MCP client config file:
-
-```json
-{
-    "mcpServers": {
-        "arxiv-mcp-server": {
-            "command": "uv",
-            "args": [
-                "tool",
-                "run",
-                "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
-            ]
-        }
-    }
-}
-```
-
-For Development:
+Add to `~/.claude.json` under `mcpServers`:
 
 ```json
 {
-    "mcpServers": {
-        "arxiv-mcp-server": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "path/to/cloned/arxiv-mcp-server",
-                "run",
-                "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
-            ]
-        }
+  "mcpServers": {
+    "arxiv": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory", "/path/to/arxiv-mcp-server",
+        "run", "arxiv-mcp-server"
+      ],
+      "env": {
+        "SEMANTIC_SCHOLAR_API_KEY": ""
+      }
     }
+  }
 }
 ```
 
-## 💡 Available Tools
+### Configure Claude Desktop
 
-The server provides four main tools:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
-### 1. Paper Search
-Search for papers with optional filters:
-
-```python
-result = await call_tool("search_papers", {
-    "query": "transformer architecture",
-    "max_results": 10,
-    "date_from": "2023-01-01",
-    "categories": ["cs.AI", "cs.LG"]
-})
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "command": "uv",
+      "args": [
+        "--directory", "/path/to/arxiv-mcp-server",
+        "run", "arxiv-mcp-server"
+      ]
+    }
+  }
+}
 ```
 
-### 2. Paper Download
-Download a paper by its arXiv ID:
-
-```python
-result = await call_tool("download_paper", {
-    "paper_id": "2401.12345"
-})
-```
-
-### 3. List Papers
-View all downloaded papers:
-
-```python
-result = await call_tool("list_papers", {})
-```
-
-### 4. Read Paper
-Access the content of a downloaded paper:
-
-```python
-result = await call_tool("read_paper", {
-    "paper_id": "2401.12345"
-})
-```
-
-## 📝 Research Prompts
-
-The server offers specialized prompts to help analyze academic papers:
-
-### Paper Analysis Prompt
-A comprehensive workflow for analyzing academic papers that only requires a paper ID:
-
-```python
-result = await call_prompt("deep-paper-analysis", {
-    "paper_id": "2401.12345"
-})
-```
-
-This prompt includes:
-- Detailed instructions for using available tools (list_papers, download_paper, read_paper, search_papers)
-- A systematic workflow for paper analysis
-- Comprehensive analysis structure covering:
-  - Executive summary
-  - Research context
-  - Methodology analysis
-  - Results evaluation
-  - Practical and theoretical implications
-  - Future research directions
-  - Broader impacts
-
-## ⚙️ Configuration
-
-Configure through environment variables:
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ARXIV_STORAGE_PATH` | Paper storage location | ~/.arxiv-mcp-server/papers |
-
-## 🧪 Testing
-
-Run the test suite:
+### Run the Web UI
 
 ```bash
-python -m pytest
+cd web
+bun install
+bun dev
+# Open http://localhost:3000
 ```
 
-## 📄 License
+## Example Queries
 
-Released under the MIT License. See the LICENSE file for details.
+Once configured, ask Claude:
 
----
+```
+# Discovery
+Search arXiv for papers on "retrieval augmented generation" from the last 3 months
+Find papers by Ashish Vaswani on attention mechanisms
 
-<div align="center">
+# Deep Analysis
+Show me the citation context for paper 1706.03762
+Trace the research lineage of BERT — what influenced it and what it spawned
+Compare papers 1706.03762, 1810.04805, and 2005.14165
 
-Made with ❤️ by the Pearl Labs Team
+# Knowledge Base
+Save paper 2401.12345 to my KB with tags "RAG" and "retrieval"
+What's in my knowledge base about transformers?
+List my unread papers in the "foundational-papers" collection
 
-<a href="https://glama.ai/mcp/servers/04dtxi5i5n"><img width="380" height="200" src="https://glama.ai/mcp/servers/04dtxi5i5n/badge" alt="ArXiv Server MCP server" /></a>
-</div>
+# Research Sessions
+Start a research session called "MSME Fintech Landscape"
+Add open question: "How does OCEN handle credit risk scoring?"
+Summarize my current research session
+
+# Digests & Trends
+Generate a research digest on "LLM agents" from the last 2 weeks
+What's trending in retrieval augmented generation this year?
+
+# Knowledge Graph
+What methods appear in my saved papers?
+Query my knowledge graph for papers using attention on NER datasets
+
+# Export
+Export my foundational-papers collection as BibTeX
+```
+
+## Architecture
+
+```
+arxiv-mcp-server/
+├── src/arxiv_mcp_server/
+│   ├── server.py              # MCP server with auto-logging
+│   ├── tools/                 # 21 tool implementations
+│   ├── clients/               # arXiv + Semantic Scholar API clients
+│   ├── store/                 # SQLite stores (KB, KG, history, sessions)
+│   └── utils/                 # Rate limiters, formatters
+├── web/                       # Next.js web UI
+│   ├── src/app/               # Pages: dashboard, papers, search, history
+│   └── src/lib/db.ts          # Direct SQLite access (same DB as MCP)
+└── tests/                     # 71 tests, 72% coverage
+```
+
+### Data Storage
+
+Everything is local SQLite at `~/.arxiv-mcp-server/papers/`:
+
+| File | Purpose |
+|------|---------|
+| `knowledge_base.db` | Papers, collections, tags, notes, embeddings |
+| `knowledge_graph.db` | Papers, concepts, methods, datasets as graph nodes |
+| `research_history.db` | Auto-logged tool calls (every query + full response) |
+| `research_context.db` | Research sessions, questions, findings |
+| `arxiv_cache.db` | Paper metadata cache, embedding cache, digests |
+
+### Key Design Decisions
+
+- **Embeddings**: BAAI/bge-small-en-v1.5 (384-dim, CPU-friendly, 33MB)
+- **Hybrid search**: Reciprocal Rank Fusion combining keyword + semantic
+- **Auto-logging**: Every MCP tool call persisted with full response
+- **Knowledge graph**: Auto-extracted concepts/methods/datasets from papers
+- **Graceful degradation**: S2 rate limits don't break the server
+
+## External APIs
+
+| API | Auth | Rate Limit | Used For |
+|-----|------|-----------|----------|
+| arXiv | None | 1 req/3s | Paper search, metadata, PDFs |
+| Semantic Scholar | Free key optional | 1000/s shared | Citations, references, batch lookup |
+
+Get a free S2 API key at [semanticscholar.org](https://www.semanticscholar.org/product/api) for reliable citation tools.
+
+## Development
+
+```bash
+# Run tests
+python -m pytest tests/ -v
+
+# Format
+black src/ tests/
+
+# Run MCP server locally
+uv run arxiv-mcp-server --storage-path ~/.arxiv-papers
+```
+
+## Web UI Stack
+
+- Next.js 16 (App Router)
+- Tailwind CSS 4 + shadcn/ui
+- better-sqlite3 (reads same SQLite as MCP server)
+- @remixicon/react for icons
+- Server components + server actions
+
+## Credits
+
+Enhanced fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server) (Apache-2.0).
+
+Intelligence layer, knowledge base, knowledge graph, web UI, and research tooling by [NamanAg0502](https://github.com/NamanAg0502) with Claude Code.
