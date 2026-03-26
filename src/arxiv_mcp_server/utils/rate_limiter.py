@@ -30,3 +30,5 @@ class RateLimiter:
 # Pre-configured limiters
 arxiv_limiter = RateLimiter(calls_per_second=0.33)  # arXiv: max 1 req per 3s
 s2_limiter = RateLimiter(calls_per_second=10)  # S2 unauthenticated: be polite
+openalex_limiter = RateLimiter(calls_per_second=10)  # OpenAlex: 10 req/s without mailto
+crossref_limiter = RateLimiter(calls_per_second=10)  # Crossref: polite pool with mailto

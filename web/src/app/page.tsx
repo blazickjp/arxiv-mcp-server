@@ -120,14 +120,14 @@ function StatsRow({
       <Card size="sm">
         <CardHeader>
           <CardDescription>Total Papers</CardDescription>
-          <CardTitle className="text-2xl">{stats.total_papers}</CardTitle>
+          <CardTitle className="text-3xl text-accent">{stats.total_papers}</CardTitle>
         </CardHeader>
       </Card>
 
       <Card size="sm">
         <CardHeader>
           <CardDescription>Collections</CardDescription>
-          <CardTitle className="text-2xl">{collections.length}</CardTitle>
+          <CardTitle className="text-3xl text-accent">{collections.length}</CardTitle>
         </CardHeader>
       </Card>
 
@@ -143,7 +143,7 @@ function StatsRow({
       <Card size="sm">
         <CardHeader>
           <CardDescription>KG Nodes</CardDescription>
-          <CardTitle className="text-2xl">{totalKGNodes(kgStats)}</CardTitle>
+          <CardTitle className="text-3xl text-accent">{totalKGNodes(kgStats)}</CardTitle>
         </CardHeader>
       </Card>
     </div>
@@ -304,18 +304,18 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">
-          Overview of your arXiv knowledge base
+        <h1 className="text-3xl font-semibold tracking-tight">Research Dashboard</h1>
+        <p className="mt-1 text-muted-foreground">
+          {stats.total_papers} paper{stats.total_papers === 1 ? "" : "s"} in your knowledge base
         </p>
       </div>
 
       <StatsRow stats={stats} collections={collections} kgStats={kgStats} />
       <RecentPapers papers={papers} />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <TagsCloud tags={stats.top_tags} />
         <ActiveSessions sessions={sessions} />
       </div>

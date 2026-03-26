@@ -26,6 +26,8 @@ from .tools import kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool,
 from .tools import handle_kb_save, handle_kb_search, handle_kb_list, handle_kb_annotate, handle_kb_remove
 from .tools import research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool
 from .tools import handle_research_lineage, handle_read_paper_chunks, handle_kg_query, handle_research_context
+from .tools import multi_search_tool, pwc_search_tool
+from .tools import handle_multi_search, handle_pwc_search
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
 from .store.research_history import ResearchHistory
@@ -62,6 +64,7 @@ async def list_tools() -> List[types.Tool]:
         citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool,
         kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
         research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool,
+        multi_search_tool, pwc_search_tool,
     ]
 
 
@@ -87,6 +90,8 @@ _TOOL_HANDLERS: Dict[str, Any] = {
     "read_paper_chunks": handle_read_paper_chunks,
     "kg_query": handle_kg_query,
     "research_context": handle_research_context,
+    "multi_search": handle_multi_search,
+    "papers_with_code_search": handle_pwc_search,
 }
 
 

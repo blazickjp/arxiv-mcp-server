@@ -42,7 +42,7 @@ function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-4 py-3">
+      <SidebarHeader className="px-4 py-4">
         <Link href="/" className="flex items-center gap-2">
           <span className="text-lg font-semibold tracking-tight">
             arxiv KB
@@ -51,7 +51,7 @@ function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground/70">Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => {
@@ -66,9 +66,10 @@ function AppSidebar() {
                       isActive={isActive}
                       tooltip={item.title}
                       render={<Link href={item.href} />}
+                      className={isActive ? "border-l-2 border-l-accent bg-sidebar-accent font-medium" : ""}
                     >
-                      <item.icon className="size-4" />
-                      <span>{item.title}</span>
+                      <item.icon className="size-[18px]" />
+                      <span className="text-[15px]">{item.title}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )

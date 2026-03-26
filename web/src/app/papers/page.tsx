@@ -65,9 +65,9 @@ export default async function PapersPage({
       ) : (
         <div className="space-y-3">
           {papers.map((paper) => (
-            <Card key={paper.id} size="sm">
-              <CardHeader>
-                <CardTitle>
+            <Card key={paper.id} size="sm" className="transition-all hover:border-l-accent hover:border-l-2">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg font-semibold leading-snug">
                   <Link
                     href={`/papers/${paper.id}`}
                     className="hover:text-primary transition-colors hover:underline underline-offset-2"
@@ -76,19 +76,19 @@ export default async function PapersPage({
                   </Link>
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">
+              <CardContent className="pt-0 pb-5">
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
                     {truncateAuthors(paper.authors)}
                   </p>
 
                   {paper.abstract && (
-                    <p className="text-xs text-muted-foreground/80 leading-relaxed">
+                    <p className="text-sm text-muted-foreground/80 leading-relaxed">
                       {truncateAbstract(paper.abstract)}
                     </p>
                   )}
 
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline" className="gap-1">
                       <span
                         className={`inline-block size-1.5 rounded-full ${statusDotColor(paper.reading_status)}`}
@@ -99,7 +99,7 @@ export default async function PapersPage({
                     <Badge variant="secondary">{paper.source}</Badge>
 
                     {paper.tags.map((tag) => (
-                      <Badge key={tag} variant="outline" className="text-[10px]">
+                      <Badge key={tag} variant="secondary" className="text-[10px]">
                         {tag}
                       </Badge>
                     ))}

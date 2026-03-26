@@ -21,6 +21,8 @@ from .research_lineage import research_lineage_tool, handle_research_lineage
 from .read_paper_chunks import read_paper_chunks_tool, handle_read_paper_chunks
 from .kg_query import kg_query_tool, handle_kg_query
 from .research_context import research_context_tool, handle_research_context
+from .multi_search import multi_search_tool, handle_multi_search
+from .paper_with_code import pwc_search_tool, handle_pwc_search
 
 __all__ = [
     "search_tool",
@@ -65,4 +67,8 @@ __all__ = [
     "handle_kg_query",
     "research_context_tool",
     "handle_research_context",
+    "multi_search_tool",
+    "handle_multi_search",
+    "pwc_search_tool",
+    "handle_pwc_search",
 ]

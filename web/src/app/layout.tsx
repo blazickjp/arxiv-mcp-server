@@ -36,7 +36,9 @@ export default function RootLayout({
             <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
               <SidebarTrigger className="-ml-1" />
             </header>
-            <div className="flex-1 p-6">{children}</div>
+            <div className="flex-1 p-8">
+              <div className="mx-auto max-w-7xl">{children}</div>
+            </div>
           </SidebarInset>
         </SidebarProvider>
       </body>

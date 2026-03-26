@@ -47,8 +47,8 @@ export default async function PaperDetailPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="mx-auto w-full max-w-[680px] px-4 py-10">
+      <div className="mb-8 flex items-center justify-between">
         <Link href="/papers">
           <Button variant="ghost" size="sm">
             <RiArrowLeftLine className="size-4" />
@@ -58,12 +58,12 @@ export default async function PaperDetailPage({
         <DeletePaperButton paperId={paper.id} />
       </div>
 
-      <h1 className="mb-4 text-2xl font-semibold leading-tight tracking-tight">
+      <h1 className="mb-5 text-3xl font-semibold leading-tight tracking-tight">
         {paper.title}
       </h1>
 
       {/* Metadata row */}
-      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+      <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
         {paper.authors.length > 0 && (
           <span className="flex items-center gap-1.5">
             <RiUserLine className="size-3.5" />
@@ -81,14 +81,14 @@ export default async function PaperDetailPage({
         <Badge variant="secondary">{paper.source}</Badge>
 
         {paper.categories.map((cat) => (
-          <Badge key={cat} variant="outline" className="text-[10px]">
+          <Badge key={cat} variant="secondary" className="text-[10px]">
             {cat}
           </Badge>
         ))}
       </div>
 
       {/* Status + tags row */}
-      <div className="mb-6 space-y-3">
+      <div className="mb-8 space-y-3">
         <div className="flex flex-wrap items-center gap-4">
           <ReadingStatusSelector
             paperId={paper.id}
@@ -104,16 +104,16 @@ export default async function PaperDetailPage({
         <TagsEditor paperId={paper.id} currentTags={paper.tags} />
       </div>
 
-      <Separator className="mb-6" />
+      <Separator className="mb-8" />
 
       {/* Abstract */}
       {paper.abstract && (
-        <Card className="mb-4">
+        <Card className="mb-6">
           <CardHeader>
             <CardTitle>Abstract</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+            <p className="text-base leading-relaxed text-muted-foreground whitespace-pre-wrap">
               {paper.abstract}
             </p>
           </CardContent>
@@ -121,7 +121,7 @@ export default async function PaperDetailPage({
       )}
 
       {/* Notes */}
-      <Card className="mb-4">
+      <Card className="mb-6 bg-muted/40">
         <CardContent className="pt-4">
           <NotesEditor paperId={paper.id} currentNotes={paper.notes} />
         </CardContent>
@@ -129,7 +129,7 @@ export default async function PaperDetailPage({
 
       {/* Collections */}
       {paper.collections && paper.collections.length > 0 && (
-        <Card className="mb-4">
+        <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-1.5">
               <RiFolder2Line className="size-4" />
@@ -137,7 +137,7 @@ export default async function PaperDetailPage({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {paper.collections.map((col) => (
                 <Badge key={col} variant="secondary">
                   {col}
@@ -150,7 +150,7 @@ export default async function PaperDetailPage({
 
       {/* External link */}
       {paper.url && (
-        <div className="mt-4">
+        <div className="mt-6">
           <a
             href={paper.url}
             target="_blank"
