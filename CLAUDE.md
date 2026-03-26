@@ -1,51 +1,151 @@
-# CLAUDE.md — research-mcp-server (Enhanced Fork)
+# CLAUDE.md — research-mcp-server v2
 
 ## Project Overview
 
-Enhanced fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server) (2.3k stars, Python, Apache-2.0). The upstream provides basic arXiv search, download, read, and list tools via MCP (stdio transport). This fork adds an **intelligence layer**: advanced query building, semantic search, citation graph traversal, paper comparison, research digest generation, trend analysis, and structured export.
+Multi-source research intelligence server via MCP (stdio transport). Started as a fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server) — now expanded to **31 tools across 16 data sources** covering academic papers, developer communities, package registries, and composite "CTO intelligence" analysis.
 
-**Primary consumer**: Claude Code on macOS (M4 MacBook), configured as a local stdio MCP server.
+**Primary consumer**: Claude Code on macOS, configured as a local stdio MCP server.
 **Secondary consumer**: Claude Desktop, any MCP-compatible client.
+
+## Tool Inventory (31 tools)
+
+### Search & Discovery (3)
+| Tool | Description |
+|------|-------------|
+| `search` | Unified arXiv search — keyword/phrase + structured field-by-field |
+| `semantic_search` | Embedding-based similarity search (BAAI/bge-small-en-v1.5) |
+| `cross_search` | Parallel search across arXiv, OpenAlex, Crossref with dedup |
+
+### Paper Management (4)
+| Tool | Description |
+|------|-------------|
+| `download_paper` | Download PDF, convert to markdown |
+| `list_papers` | List downloaded papers |
+| `read_paper` | Read full paper content |
+| `read_paper_chunks` | Read paper by structured sections |
+
+### Analysis (5)
+| Tool | Description |
+|------|-------------|
+| `citations` | Citation graph + optional structural analysis (`analyze=true`) |
+| `lineage` | Intellectual influence DAG (depth 3) |
+| `compare` | Side-by-side paper comparison |
+| `trends` | Publication trend analysis |
+| `digest` | Research area summaries |
+
+### Knowledge & Memory (3)
+| Tool | Description |
+|------|-------------|
+| `kb` | Unified knowledge base (`action`: save/search/list/annotate/remove) |
+| `kg_query` | Knowledge graph queries |
+| `memory` | Session tracking + persistent research memory (`action`: create/status/log_paper/add_thesis/warm_context/...) |
+
+### Academic Sources (6)
+| Tool | Source | Description |
+|------|--------|-------------|
+| `hf_trending` | HuggingFace | Trending papers, models, datasets |
+| `benchmarks` | Papers With Code | SOTA tables, code repos |
+| `model_benchmarks` | Epoch AI | Model capabilities comparison |
+| `venue_lookup` | DBLP | Conference/journal search |
+| `patent_search` | Lens.org | Patent cross-reference |
+| `export` | Local | BibTeX/markdown/JSON/CSV export |
+
+### Practitioner Sources (5)
+| Tool | Source | Auth Required |
+|------|--------|--------------|
+| `hn` | Hacker News (Algolia + Firebase) | None |
+| `community` | Dev.to + Lobsters | None |
+| `packages` | npm + PyPI + crates.io | None |
+| `github` | GitHub REST API | Optional `GITHUB_TOKEN` |
+| `reddit` | Reddit API | Optional `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` |
+
+### CTO Intelligence (4)
+| Tool | What it answers |
+|------|----------------|
+| `tech_pulse` | "What's trending in AI/dev this week?" (HN + GitHub + Dev.to + HF) |
+| `evaluate` | "Should we use X or Y?" (GitHub + Reddit + HN + packages) |
+| `sentiment` | "What do devs think about X?" (Reddit + HN) |
+| `deep_research` | "Everything about X" (arXiv + GitHub + HN + Reddit + Dev.to + npm) |
+
+### Meta (1)
+| Tool | Description |
+|------|-------------|
+| `help` | Semantic tool discovery — recommends tools for natural language queries |
 
 ## Architecture
 
 ```
 research-mcp-server/
 ├── src/research_mcp_server/
-│   ├── __init__.py
-│   ├── server.py                    # UPSTREAM — main MCP server, tool registration
-│   ├── config.py                    # UPSTREAM — configuration (storage path, env vars)
+│   ├── server.py                        # MCP server, tool registration, backwards-compat aliases
+│   ├── config.py                        # Configuration (storage path, env vars)
 │   │
-│   ├── tools/                       # Tool implementations
-│   │   ├── __init__.py              # UPSTREAM — tool exports
-│   │   ├── search.py                # UPSTREAM — arXiv paper search
-│   │   ├── download.py              # UPSTREAM — paper download
-│   │   ├── list_papers.py           # UPSTREAM — list stored papers
-│   │   ├── read_paper.py            # UPSTREAM — read paper content
-│   │   ├── advanced_query.py        # NEW — structured query builder
-│   │   ├── semantic_search.py       # NEW — embedding-based similarity search
-│   │   ├── compare.py              # NEW — multi-paper comparison
-│   │   ├── digest.py               # NEW — research digest generator
-│   │   ├── citations.py            # NEW — citation graph via Semantic Scholar API
-│   │   ├── trends.py               # NEW — publication trend analysis
-│   │   └── export.py               # NEW — BibTeX/markdown/JSON export
+│   ├── tools/                           # Tool implementations (31 tools)
+│   │   ├── search.py                    # Unified search (keyword + structured)
+│   │   ├── semantic_search.py           # Embedding-based search
+│   │   ├── multi_search.py             # Cross-source search
+│   │   ├── download.py                  # Paper download
+│   │   ├── list_papers.py              # List papers
+│   │   ├── read_paper.py               # Read paper
+│   │   ├── read_paper_chunks.py        # Read by section
+│   │   ├── citations.py                # Unified citations + analysis
+│   │   ├── research_lineage.py         # Influence DAG
+│   │   ├── compare.py                  # Paper comparison
+│   │   ├── trends.py                   # Trend analysis
+│   │   ├── digest.py                   # Research digests
+│   │   ├── kb.py                       # Unified KB (save/search/list/annotate/remove)
+│   │   ├── kg_query.py                 # Knowledge graph
+│   │   ├── memory.py                   # Unified memory (session + persistent)
+│   │   ├── export.py                   # Export formats
+│   │   ├── hf_papers.py               # HuggingFace trending
+│   │   ├── paper_with_code.py         # Papers With Code
+│   │   ├── model_benchmarks.py        # Epoch AI
+│   │   ├── venue_lookup.py            # DBLP
+│   │   ├── patent_search.py           # Lens.org
+│   │   ├── hn_tools.py                # Hacker News
+│   │   ├── community_tools.py         # Dev.to + Lobsters
+│   │   ├── package_tools.py           # npm/PyPI/crates.io
+│   │   ├── github_tools.py            # GitHub
+│   │   ├── reddit_tools.py            # Reddit
+│   │   ├── intelligence_tools.py      # Composite: tech_pulse, evaluate, sentiment, deep_research
+│   │   ├── suggest_tools.py           # Semantic tool discovery
+│   │   └── (backwards-compat files)   # advanced_query.py, kb_*.py, research_context.py, etc.
 │   │
-│   ├── clients/                     # NEW — external API clients
-│   │   ├── __init__.py
-│   │   ├── s2_client.py            # Semantic Scholar API client (httpx, async)
-│   │   └── arxiv_client.py         # Thin wrapper over `arxiv` PyPI for advanced queries
+│   ├── clients/                        # External API clients (16 sources)
+│   │   ├── arxiv_client.py            # arXiv structured queries
+│   │   ├── s2_client.py               # Semantic Scholar
+│   │   ├── openalex_client.py         # OpenAlex
+│   │   ├── crossref_client.py         # Crossref
+│   │   ├── hf_client.py               # HuggingFace Hub
+│   │   ├── pwc_client.py              # Papers With Code
+│   │   ├── epoch_client.py            # Epoch AI
+│   │   ├── dblp_client.py             # DBLP
+│   │   ├── lens_client.py             # Lens.org
+│   │   ├── hn_client.py               # Hacker News (Algolia + Firebase)
+│   │   ├── devto_client.py            # Dev.to
+│   │   ├── lobsters_client.py         # Lobsters
+│   │   ├── package_client.py          # npm + PyPI + crates.io
+│   │   ├── github_client.py           # GitHub REST API
+│   │   └── reddit_client.py           # Reddit (OAuth2 + public JSON fallback)
 │   │
-│   ├── store/                       # NEW — local persistence
-│   │   ├── __init__.py
-│   │   └── sqlite_store.py         # SQLite for paper metadata cache + embeddings
+│   ├── store/                          # Local persistence
+│   │   ├── sqlite_store.py            # Paper metadata cache + embeddings
+│   │   ├── knowledge_base.py          # KB storage
+│   │   ├── knowledge_graph.py         # KG storage
+│   │   ├── research_context.py        # Session tracking
+│   │   ├── research_memory.py         # Persistent memory (Engram pattern)
+│   │   └── research_history.py        # Audit trail
 │   │
-│   └── utils/                       # NEW — shared utilities
-│       ├── __init__.py
-│       ├── formatters.py           # Markdown/JSON response formatting
-│       └── rate_limiter.py         # Rate limiting for arXiv (3s) and S2 APIs
+│   ├── utils/
+│   │   ├── formatters.py              # Markdown/JSON formatting
+│   │   └── rate_limiter.py            # Token bucket limiters (13 sources)
+│   │
+│   ├── prompts/                        # MCP prompt templates
+│   └── security.py                     # Response sanitization
 │
-├── tests/                           # Extend with new tool tests
-├── CLAUDE.md                        # This file
+├── tests/                              # 99 tests
+├── research/                           # Research docs and specs
+├── CLAUDE.md                           # This file
 ├── pyproject.toml
 └── README.md
 ```
@@ -55,8 +155,6 @@ research-mcp-server/
 ### Prerequisites
 - Python 3.11+
 - uv (package manager)
-- No API keys required for basic usage (arXiv is free, S2 works unauthenticated)
-- Optional: `SEMANTIC_SCHOLAR_API_KEY` env var for higher S2 rate limits
 
 ### Development Setup
 ```bash
@@ -76,18 +174,27 @@ arxiv-mcp-server
 ### Testing
 ```bash
 python -m pytest                              # all tests with coverage
-python -m pytest tests/test_advanced_query.py  # specific test
-python -m pytest -v --no-header                # verbose, clean output
+python -m pytest tests/test_search.py         # specific test
+python -m pytest -v --no-header               # verbose, clean output
 ```
 
-## Development Commands
+## Environment Variables
 
-```bash
-# Format
-black src/ tests/
+```env
+# === No auth needed (core functionality) ===
+# arXiv, HN, Dev.to, Lobsters, npm, PyPI, crates.io — all free
 
-# Run server locally for testing
-uv run research-mcp-server --storage-path ~/.arxiv-papers
+# === Recommended (free, unlocks more) ===
+GITHUB_TOKEN=ghp_...                    # GitHub PAT — 5000 req/hr (vs 60 without)
+REDDIT_CLIENT_ID=...                    # reddit.com/prefs/apps — free
+REDDIT_CLIENT_SECRET=...                # reddit.com/prefs/apps — free
+
+# === Optional (enhanced) ===
+SEMANTIC_SCHOLAR_API_KEY=...            # Higher S2 rate limits
+OPENALEX_EMAIL=...                      # Polite pool (100 req/s)
+CROSSREF_EMAIL=...                      # Polite pool
+LENS_API_TOKEN=...                      # Patent search
+HF_TOKEN=...                            # HuggingFace higher limits
 ```
 
 ## Claude Code MCP Configuration
@@ -102,84 +209,57 @@ uv run research-mcp-server --storage-path ~/.arxiv-papers
         "--storage-path", "/Users/naman/.arxiv-papers"
       ],
       "env": {
-        "SEMANTIC_SCHOLAR_API_KEY": ""
+        "SEMANTIC_SCHOLAR_API_KEY": "",
+        "GITHUB_TOKEN": "",
+        "REDDIT_CLIENT_ID": "",
+        "REDDIT_CLIENT_SECRET": ""
       }
     }
   }
 }
 ```
 
-## Implementation Order
-
-### Phase 1: Foundation
-1. Directory structure (`tools/`, `clients/`, `store/`, `utils/`) — `__init__.py` files
-2. `utils/rate_limiter.py` — token bucket rate limiter
-3. `utils/formatters.py` — shared formatting functions
-4. `store/sqlite_store.py` — tables, basic CRUD
-5. `clients/arxiv_client.py` — thin wrapper for advanced query building
-
-### Phase 2: Core Intelligence Tools
-6. `tools/advanced_query.py` — structured query builder
-7. `tools/export.py` — BibTeX/markdown/JSON export
-8. `clients/s2_client.py` — Semantic Scholar API client with retry logic
-9. `tools/citations.py` — citation graph tool
-
-### Phase 3: Semantic & Analysis Tools
-10. `tools/semantic_search.py` — embedding search
-11. `tools/compare.py` — paper comparison
-12. `tools/trends.py` — trend analysis
-13. `tools/digest.py` — research digest
-
-### Phase 4: Polish
-14. Update `pyproject.toml` with new dependencies
-15. Update `README.md`
-16. Tests for all new tools
-17. End-to-end test in Claude Code
-
 ## Tool Registration Pattern
 
-The upstream uses manual `types.Tool` objects + `call_tool()` dispatcher in `server.py`. New tools follow the same pattern:
+Tools use `types.Tool` objects + action-based dispatch for consolidated tools:
 
 ```python
-# In tools/my_tool.py:
-my_tool = types.Tool(name="my_tool_name", description="...", inputSchema={...})
+# Simple tool (one function):
+my_tool = types.Tool(name="my_tool", description="...", inputSchema={...})
+async def handle_my_tool(arguments: Dict[str, Any]) -> List[types.TextContent]: ...
 
-async def handle_my_tool(arguments: Dict[str, Any]) -> List[types.TextContent]:
+# Consolidated tool (action dispatch):
+kb_tool = types.Tool(name="kb", inputSchema={"properties": {"action": {"enum": [...]}, ...}})
+async def handle_kb(arguments):
+    if arguments["action"] == "save": return await handle_kb_save(arguments)
+    elif arguments["action"] == "search": return await handle_kb_search(arguments)
     ...
 
-# In tools/__init__.py: export both
-# In server.py: add to list_tools() and call_tool() dispatcher
+# Register in tools/__init__.py: export tool + handler
+# Register in server.py: add to list_tools() and _TOOL_HANDLERS dict
 ```
 
-## External APIs
-
-### arXiv API
-- Rate limit: max 1 request per 3 seconds
-- Base URL: `https://export.arxiv.org/api/query`
-- Free, no auth required
-
-### Semantic Scholar API
-- Base URL: `https://api.semanticscholar.org/graph/v1`
-- Paper ID format: `ArXiv:{arxiv_id}` (strip version suffix)
-- Rate limits: 1000 req/s shared (unauthenticated), 1 req/s dedicated (with API key)
-- Fields: `paperId,externalIds,title,abstract,year,citationCount,influentialCitationCount,authors,venue,publicationDate,referenceCount,isOpenAccess,fieldsOfStudy`
+### Backwards Compatibility
+Old tool names (e.g., `search_papers`, `arxiv_advanced_query`, `kb_save`) are registered as aliases in `server.py._TOOL_HANDLERS` and still work. They route to the new consolidated handlers.
 
 ## Constraints
 - **Async everywhere**: All tools must be `async def`. Use `httpx.AsyncClient`, `aiosqlite`.
-- **Graceful degradation**: If S2 is down, return arXiv-only data with a note. If embedding model fails, fall back to keyword search.
-- **Actionable errors**: If no results, suggest broadening query. If S2 can't find paper, explain ID mapping.
-- **No heavy deps**: `sentence-transformers` handles PyTorch. SQLite is sufficient (no vector DB).
+- **Graceful degradation**: If any source is down, return partial data with a note. Never crash.
+- **Actionable errors**: Suggest fixes (broaden query, check ID format, set env var).
+- **Rate limiting**: Every external API call must go through its rate limiter.
+- **Response size**: Max 500KB per response (auto-truncated by server.py).
 
 ## Code Style
-- Follow existing codebase conventions (black formatted, Google-style docstrings)
+- black formatted, Google-style docstrings
 - Type hints on all function signatures
-- Pydantic v2 patterns (ConfigDict, Field constraints)
 - `json.dumps(result, indent=2)` for JSON tool responses
+- Normalize data in client layer, not tool layer
 
 ## Common Mistakes
-- Using `asChild` instead of `render={}` — base-ui convention (N/A for Python but noted globally)
-- Forgetting to add new tools to BOTH `list_tools()` AND `call_tool()` in server.py
+- Forgetting to add new tools to BOTH `list_tools()` AND `_TOOL_HANDLERS` in server.py
 - Forgetting to export new tools in `tools/__init__.py`
-- Not respecting arXiv 3-second rate limit
+- Not respecting rate limits (every API call needs `await limiter.wait()`)
 - Using S2 paper ID without `ArXiv:` prefix
 - Not stripping version suffix (e.g., `v2`) from arXiv IDs before S2 lookup
+- Not testing with `python -c "from research_mcp_server.server import server"` after changes
+- Stale `tool_index.pkl` after renaming tools — delete from `~/.arxiv-papers/`
