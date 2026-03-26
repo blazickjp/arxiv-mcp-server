@@ -2,7 +2,7 @@
 
 import pytest
 
-from arxiv_mcp_server.utils.formatters import (
+from research_mcp_server.utils.formatters import (
     format_bibtex_entry,
     format_paper_json,
     format_paper_markdown,

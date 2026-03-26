@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "arxiv-mcp-server"
+name = "research-mcp-server"
 version = "0.3.2"
-description = "A flexible arXiv search and analysis service with MCP protocol support"
+description = "A flexible research paper search and analysis service with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -49,13 +49,14 @@ dev = [
 asyncio_mode = "auto"
 asyncio_fixture_loop_scope = "function"  # Added this line
 testpaths = ["tests"]
-addopts = "-v --cov=arxiv_mcp_server"
+addopts = "-v --cov=research_mcp_server"
 
 [project.scripts]
-arxiv-mcp-server = "arxiv_mcp_server:main"
+research-mcp-server = "research_mcp_server:main"
+arxiv-mcp-server = "research_mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/arxiv_mcp_server"]
+packages = ["src/research_mcp_server"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -4,7 +4,7 @@ import json
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from arxiv_mcp_server.tools.trends import handle_trend_analysis
+from research_mcp_server.tools.trends import handle_trend_analysis
 
 
 def _mock_papers_with_dates():
@@ -56,12 +56,12 @@ async def test_trend_analysis_monthly():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.trends._raw_arxiv_search",
+            "research_mcp_server.tools.trends._raw_arxiv_search",
             new_callable=AsyncMock,
             return_value=papers,
         ),
         patch(
-            "arxiv_mcp_server.tools.trends.S2Client",
+            "research_mcp_server.tools.trends.S2Client",
         ) as mock_s2_cls,
     ):
         mock_s2 = mock_s2_cls.return_value
@@ -95,7 +95,7 @@ async def test_trend_analysis_monthly():
 async def test_trend_analysis_empty():
     """Test trend analysis when no papers are found."""
     with patch(
-        "arxiv_mcp_server.tools.trends._raw_arxiv_search",
+        "research_mcp_server.tools.trends._raw_arxiv_search",
         new_callable=AsyncMock,
         return_value=[],
     ):

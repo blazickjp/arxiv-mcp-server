@@ -7,8 +7,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import arxiv
 
-from arxiv_mcp_server.tools.compare import handle_compare
-from arxiv_mcp_server.clients.s2_client import S2Client
+from research_mcp_server.tools.compare import handle_compare
+from research_mcp_server.clients.s2_client import S2Client
 
 
 class MockAuthor:
@@ -39,7 +39,7 @@ async def test_compare_two_papers():
     mock_client.results.return_value = [paper_a, paper_b]
 
     with (
-        patch("arxiv_mcp_server.tools.compare.arxiv.Client", return_value=mock_client),
+        patch("research_mcp_server.tools.compare.arxiv.Client", return_value=mock_client),
         patch.object(
             S2Client,
             "batch_get_papers",
@@ -86,7 +86,7 @@ async def test_compare_with_citation_counts():
     ]
 
     with (
-        patch("arxiv_mcp_server.tools.compare.arxiv.Client", return_value=mock_client),
+        patch("research_mcp_server.tools.compare.arxiv.Client", return_value=mock_client),
         patch.object(
             S2Client,
             "batch_get_papers",

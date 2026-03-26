@@ -202,72 +202,6 @@ wheels = [
 ]
 
 [[package]]
-name = "arxiv-mcp-server"
-version = "0.3.2"
-source = { editable = "." }
-dependencies = [
-    { name = "aiofiles" },
-    { name = "aiohttp" },
-    { name = "aiosqlite" },
-    { name = "anyio" },
-    { name = "arxiv" },
-    { name = "black" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pymupdf-layout" },
-    { name = "pymupdf4llm" },
-    { name = "python-dateutil" },
-    { name = "python-dotenv" },
-    { name = "sentence-transformers" },
-    { name = "sse-starlette" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "black" },
-]
-test = [
-    { name = "aioresponses" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiofiles", specifier = ">=23.2.1" },
-    { name = "aiohttp", specifier = ">=3.9.1" },
-    { name = "aioresponses", marker = "extra == 'test'", specifier = ">=0.7.6" },
-    { name = "aiosqlite", specifier = ">=0.20.0" },
-    { name = "anyio", specifier = ">=4.2.0" },
-    { name = "arxiv", specifier = ">=2.1.0" },
-    { name = "black", specifier = ">=25.1.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.3.0" },
-    { name = "httpx", specifier = ">=0.24.0" },
-    { name = "mcp", specifier = ">=1.2.0" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "pydantic", specifier = ">=2.8.0" },
-    { name = "pydantic-settings", specifier = ">=2.1.0" },
-    { name = "pymupdf-layout", specifier = ">=1.26.6" },
-    { name = "pymupdf4llm", specifier = ">=0.0.17" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.5" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.1.0" },
-    { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
-    { name = "python-dateutil", specifier = ">=2.8.2" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "sentence-transformers", specifier = ">=3.0.0" },
-    { name = "sse-starlette", specifier = ">=1.8.2" },
-    { name = "uvicorn", specifier = ">=0.30.0" },
-]
-provides-extras = ["test", "dev"]
-
-[[package]]
 name = "attrs"
 version = "25.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2229,6 +2163,72 @@ sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
 ]
+
+[[package]]
+name = "research-mcp-server"
+version = "0.3.2"
+source = { editable = "." }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiohttp" },
+    { name = "aiosqlite" },
+    { name = "anyio" },
+    { name = "arxiv" },
+    { name = "black" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pymupdf-layout" },
+    { name = "pymupdf4llm" },
+    { name = "python-dateutil" },
+    { name = "python-dotenv" },
+    { name = "sentence-transformers" },
+    { name = "sse-starlette" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "black" },
+]
+test = [
+    { name = "aioresponses" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiofiles", specifier = ">=23.2.1" },
+    { name = "aiohttp", specifier = ">=3.9.1" },
+    { name = "aioresponses", marker = "extra == 'test'", specifier = ">=0.7.6" },
+    { name = "aiosqlite", specifier = ">=0.20.0" },
+    { name = "anyio", specifier = ">=4.2.0" },
+    { name = "arxiv", specifier = ">=2.1.0" },
+    { name = "black", specifier = ">=25.1.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.3.0" },
+    { name = "httpx", specifier = ">=0.24.0" },
+    { name = "mcp", specifier = ">=1.2.0" },
+    { name = "numpy", specifier = ">=1.26.0" },
+    { name = "pydantic", specifier = ">=2.8.0" },
+    { name = "pydantic-settings", specifier = ">=2.1.0" },
+    { name = "pymupdf-layout", specifier = ">=1.26.6" },
+    { name = "pymupdf4llm", specifier = ">=0.0.17" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.5" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.1.0" },
+    { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
+    { name = "python-dateutil", specifier = ">=2.8.2" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "sse-starlette", specifier = ">=1.8.2" },
+    { name = "uvicorn", specifier = ">=0.30.0" },
+]
+provides-extras = ["test", "dev"]
 
 [[package]]
 name = "rich"

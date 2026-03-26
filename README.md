@@ -1,4 +1,4 @@
-# arxiv-mcp-server
+# research-mcp-server
 
 > Enhanced fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server) — a personal research OS for Claude.
 
@@ -45,7 +45,7 @@ Add to `~/.claude.json` under `mcpServers`:
       "command": "uv",
       "args": [
         "--directory", "/path/to/arxiv-mcp-server",
-        "run", "arxiv-mcp-server"
+        "run", "research-mcp-server"
       ],
       "env": {
         "SEMANTIC_SCHOLAR_API_KEY": ""
@@ -66,7 +66,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "command": "uv",
       "args": [
         "--directory", "/path/to/arxiv-mcp-server",
-        "run", "arxiv-mcp-server"
+        "run", "research-mcp-server"
       ]
     }
   }
@@ -121,8 +121,8 @@ Export my foundational-papers collection as BibTeX
 ## Architecture
 
 ```
-arxiv-mcp-server/
-├── src/arxiv_mcp_server/
+research-mcp-server/
+├── src/research_mcp_server/
 │   ├── server.py              # MCP server with auto-logging
 │   ├── tools/                 # 21 tool implementations
 │   ├── clients/               # arXiv + Semantic Scholar API clients
@@ -173,7 +173,7 @@ python -m pytest tests/ -v
 black src/ tests/
 
 # Run MCP server locally
-uv run arxiv-mcp-server --storage-path ~/.arxiv-papers
+uv run research-mcp-server --storage-path ~/.arxiv-papers
 ```
 
 ## Web UI Stack

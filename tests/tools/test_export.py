@@ -7,8 +7,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import arxiv
 
-from arxiv_mcp_server.tools.export import handle_export
-from arxiv_mcp_server.clients.s2_client import S2Client
+from research_mcp_server.tools.export import handle_export
+from research_mcp_server.clients.s2_client import S2Client
 
 
 class MockAuthor:
@@ -36,7 +36,7 @@ async def test_export_bibtex():
     mock_client = MagicMock(spec=arxiv.Client)
     mock_client.results.return_value = [mock_paper]
 
-    with patch("arxiv_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
+    with patch("research_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
         result = await handle_export(
             {"paper_ids": ["2401.12345"], "format": "bibtex"}
         )
@@ -55,7 +55,7 @@ async def test_export_json():
     mock_client = MagicMock(spec=arxiv.Client)
     mock_client.results.return_value = [mock_paper]
 
-    with patch("arxiv_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
+    with patch("research_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
         result = await handle_export(
             {"paper_ids": ["2401.12345"], "format": "json"}
         )
@@ -75,7 +75,7 @@ async def test_export_markdown():
     mock_client = MagicMock(spec=arxiv.Client)
     mock_client.results.return_value = [mock_paper]
 
-    with patch("arxiv_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
+    with patch("research_mcp_server.tools.export.arxiv.Client", return_value=mock_client):
         result = await handle_export(
             {"paper_ids": ["2401.12345"], "format": "markdown"}
         )
@@ -103,7 +103,7 @@ async def test_export_with_citation_counts():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.export.arxiv.Client",
+            "research_mcp_server.tools.export.arxiv.Client",
             return_value=mock_client,
         ),
         patch.object(

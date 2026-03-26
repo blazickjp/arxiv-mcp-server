@@ -3,7 +3,7 @@
 import pytest
 import json
 from datetime import datetime
-from arxiv_mcp_server.tools.download import (
+from research_mcp_server.tools.download import (
     handle_download,
     get_paper_path,
     conversion_statuses,

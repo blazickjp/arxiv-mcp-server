@@ -2,7 +2,7 @@
 
 import pytest
 from typing import Dict
-from arxiv_mcp_server.prompts.handlers import list_prompts, get_prompt
+from research_mcp_server.prompts.handlers import list_prompts, get_prompt
 from mcp.types import GetPromptResult, PromptMessage, TextContent
 
 

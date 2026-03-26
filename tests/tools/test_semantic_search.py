@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from arxiv_mcp_server.tools.semantic_search import handle_semantic_search
+from research_mcp_server.tools.semantic_search import handle_semantic_search
 
 
 def _mock_search_pool():
@@ -59,16 +59,16 @@ async def test_semantic_search_with_model():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.semantic_search._raw_arxiv_search",
+            "research_mcp_server.tools.semantic_search._raw_arxiv_search",
             new_callable=AsyncMock,
             return_value=pool,
         ),
         patch(
-            "arxiv_mcp_server.tools.semantic_search._load_model",
+            "research_mcp_server.tools.semantic_search._load_model",
             return_value=mock_model,
         ),
         patch(
-            "arxiv_mcp_server.tools.semantic_search.SQLiteStore",
+            "research_mcp_server.tools.semantic_search.SQLiteStore",
             return_value=mock_store,
         ),
     ):
@@ -94,12 +94,12 @@ async def test_semantic_search_fallback():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.semantic_search._raw_arxiv_search",
+            "research_mcp_server.tools.semantic_search._raw_arxiv_search",
             new_callable=AsyncMock,
             return_value=pool,
         ),
         patch(
-            "arxiv_mcp_server.tools.semantic_search._load_model",
+            "research_mcp_server.tools.semantic_search._load_model",
             return_value=None,
         ),
     ):
@@ -118,7 +118,7 @@ async def test_semantic_search_fallback():
 async def test_semantic_search_no_results():
     """Test semantic search with empty search pool."""
     with patch(
-        "arxiv_mcp_server.tools.semantic_search._raw_arxiv_search",
+        "research_mcp_server.tools.semantic_search._raw_arxiv_search",
         new_callable=AsyncMock,
         return_value=[],
     ):
