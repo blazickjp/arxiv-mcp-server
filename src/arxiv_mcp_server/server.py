@@ -28,6 +28,8 @@ from .tools import research_lineage_tool, read_paper_chunks_tool, kg_query_tool,
 from .tools import handle_research_lineage, handle_read_paper_chunks, handle_kg_query, handle_research_context
 from .tools import multi_search_tool, pwc_search_tool
 from .tools import handle_multi_search, handle_pwc_search
+from .tools import hf_trending_tool, model_benchmarks_tool, venue_lookup_tool, patent_search_tool
+from .tools import handle_hf_trending, handle_model_benchmarks, handle_venue_lookup, handle_patent_search
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
 from .store.research_history import ResearchHistory
@@ -65,6 +67,7 @@ async def list_tools() -> List[types.Tool]:
         kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
         research_lineage_tool, read_paper_chunks_tool, kg_query_tool, research_context_tool,
         multi_search_tool, pwc_search_tool,
+        hf_trending_tool, model_benchmarks_tool, venue_lookup_tool, patent_search_tool,
     ]
 
 
@@ -92,6 +95,10 @@ _TOOL_HANDLERS: Dict[str, Any] = {
     "research_context": handle_research_context,
     "multi_search": handle_multi_search,
     "papers_with_code_search": handle_pwc_search,
+    "hf_trending_papers": handle_hf_trending,
+    "model_benchmarks": handle_model_benchmarks,
+    "venue_lookup": handle_venue_lookup,
+    "patent_search": handle_patent_search,
 }
 
 

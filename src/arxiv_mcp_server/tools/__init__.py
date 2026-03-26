@@ -23,6 +23,10 @@ from .kg_query import kg_query_tool, handle_kg_query
 from .research_context import research_context_tool, handle_research_context
 from .multi_search import multi_search_tool, handle_multi_search
 from .paper_with_code import pwc_search_tool, handle_pwc_search
+from .hf_papers import hf_trending_tool, handle_hf_trending
+from .model_benchmarks import model_benchmarks_tool, handle_model_benchmarks
+from .venue_lookup import venue_lookup_tool, handle_venue_lookup
+from .patent_search import patent_search_tool, handle_patent_search
 
 __all__ = [
     "search_tool",
@@ -71,4 +75,12 @@ __all__ = [
     "handle_multi_search",
     "pwc_search_tool",
     "handle_pwc_search",
+    "hf_trending_tool",
+    "handle_hf_trending",
+    "model_benchmarks_tool",
+    "handle_model_benchmarks",
+    "venue_lookup_tool",
+    "handle_venue_lookup",
+    "patent_search_tool",
+    "handle_patent_search",
 ]
