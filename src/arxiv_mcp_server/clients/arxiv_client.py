@@ -22,9 +22,13 @@ class QueryField:
     value: str
 
     def to_query(self) -> str:
-        """Convert to arXiv query syntax."""
-        if " " in self.value:
-            return f'{self.prefix}:"{self.value}"'
+        """Convert to arXiv query syntax.
+
+        Note: arXiv's API does not reliably support quoted multi-word
+        phrases with %22. Multi-word values are passed unquoted —
+        the API treats all words after the prefix until the next
+        boolean operator as part of the field search.
+        """
         return f"{self.prefix}:{self.value}"
 
 

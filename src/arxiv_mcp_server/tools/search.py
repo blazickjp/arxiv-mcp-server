@@ -116,11 +116,15 @@ async def _raw_arxiv_search(
 
     # Manually construct search_query parameter
     # We need to encode spaces and special chars BUT NOT the '+' in '+TO+'
-    # Strategy: encode the query parts separately, then join with encoded AND
+    # Strategy: encode parens as %28/%29, quotes as %22, spaces as +
+    encoded_query = final_query.replace('"', "%22")
+    encoded_query = encoded_query.replace("(", "%28").replace(")", "%29")
     encoded_query = (
-        final_query.replace(" AND ", "+AND+").replace(" OR ", "+OR+").replace(" ", "+")
+        encoded_query.replace(" AND ", "+AND+")
+        .replace(" OR ", "+OR+")
+        .replace(" ANDNOT ", "+ANDNOT+")
+        .replace(" ", "+")
     )
-    # But we need to be careful about existing '+TO+' - it should stay as-is
     # Since we built the date filter with literal '+TO+', it's already correct
 
     url = f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
