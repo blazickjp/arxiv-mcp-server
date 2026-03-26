@@ -9,6 +9,7 @@ from .export import export_tool, handle_export
 from .semantic_search import semantic_search_tool, handle_semantic_search
 from .compare import compare_tool, handle_compare
 from .citations import citation_graph_tool, handle_citation_graph
+from .citation_context import citation_context_tool, handle_citation_context
 from .trends import trend_analysis_tool, handle_trend_analysis
 from .digest import digest_tool, handle_digest
 from .kb_save import kb_save_tool, handle_kb_save
@@ -50,4 +51,6 @@ __all__ = [
     "handle_kb_annotate",
     "kb_remove_tool",
     "handle_kb_remove",
+    "citation_context_tool",
+    "handle_citation_context",
 ]

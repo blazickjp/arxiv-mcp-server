@@ -16,11 +16,11 @@ from .config import Settings
 from .tools import handle_search, handle_download, handle_list_papers, handle_read_paper
 from .tools import handle_advanced_query, handle_export
 from .tools import handle_semantic_search, handle_compare
-from .tools import handle_citation_graph, handle_trend_analysis, handle_digest
+from .tools import handle_citation_graph, handle_citation_context, handle_trend_analysis, handle_digest
 from .tools import search_tool, download_tool, list_tool, read_tool
 from .tools import advanced_query_tool, export_tool
 from .tools import semantic_search_tool, compare_tool
-from .tools import citation_graph_tool, trend_analysis_tool, digest_tool
+from .tools import citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool
 from .tools import kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool
 from .tools import handle_kb_save, handle_kb_search, handle_kb_list, handle_kb_annotate, handle_kb_remove
 from .prompts.handlers import list_prompts as handler_list_prompts
@@ -53,7 +53,7 @@ async def list_tools() -> List[types.Tool]:
         search_tool, download_tool, list_tool, read_tool,
         advanced_query_tool, export_tool,
         semantic_search_tool, compare_tool,
-        citation_graph_tool, trend_analysis_tool, digest_tool,
+        citation_graph_tool, citation_context_tool, trend_analysis_tool, digest_tool,
         kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
     ]
 
@@ -81,6 +81,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_compare(arguments)
         elif name == "arxiv_citation_graph":
             return await handle_citation_graph(arguments)
+        elif name == "arxiv_citation_context":
+            return await handle_citation_context(arguments)
         elif name == "arxiv_trend_analysis":
             return await handle_trend_analysis(arguments)
         elif name == "arxiv_research_digest":

@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import numpy as np
 import mcp.types as types
 
-from .semantic_search import _load_model, MODEL_NAME
+from .semantic_search import _load_model, MODEL_NAME, BGE_QUERY_PREFIX
 from ..store.knowledge_base import KnowledgeBase
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -169,9 +169,9 @@ async def handle_kb_search(
                 )
 
                 if papers_with_embs:
-                    # Encode query
+                    # Encode query (BGE models need instruction prefix for queries)
                     query_emb = model.encode(
-                        [query], normalize_embeddings=True
+                        [BGE_QUERY_PREFIX + query], normalize_embeddings=True
                     )[0]
 
                     for paper, emb_bytes in papers_with_embs:
@@ -219,60 +219,48 @@ async def handle_kb_search(
                 final_papers.append(p)
 
         else:
-            # Hybrid — merge keyword and semantic results
+            # Hybrid — merge keyword and semantic results using
+            # Reciprocal Rank Fusion (RRF) with k=60
+            rrf_k = 60
             combined_scores: Dict[str, Dict[str, Any]] = {}
 
-            # Score keyword results by rank position
-            total_keyword = len(keyword_results) if keyword_results else 1
-            for rank, paper in enumerate(keyword_results):
+            # RRF scores from keyword results (rank starts at 1)
+            for rank, paper in enumerate(keyword_results, start=1):
                 pid = paper["id"]
-                keyword_rank_score = 1.0 - (rank / total_keyword)
                 combined_scores[pid] = {
                     "paper": paper,
-                    "keyword_rank_score": keyword_rank_score,
-                    "semantic_score": 0.0,
+                    "rrf_score": 1.0 / (rrf_k + rank),
                     "found_by": "keyword",
                 }
 
-            # Merge semantic results
-            for paper, sim in semantic_results:
+            # RRF scores from semantic results (rank starts at 1)
+            for rank, (paper, _sim) in enumerate(semantic_results, start=1):
                 pid = paper["id"]
+                rrf_contribution = 1.0 / (rrf_k + rank)
                 if pid in combined_scores:
-                    combined_scores[pid]["semantic_score"] = sim
+                    combined_scores[pid]["rrf_score"] += rrf_contribution
                     combined_scores[pid]["found_by"] = "both"
                 else:
                     combined_scores[pid] = {
                         "paper": paper,
-                        "keyword_rank_score": 0.0,
-                        "semantic_score": sim,
+                        "rrf_score": rrf_contribution,
                         "found_by": "semantic",
                     }
 
-            # Compute final scores
-            scored_papers: List[tuple[Dict[str, Any], float, str]] = []
-            for pid, entry in combined_scores.items():
-                found_by = entry["found_by"]
-                sem = entry["semantic_score"]
-                kw = entry["keyword_rank_score"]
-
-                if found_by == "both":
-                    score = 0.6 * sem + 0.4 * kw
-                elif found_by == "semantic":
-                    score = sem
-                else:
-                    score = 0.4 * kw
-
-                scored_papers.append((entry["paper"], score, found_by))
-
-            # Sort by combined score descending
+            # Sort by RRF score descending
+            scored_papers: List[tuple[Dict[str, Any], float, str]] = [
+                (entry["paper"], entry["rrf_score"], entry["found_by"])
+                for entry in combined_scores.values()
+            ]
             scored_papers.sort(key=lambda x: x[1], reverse=True)
 
             final_papers = []
             for paper, score, found_by in scored_papers[:max_results]:
                 p = paper.copy()
-                p["combined_score"] = round(score, 4)
+                p["rrf_score"] = round(score, 6)
                 p["found_by"] = found_by
                 p["search_mode"] = "hybrid"
+                p["scoring"] = "reciprocal_rank_fusion"
                 final_papers.append(p)
 
         # ── Build response ──────────────────────────────────────

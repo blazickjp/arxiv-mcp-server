@@ -79,7 +79,7 @@ async def test_semantic_search_with_model():
     assert len(result) == 1
     content = json.loads(result[0].text)
     assert content["total_results"] <= 2
-    assert content["model"] == "sentence-transformers/all-MiniLM-L6-v2"
+    assert content["model"] == "BAAI/bge-small-en-v1.5"
     assert len(content["papers"]) > 0
     # Each paper should have a semantic_similarity score
     for paper in content["papers"]:

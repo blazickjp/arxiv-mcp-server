@@ -12,7 +12,13 @@ from ..tools.search import _raw_arxiv_search
 
 logger = logging.getLogger("arxiv-mcp-server")
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# NOTE: Upgraded from sentence-transformers/all-MiniLM-L6-v2 to BAAI/bge-small-en-v1.5
+# for better performance on scientific text. Both are 384-dim, but embeddings are NOT
+# compatible — any cached embeddings from the old model must be regenerated.
+MODEL_NAME = "BAAI/bge-small-en-v1.5"
+
+# BGE models perform best when queries (not documents) are prefixed with this instruction.
+BGE_QUERY_PREFIX = "Represent this sentence: "
 
 # Lazy-loaded model — only initialized on first use
 _model: Optional[Any] = None
@@ -47,6 +53,8 @@ semantic_search_tool = types.Tool(
 Performs a broad keyword search on arXiv, then re-ranks results using semantic
 similarity (sentence-transformers/all-MiniLM-L6-v2). This finds papers whose
 meaning is close to your query even if they use different terminology.
+
+Uses BAAI/bge-small-en-v1.5, a model tuned for retrieval tasks on scientific text.
 
 Use this when keyword search misses relevant papers, or when you want to find
 conceptually similar work rather than exact keyword matches.
@@ -220,8 +228,10 @@ async def handle_semantic_search(
                         pid, MODEL_NAME, emb_vector.astype(np.float32).tobytes()
                     )
 
-        # Encode query
-        query_emb = model.encode([query], normalize_embeddings=True)[0]
+        # Encode query (BGE models need instruction prefix for queries, not documents)
+        query_emb = model.encode(
+            [BGE_QUERY_PREFIX + query], normalize_embeddings=True
+        )[0]
 
         # Step 4: Compute cosine similarity (dot product since normalized)
         similarities: List[tuple[int, float]] = []
