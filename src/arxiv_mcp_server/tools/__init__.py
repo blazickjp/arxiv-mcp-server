@@ -11,6 +11,11 @@ from .compare import compare_tool, handle_compare
 from .citations import citation_graph_tool, handle_citation_graph
 from .trends import trend_analysis_tool, handle_trend_analysis
 from .digest import digest_tool, handle_digest
+from .kb_save import kb_save_tool, handle_kb_save
+from .kb_search import kb_search_tool, handle_kb_search
+from .kb_list import kb_list_tool, handle_kb_list
+from .kb_annotate import kb_annotate_tool, handle_kb_annotate
+from .kb_remove import kb_remove_tool, handle_kb_remove
 
 __all__ = [
     "search_tool",
@@ -35,4 +40,14 @@ __all__ = [
     "handle_trend_analysis",
     "digest_tool",
     "handle_digest",
+    "kb_save_tool",
+    "handle_kb_save",
+    "kb_search_tool",
+    "handle_kb_search",
+    "kb_list_tool",
+    "handle_kb_list",
+    "kb_annotate_tool",
+    "handle_kb_annotate",
+    "kb_remove_tool",
+    "handle_kb_remove",
 ]

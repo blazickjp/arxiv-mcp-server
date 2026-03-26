@@ -1,0 +1,302 @@
+"""Semantic + keyword search across the personal knowledge base.
+
+All operations are local — no external API calls. Supports keyword-only,
+semantic-only (embedding similarity), or hybrid search modes.
+"""
+
+import json
+import logging
+from typing import Any, Dict, List
+
+import numpy as np
+import mcp.types as types
+
+from .semantic_search import _load_model, MODEL_NAME
+from ..store.knowledge_base import KnowledgeBase
+
+logger = logging.getLogger("arxiv-mcp-server")
+
+kb_search_tool = types.Tool(
+    name="kb_search",
+    description="""Search your personal knowledge base using semantic similarity, keyword matching, or both.
+
+All searches are local — no API calls. Three modes:
+- "hybrid" (default): combines semantic vector similarity with keyword matching for best results
+- "semantic": pure embedding-based search — finds conceptually similar papers even with different wording
+- "keyword": text matching in titles and abstracts
+
+Use filters to narrow results by tags, categories, reading status, or collection.
+Falls back to keyword-only if the embedding model is unavailable.""",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural language search query.",
+                "minLength": 1,
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Filter by any of these tags.",
+            },
+            "categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Filter by any of these categories (e.g., ['cs.AI', 'cs.LG']).",
+            },
+            "reading_status": {
+                "type": "string",
+                "description": "Filter by reading status: unread, reading, completed, archived.",
+                "enum": ["unread", "reading", "completed", "archived"],
+            },
+            "collection": {
+                "type": "string",
+                "description": "Search within a specific collection.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default: 10).",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 50,
+            },
+            "mode": {
+                "type": "string",
+                "description": "Search mode: 'hybrid' (default), 'semantic', or 'keyword'.",
+                "default": "hybrid",
+                "enum": ["hybrid", "semantic", "keyword"],
+            },
+        },
+        "required": ["query"],
+    },
+)
+
+
+def _apply_filters(
+    paper: Dict[str, Any],
+    *,
+    tags: List[str] | None,
+    categories: List[str] | None,
+    reading_status: str | None,
+) -> bool:
+    """Return True if paper passes all provided filters."""
+    if reading_status and paper.get("reading_status") != reading_status:
+        return False
+    if tags:
+        paper_tags = paper.get("tags", [])
+        if not any(t in paper_tags for t in tags):
+            return False
+    if categories:
+        paper_cats = paper.get("categories", [])
+        if not any(c in paper_cats for c in categories):
+            return False
+    return True
+
+
+async def handle_kb_search(
+    arguments: Dict[str, Any],
+) -> List[types.TextContent]:
+    """Handle knowledge base search requests.
+
+    Supports keyword, semantic, and hybrid search modes with optional
+    tag/category/status/collection filters.
+
+    Args:
+        arguments: Tool input with query, optional filters, mode, max_results.
+
+    Returns:
+        List containing a single TextContent with JSON results.
+    """
+    try:
+        query = arguments["query"]
+        tags = arguments.get("tags")
+        categories = arguments.get("categories")
+        reading_status = arguments.get("reading_status")
+        collection = arguments.get("collection")
+        max_results = min(max(int(arguments.get("max_results", 10)), 1), 50)
+        mode = arguments.get("mode", "hybrid")
+
+        if mode not in ("hybrid", "semantic", "keyword"):
+            mode = "hybrid"
+
+        kb = KnowledgeBase()
+        model_note: str | None = None
+
+        # ── Keyword search ──────────────────────────────────────
+        keyword_results: List[Dict[str, Any]] = []
+        if mode in ("keyword", "hybrid"):
+            keyword_results = await kb.list_papers(
+                query=query,
+                tags=tags,
+                categories=categories,
+                reading_status=reading_status,
+                collection=collection,
+                limit=max_results * 5,  # fetch larger pool for hybrid merging
+            )
+
+        # ── Semantic search ─────────────────────────────────────
+        semantic_results: List[tuple[Dict[str, Any], float]] = []
+        if mode in ("semantic", "hybrid"):
+            model = _load_model()
+            if model is None:
+                logger.warning(
+                    "Embedding model unavailable, falling back to keyword-only"
+                )
+                model_note = (
+                    "Embedding model could not be loaded. Results are ranked "
+                    "by keyword matching only (not semantic similarity)."
+                )
+                if mode == "semantic":
+                    # Pure semantic was requested but model is unavailable —
+                    # fall back to keyword
+                    keyword_results = await kb.list_papers(
+                        query=query,
+                        tags=tags,
+                        categories=categories,
+                        reading_status=reading_status,
+                        collection=collection,
+                        limit=max_results,
+                    )
+                    mode = "keyword"
+                else:
+                    # hybrid — just skip semantic component
+                    mode = "keyword"
+            else:
+                # Get all papers with embeddings
+                papers_with_embs = await kb.get_all_papers_with_embeddings(
+                    MODEL_NAME
+                )
+
+                if papers_with_embs:
+                    # Encode query
+                    query_emb = model.encode(
+                        [query], normalize_embeddings=True
+                    )[0]
+
+                    for paper, emb_bytes in papers_with_embs:
+                        emb = np.frombuffer(emb_bytes, dtype=np.float32)
+                        sim = float(np.dot(query_emb, emb))
+
+                        # Apply post-ranking filters
+                        if not _apply_filters(
+                            paper,
+                            tags=tags,
+                            categories=categories,
+                            reading_status=reading_status,
+                        ):
+                            continue
+
+                        # Collection filter — check if paper is in the collection
+                        if collection:
+                            paper_collections = paper.get("collections", [])
+                            if collection not in paper_collections:
+                                continue
+
+                        semantic_results.append((paper, sim))
+
+                    # Sort by similarity descending
+                    semantic_results.sort(key=lambda x: x[1], reverse=True)
+
+        # ── Combine results ─────────────────────────────────────
+        final_papers: List[Dict[str, Any]]
+
+        if mode == "keyword":
+            # Pure keyword or fallback
+            final_papers = []
+            for paper in keyword_results[:max_results]:
+                p = paper.copy()
+                p["search_mode"] = "keyword"
+                final_papers.append(p)
+
+        elif mode == "semantic":
+            # Pure semantic
+            final_papers = []
+            for paper, sim in semantic_results[:max_results]:
+                p = paper.copy()
+                p["semantic_score"] = round(sim, 4)
+                p["search_mode"] = "semantic"
+                final_papers.append(p)
+
+        else:
+            # Hybrid — merge keyword and semantic results
+            combined_scores: Dict[str, Dict[str, Any]] = {}
+
+            # Score keyword results by rank position
+            total_keyword = len(keyword_results) if keyword_results else 1
+            for rank, paper in enumerate(keyword_results):
+                pid = paper["id"]
+                keyword_rank_score = 1.0 - (rank / total_keyword)
+                combined_scores[pid] = {
+                    "paper": paper,
+                    "keyword_rank_score": keyword_rank_score,
+                    "semantic_score": 0.0,
+                    "found_by": "keyword",
+                }
+
+            # Merge semantic results
+            for paper, sim in semantic_results:
+                pid = paper["id"]
+                if pid in combined_scores:
+                    combined_scores[pid]["semantic_score"] = sim
+                    combined_scores[pid]["found_by"] = "both"
+                else:
+                    combined_scores[pid] = {
+                        "paper": paper,
+                        "keyword_rank_score": 0.0,
+                        "semantic_score": sim,
+                        "found_by": "semantic",
+                    }
+
+            # Compute final scores
+            scored_papers: List[tuple[Dict[str, Any], float, str]] = []
+            for pid, entry in combined_scores.items():
+                found_by = entry["found_by"]
+                sem = entry["semantic_score"]
+                kw = entry["keyword_rank_score"]
+
+                if found_by == "both":
+                    score = 0.6 * sem + 0.4 * kw
+                elif found_by == "semantic":
+                    score = sem
+                else:
+                    score = 0.4 * kw
+
+                scored_papers.append((entry["paper"], score, found_by))
+
+            # Sort by combined score descending
+            scored_papers.sort(key=lambda x: x[1], reverse=True)
+
+            final_papers = []
+            for paper, score, found_by in scored_papers[:max_results]:
+                p = paper.copy()
+                p["combined_score"] = round(score, 4)
+                p["found_by"] = found_by
+                p["search_mode"] = "hybrid"
+                final_papers.append(p)
+
+        # ── Build response ──────────────────────────────────────
+        response: Dict[str, Any] = {
+            "total": len(final_papers),
+            "mode": mode,
+            "query": query,
+            "papers": final_papers,
+        }
+
+        if model_note:
+            response["note"] = model_note
+
+        logger.info(
+            f"KB search completed: mode={mode}, query='{query}', "
+            f"results={len(final_papers)}"
+        )
+
+        return [
+            types.TextContent(
+                type="text", text=json.dumps(response, indent=2)
+            )
+        ]
+
+    except Exception as e:
+        logger.error(f"KB search error: {e}")
+        return [types.TextContent(type="text", text=f"Error: {str(e)}")]

@@ -21,6 +21,8 @@ from .tools import search_tool, download_tool, list_tool, read_tool
 from .tools import advanced_query_tool, export_tool
 from .tools import semantic_search_tool, compare_tool
 from .tools import citation_graph_tool, trend_analysis_tool, digest_tool
+from .tools import kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool
+from .tools import handle_kb_save, handle_kb_search, handle_kb_list, handle_kb_annotate, handle_kb_remove
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
 
@@ -52,6 +54,7 @@ async def list_tools() -> List[types.Tool]:
         advanced_query_tool, export_tool,
         semantic_search_tool, compare_tool,
         citation_graph_tool, trend_analysis_tool, digest_tool,
+        kb_save_tool, kb_search_tool, kb_list_tool, kb_annotate_tool, kb_remove_tool,
     ]
 
 
@@ -82,6 +85,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_trend_analysis(arguments)
         elif name == "arxiv_research_digest":
             return await handle_digest(arguments)
+        elif name == "kb_save":
+            return await handle_kb_save(arguments)
+        elif name == "kb_search":
+            return await handle_kb_search(arguments)
+        elif name == "kb_list":
+            return await handle_kb_list(arguments)
+        elif name == "kb_annotate":
+            return await handle_kb_annotate(arguments)
+        elif name == "kb_remove":
+            return await handle_kb_remove(arguments)
         else:
             return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
     except Exception as e:
