@@ -28,6 +28,9 @@ dependencies = [
     "anyio>=4.2.0",
     "black>=25.1.0",
     "pymupdf-layout>=1.26.6",
+    "sentence-transformers>=3.0.0",
+    "aiosqlite>=0.20.0",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]
