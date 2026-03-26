@@ -33,6 +33,16 @@ from .hn_tools import hn_tool, handle_hn
 from .community_tools import community_tool, handle_community
 from .package_tools import packages_tool, handle_packages
 
+# --- Phase 2: Auth sources ---
+from .github_tools import github_tool, handle_github
+from .reddit_tools import reddit_tool, handle_reddit
+
+# --- Phase 3: Composite CTO intelligence ---
+from .intelligence_tools import tech_pulse_tool, handle_tech_pulse
+from .intelligence_tools import evaluate_tool, handle_evaluate
+from .intelligence_tools import sentiment_tool, handle_sentiment
+from .intelligence_tools import deep_research_tool, handle_deep_research
+
 # --- Backwards-compat imports (old tools still importable) ---
 from .advanced_query import advanced_query_tool, handle_advanced_query
 from .citations import citation_graph_tool, handle_citation_graph
@@ -75,6 +85,14 @@ __all__ = [
     "hn_tool", "handle_hn",
     "community_tool", "handle_community",
     "packages_tool", "handle_packages",
+    # Phase 2: Auth sources
+    "github_tool", "handle_github",
+    "reddit_tool", "handle_reddit",
+    # Phase 3: Composite CTO intelligence
+    "tech_pulse_tool", "handle_tech_pulse",
+    "evaluate_tool", "handle_evaluate",
+    "sentiment_tool", "handle_sentiment",
+    "deep_research_tool", "handle_deep_research",
     # Backwards-compat
     "advanced_query_tool", "handle_advanced_query",
     "citation_graph_tool", "handle_citation_graph",

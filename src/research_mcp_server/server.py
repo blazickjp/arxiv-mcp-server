@@ -50,6 +50,16 @@ from .tools import hn_tool, handle_hn
 from .tools import community_tool, handle_community
 from .tools import packages_tool, handle_packages
 
+# --- Phase 2: Auth sources ---
+from .tools import github_tool, handle_github
+from .tools import reddit_tool, handle_reddit
+
+# --- Phase 3: Composite CTO intelligence ---
+from .tools import tech_pulse_tool, handle_tech_pulse
+from .tools import evaluate_tool, handle_evaluate
+from .tools import sentiment_tool, handle_sentiment
+from .tools import deep_research_tool, handle_deep_research
+
 # --- Backwards-compat handlers (old tool names still routable) ---
 from .tools import handle_advanced_query
 from .tools import handle_citation_graph, handle_citation_context
@@ -89,7 +99,7 @@ async def get_prompt(
 async def list_tools() -> List[types.Tool]:
     """List available research tools.
 
-    Returns v2 tools (25 tools).
+    Returns v2 tools (31 tools across academic, practitioner, and intelligence layers).
     Old tool names are still routable via backwards-compat aliases in _TOOL_HANDLERS.
     """
     return [
@@ -105,8 +115,11 @@ async def list_tools() -> List[types.Tool]:
         # Academic Sources
         hf_trending_tool, pwc_search_tool, model_benchmarks_tool,
         venue_lookup_tool, patent_search_tool, export_tool,
-        # Practitioner Sources (Phase 1)
+        # Practitioner Sources
         hn_tool, community_tool, packages_tool,
+        github_tool, reddit_tool,
+        # CTO Intelligence
+        tech_pulse_tool, evaluate_tool, sentiment_tool, deep_research_tool,
         # Meta
         suggest_tools_tool,
     ]
@@ -140,10 +153,17 @@ _TOOL_HANDLERS: Dict[str, Any] = {
     "venue_lookup": handle_venue_lookup,
     "patent_search": handle_patent_search,
     "export": handle_export,
-    # Practitioner Sources (Phase 1)
+    # Practitioner Sources
     "hn": handle_hn,
     "community": handle_community,
     "packages": handle_packages,
+    "github": handle_github,
+    "reddit": handle_reddit,
+    # CTO Intelligence
+    "tech_pulse": handle_tech_pulse,
+    "evaluate": handle_evaluate,
+    "sentiment": handle_sentiment,
+    "deep_research": handle_deep_research,
     # Meta
     "help": handle_suggest_tools,
 }

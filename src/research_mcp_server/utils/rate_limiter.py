@@ -39,3 +39,5 @@ lobsters_limiter = RateLimiter(calls_per_second=0.5)  # Lobsters: be polite, ~1 
 npm_limiter = RateLimiter(calls_per_second=10)  # npm: generous limits
 pypi_limiter = RateLimiter(calls_per_second=10)  # PyPI: generous limits
 crates_limiter = RateLimiter(calls_per_second=10)  # crates.io: generous limits
+github_limiter = RateLimiter(calls_per_second=5)  # GitHub: 5000 req/hr with token
+reddit_limiter = RateLimiter(calls_per_second=1)  # Reddit: 60 req/min OAuth
