@@ -3,8 +3,8 @@
 import pytest
 import json
 from unittest.mock import patch, MagicMock, AsyncMock
-from arxiv_mcp_server.tools import handle_search
-from arxiv_mcp_server.tools.search import (
+from research_mcp_server.tools import handle_search
+from research_mcp_server.tools.search import (
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
@@ -243,7 +243,7 @@ async def test_search_sort_by_date(mock_client):
 @pytest.mark.asyncio
 async def test_search_no_query_optimization(mock_client):
     """Test that queries are not automatically modified."""
-    from arxiv_mcp_server.tools.search import _optimize_query
+    from research_mcp_server.tools.search import _optimize_query
 
     # Test that complex queries are not mangled
     complex_query = "graph neural networks message passing attention mechanism"

@@ -4,7 +4,7 @@ import json
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from arxiv_mcp_server.tools.advanced_query import handle_advanced_query
+from research_mcp_server.tools.advanced_query import handle_advanced_query
 
 
 @pytest.mark.asyncio
@@ -23,7 +23,7 @@ async def test_advanced_query_by_title():
     ]
 
     with patch(
-        "arxiv_mcp_server.tools.advanced_query.advanced_search",
+        "research_mcp_server.tools.advanced_query.advanced_search",
         new_callable=AsyncMock,
         return_value=mock_results,
     ) as mock_search:
@@ -56,7 +56,7 @@ async def test_advanced_query_combined_fields():
     ]
 
     with patch(
-        "arxiv_mcp_server.tools.advanced_query.advanced_search",
+        "research_mcp_server.tools.advanced_query.advanced_search",
         new_callable=AsyncMock,
         return_value=mock_results,
     ) as mock_search:

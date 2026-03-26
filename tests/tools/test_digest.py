@@ -4,8 +4,8 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from arxiv_mcp_server.tools.digest import handle_digest
-from arxiv_mcp_server.clients.s2_client import S2Client
+from research_mcp_server.tools.digest import handle_digest
+from research_mcp_server.clients.s2_client import S2Client
 
 
 def _mock_papers():
@@ -57,12 +57,12 @@ async def test_research_digest():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.digest._raw_arxiv_search",
+            "research_mcp_server.tools.digest._raw_arxiv_search",
             new_callable=AsyncMock,
             return_value=papers,
         ),
         patch(
-            "arxiv_mcp_server.tools.digest.arxiv_limiter",
+            "research_mcp_server.tools.digest.arxiv_limiter",
         ) as mock_limiter,
         patch.object(
             S2Client,
@@ -71,7 +71,7 @@ async def test_research_digest():
             return_value=s2_batch_result,
         ),
         patch(
-            "arxiv_mcp_server.tools.digest.SQLiteStore",
+            "research_mcp_server.tools.digest.SQLiteStore",
             return_value=mock_store,
         ),
     ):
@@ -118,12 +118,12 @@ async def test_digest_without_citations():
 
     with (
         patch(
-            "arxiv_mcp_server.tools.digest._raw_arxiv_search",
+            "research_mcp_server.tools.digest._raw_arxiv_search",
             new_callable=AsyncMock,
             return_value=papers,
         ),
         patch(
-            "arxiv_mcp_server.tools.digest.arxiv_limiter",
+            "research_mcp_server.tools.digest.arxiv_limiter",
         ) as mock_limiter,
         patch.object(
             S2Client,
@@ -131,7 +131,7 @@ async def test_digest_without_citations():
             new_callable=AsyncMock,
         ) as mock_s2_batch,
         patch(
-            "arxiv_mcp_server.tools.digest.SQLiteStore",
+            "research_mcp_server.tools.digest.SQLiteStore",
             return_value=mock_store,
         ),
     ):

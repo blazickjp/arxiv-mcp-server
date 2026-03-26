@@ -2,7 +2,7 @@
 
 import pytest
 
-from arxiv_mcp_server.store.sqlite_store import SQLiteStore
+from research_mcp_server.store.sqlite_store import SQLiteStore
 
 
 SAMPLE_PAPER = {

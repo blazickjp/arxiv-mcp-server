@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from arxiv_mcp_server.utils.rate_limiter import RateLimiter, arxiv_limiter, s2_limiter
+from research_mcp_server.utils.rate_limiter import RateLimiter, arxiv_limiter, s2_limiter
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 import os
 import sys
 from pathlib import Path
-from arxiv_mcp_server.config import Settings
+from research_mcp_server.config import Settings
 from unittest.mock import patch
 
 

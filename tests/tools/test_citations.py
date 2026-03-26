@@ -4,8 +4,8 @@ import json
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from arxiv_mcp_server.tools.citations import handle_citation_graph
-from arxiv_mcp_server.clients.s2_client import S2Client
+from research_mcp_server.tools.citations import handle_citation_graph
+from research_mcp_server.clients.s2_client import S2Client
 
 
 def _mock_root_paper():

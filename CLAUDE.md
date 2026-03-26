@@ -1,4 +1,4 @@
-# CLAUDE.md — arxiv-mcp-server (Enhanced Fork)
+# CLAUDE.md — research-mcp-server (Enhanced Fork)
 
 ## Project Overview
 
@@ -10,8 +10,8 @@ Enhanced fork of [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv
 ## Architecture
 
 ```
-arxiv-mcp-server/
-├── src/arxiv_mcp_server/
+research-mcp-server/
+├── src/research_mcp_server/
 │   ├── __init__.py
 │   ├── server.py                    # UPSTREAM — main MCP server, tool registration
 │   ├── config.py                    # UPSTREAM — configuration (storage path, env vars)
@@ -66,8 +66,10 @@ uv pip install -e ".[test]"
 
 ### Running the Server
 ```bash
-python -m arxiv_mcp_server
+python -m research_mcp_server
 # or
+research-mcp-server
+# or (backwards compat alias)
 arxiv-mcp-server
 ```
 
@@ -85,7 +87,7 @@ python -m pytest -v --no-header                # verbose, clean output
 black src/ tests/
 
 # Run server locally for testing
-uv run arxiv-mcp-server --storage-path ~/.arxiv-papers
+uv run research-mcp-server --storage-path ~/.arxiv-papers
 ```
 
 ## Claude Code MCP Configuration
@@ -96,7 +98,7 @@ uv run arxiv-mcp-server --storage-path ~/.arxiv-papers
       "command": "uv",
       "args": [
         "--directory", "/Users/naman/Code/personal/arxiv-mcp-server",
-        "run", "arxiv-mcp-server",
+        "run", "research-mcp-server",
         "--storage-path", "/Users/naman/.arxiv-papers"
       ],
       "env": {
