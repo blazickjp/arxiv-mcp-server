@@ -193,3 +193,8 @@ Made with ❤️ by the Pearl Labs Team
 
 <a href="https://glama.ai/mcp/servers/04dtxi5i5n"><img width="380" height="200" src="https://glama.ai/mcp/servers/04dtxi5i5n/badge" alt="ArXiv Server MCP server" /></a>
 </div>
+
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/blazickjp-arxiv-mcp-server).
+
