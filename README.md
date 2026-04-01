@@ -99,6 +99,25 @@ For Development:
 }
 ```
 
+### HTTP Transport
+
+For server deployments, run with HTTP transport:
+```bash
+TRANSPORT=http HOST=127.0.0.1 PORT=8080 arxiv-mcp-server --storage-path /path/to/papers
+```
+
+Then connect your MCP client:
+```json
+{
+    "mcpServers": {
+        "arxiv-mcp-server": {
+            "type": "http",
+            "url": "http://127.0.0.1:8080/mcp"
+        }
+    }
+}
+```
+
 ## 💡 Available Tools
 
 The server provides four main tools:
@@ -171,7 +190,12 @@ Configure through environment variables:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `ARXIV_STORAGE_PATH` | Paper storage location | ~/.arxiv-mcp-server/papers |
+| `ARXIV_STORAGE_PATH` | Paper storage location | `~/.arxiv-mcp-server/papers` |
+| `ARXIV_MAX_RESULTS` | Maximum search results | `50` |
+| `ARXIV_REQUEST_TIMEOUT` | API timeout in seconds | `60` |
+| `TRANSPORT` | Transport type: `stdio` or `http` | `stdio` |
+| `HOST` | Host to bind to in HTTP mode | `0.0.0.0` |
+| `PORT` | Port to listen on in HTTP mode | `8000` |
 
 ## 🧪 Testing
 

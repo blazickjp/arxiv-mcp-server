@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
     REQUEST_TIMEOUT: int = 60
+    TRANSPORT: str = "stdio"
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     model_config = SettingsConfigDict(extra="allow")
