@@ -12,9 +12,45 @@ from ..config import Settings
 import pymupdf4llm
 import fitz
 import logging
-from .semantic_search import index_paper_by_id, index_paper_from_result
+
+# Optional pro feature — gracefully degrade when not installed
+try:
+    from .semantic_search import index_paper_by_id, index_paper_from_result
+    _semantic_search_available = True
+except ImportError:  # pragma: no cover
+    _semantic_search_available = False
+    index_paper_by_id = None  # type: ignore[assignment]
+    index_paper_from_result = None  # type: ignore[assignment]
 
 logger = logging.getLogger("arxiv-mcp-server")
+
+# Serialise background indexing to avoid hammering the GPU/CPU when multiple
+# papers are downloaded in parallel (issue #68).
+_index_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_index_semaphore() -> asyncio.Semaphore:
+    """Return the module-level indexing semaphore, creating it lazily."""
+    global _index_semaphore
+    if _index_semaphore is None:
+        _index_semaphore = asyncio.Semaphore(1)
+    return _index_semaphore
+
+
+async def _run_index_by_id(paper_id: str) -> None:
+    """Acquire the index semaphore then run index_paper_by_id in a thread."""
+    if not _semantic_search_available:
+        return
+    async with _get_index_semaphore():
+        await asyncio.to_thread(index_paper_by_id, paper_id)
+
+
+async def _run_index_from_result(arxiv_result) -> None:
+    """Acquire the index semaphore then run index_paper_from_result in a thread."""
+    if not _semantic_search_available:
+        return
+    async with _get_index_semaphore():
+        await asyncio.to_thread(index_paper_from_result, arxiv_result)
 settings = Settings()
 
 fitz.TOOLS.mupdf_display_errors(False)

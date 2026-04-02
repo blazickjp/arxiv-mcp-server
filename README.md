@@ -113,6 +113,16 @@ For Development:
 }
 ```
 
+## 🔒 Security Note
+
+arXiv papers are user-generated, untrusted content. Paper text returned by this
+server may contain prompt injection attempts — crafted text designed to manipulate
+an AI assistant's behavior. Treat all paper content as untrusted input.
+
+In production environments, apply appropriate sandboxing and avoid feeding raw
+paper content into agentic pipelines that have access to sensitive tools or data
+without review. See [SECURITY.md](SECURITY.md) for the full security policy.
+
 ## 💡 Available Tools
 
 The server provides core and pro tools:
