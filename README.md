@@ -53,11 +53,27 @@ npx -y @smithery/cli install arxiv-mcp-server --client claude
 ```
 
 ### Installing Manually
-Install using uv:
+
+> **Important — use `uv tool install`, not `uv pip install`**
+>
+> Running `uv pip install arxiv-mcp-server` installs the package into the
+> current virtual environment but does **not** place the `arxiv-mcp-server`
+> executable on your `PATH`.  You must use `uv tool install` so that uv
+> creates an isolated environment and exposes the executable globally:
 
 ```bash
 uv tool install arxiv-mcp-server
 ```
+
+After this, the `arxiv-mcp-server` command will be available on your `PATH`.
+You can verify it with:
+
+```bash
+arxiv-mcp-server --help
+```
+
+If you previously ran `uv pip install arxiv-mcp-server` and the command is
+missing, uninstall it and re-install with `uv tool install` as shown above.
 
 For development:
 
@@ -70,7 +86,7 @@ cd arxiv-mcp-server
 uv venv
 source .venv/bin/activate
 
-# Install with test dependencies
+# Install with test dependencies (development only — no global executable)
 uv pip install -e ".[test]"
 ```
 

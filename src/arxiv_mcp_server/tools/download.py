@@ -207,9 +207,9 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # --- Cache hit: return immediately with content ---
         if md_path.exists():
             content = md_path.read_text(encoding="utf-8")
-            # Best-effort background index refresh
+            # Best-effort background index refresh (serialised via semaphore)
             try:
-                asyncio.create_task(asyncio.to_thread(index_paper_by_id, paper_id))
+                asyncio.create_task(_run_index_by_id(paper_id))
             except RuntimeError:
                 pass
             return [
@@ -233,9 +233,9 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         if html_text is not None:
             # Save to cache
             md_path.write_text(html_text, encoding="utf-8")
-            # Best-effort index
+            # Best-effort index (serialised via semaphore)
             try:
-                asyncio.create_task(asyncio.to_thread(index_paper_by_id, paper_id))
+                asyncio.create_task(_run_index_by_id(paper_id))
             except RuntimeError:
                 pass
             return [
@@ -260,11 +260,9 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Save to cache
         md_path.write_text(markdown, encoding="utf-8")
 
-        # Best-effort index
+        # Best-effort index (serialised via semaphore)
         try:
-            asyncio.create_task(
-                asyncio.to_thread(index_paper_from_result, arxiv_result)
-            )
+            asyncio.create_task(_run_index_from_result(arxiv_result))
         except RuntimeError:
             pass
 
