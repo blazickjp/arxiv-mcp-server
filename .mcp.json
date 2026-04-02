@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "arxiv-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "arxiv-mcp-server"
+      ]
+    }
+  }
+}

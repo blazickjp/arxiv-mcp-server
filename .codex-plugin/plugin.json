@@ -1,0 +1,23 @@
+{
+  "name": "arxiv-mcp-server",
+  "version": "0.1.0",
+  "description": "Search and analyze arXiv papers from Codex",
+  "author": {
+    "name": "blazickjp",
+    "url": "https://github.com/blazickjp/arxiv-mcp-server"
+  },
+  "homepage": "https://github.com/blazickjp/arxiv-mcp-server",
+  "repository": "https://github.com/blazickjp/arxiv-mcp-server",
+  "keywords": [
+    "mcp",
+    "codex"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "arXiv MCP Server",
+    "shortDescription": "Search and analyze arXiv papers from Codex",
+    "longDescription": "A Model Context Protocol server for searching and analyzing arXiv papers.",
+    "category": "Research",
+    "websiteURL": "https://github.com/blazickjp/arxiv-mcp-server"
+  }
+}
