@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-import arxiv
 from typing import Dict, Any, List, Optional
 import mcp.types as types
 from ..config import Settings
@@ -21,8 +20,16 @@ list_tool = types.Tool(
 
 
 def list_papers() -> list[str]:
-    """List all stored paper IDs."""
-    return [p.stem for p in Path(settings.STORAGE_PATH).glob("*.md")]
+    """List all stored paper IDs.
+
+    Returns an empty list if the storage directory does not exist yet or
+    contains no .md files.  Only plain files with the .md suffix are
+    considered; sub-directories and other file types are silently ignored.
+    """
+    storage = Path(settings.STORAGE_PATH)
+    if not storage.exists():
+        return []
+    return [p.stem for p in storage.iterdir() if p.is_file() and p.suffix == ".md"]
 
 
 async def handle_list_papers(
@@ -32,22 +39,20 @@ async def handle_list_papers(
     try:
         papers = list_papers()
 
-        client = arxiv.Client()
-
-        results = client.results(arxiv.Search(id_list=papers))
+        # Short-circuit: nothing stored yet — avoid an empty arXiv API call
+        if not papers:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"total_papers": 0, "papers": []}, indent=2
+                    ),
+                )
+            ]
 
         response_data = {
             "total_papers": len(papers),
-            "papers": [
-                {
-                    "title": result.title,
-                    "summary": result.summary,
-                    "authors": [author.name for author in result.authors],
-                    "links": [link.href for link in result.links],
-                    "pdf_url": result.pdf_url,
-                }
-                for result in results
-            ],
+            "papers": papers,
         }
 
         return [

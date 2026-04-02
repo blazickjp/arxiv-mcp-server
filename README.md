@@ -28,6 +28,20 @@ The ArXiv MCP Server provides a bridge between AI assistants and arXiv's researc
 - 🗃️ **Local Storage**: Papers are saved locally for faster access
 - 📝 **Prompts**: A Set of Research Prompts
 
+## 💼 Pro Features
+
+- 🧠 **Semantic Search**: `semantic_search` finds conceptually similar papers using local embeddings.
+- 🔁 **Index Rebuild**: `reindex` rebuilds the local semantic index from downloaded papers.
+- 🕸️ **Citation Graph**: `citation_graph` returns references and citation backlinks via Semantic Scholar.
+- 🔔 **Research Alerts**: `watch_topic` and `check_alerts` track topics and return newly published papers.
+- 🧩 **Advanced Prompts**: `summarize_paper`, `compare_papers`, and `literature_review` for deeper workflows.
+
+Install pro extras in development environments:
+
+```bash
+uv pip install -e ".[pro]"
+```
+
 ## 🚀 Quick Start
 
 ### Installing via Smithery
@@ -39,11 +53,35 @@ npx -y @smithery/cli install arxiv-mcp-server --client claude
 ```
 
 ### Installing Manually
-Install using uv:
+
+> **Important — use `uv tool install`, not `uv pip install`**
+>
+> Running `uv pip install arxiv-mcp-server` installs the package into the
+> current virtual environment but does **not** place the `arxiv-mcp-server`
+> executable on your `PATH`.  You must use `uv tool install` so that uv
+> creates an isolated environment and exposes the executable globally:
 
 ```bash
 uv tool install arxiv-mcp-server
 ```
+
+After this, the `arxiv-mcp-server` command will be available on your `PATH`.
+
+> **PDF fallback (older papers):** Most arXiv papers have an HTML version which
+> the base install handles automatically. For older papers that only have a PDF,
+> the server needs the `[pdf]` extra (pymupdf4llm). Install it with:
+>
+> ```bash
+> uv tool install 'arxiv-mcp-server[pdf]'
+> ```
+You can verify it with:
+
+```bash
+arxiv-mcp-server --help
+```
+
+If you previously ran `uv pip install arxiv-mcp-server` and the command is
+missing, uninstall it and re-install with `uv tool install` as shown above.
 
 For development:
 
@@ -56,7 +94,7 @@ cd arxiv-mcp-server
 uv venv
 source .venv/bin/activate
 
-# Install with test dependencies
+# Install with test dependencies (development only — no global executable)
 uv pip install -e ".[test]"
 ```
 
@@ -99,9 +137,19 @@ For Development:
 }
 ```
 
+## 🔒 Security Note
+
+arXiv papers are user-generated, untrusted content. Paper text returned by this
+server may contain prompt injection attempts — crafted text designed to manipulate
+an AI assistant's behavior. Treat all paper content as untrusted input.
+
+In production environments, apply appropriate sandboxing and avoid feeding raw
+paper content into agentic pipelines that have access to sensitive tools or data
+without review. See [SECURITY.md](SECURITY.md) for the full security policy.
+
 ## 💡 Available Tools
 
-The server provides four main tools:
+The server provides core and pro tools:
 
 ### 1. Paper Search
 Search for papers with optional filters:
@@ -140,6 +188,36 @@ result = await call_tool("read_paper", {
 })
 ```
 
+### 5. Semantic Search (Pro)
+Find papers semantically related to a query or source paper:
+
+```python
+result = await call_tool("semantic_search", {
+    "query": "test-time adaptation in multimodal transformers",
+    "max_results": 5
+})
+```
+
+### 6. Citation Graph (Pro)
+Fetch references and citing papers:
+
+```python
+result = await call_tool("citation_graph", {
+    "paper_id": "2401.12345"
+})
+```
+
+### 7. Research Alerts (Pro)
+Save a watch and check for new papers:
+
+```python
+await call_tool("watch_topic", {
+    "topic": "multi-agent reinforcement learning",
+    "categories": ["cs.AI", "cs.LG"]
+})
+result = await call_tool("check_alerts", {})
+```
+
 ## 📝 Research Prompts
 
 The server offers specialized prompts to help analyze academic papers:
@@ -162,8 +240,14 @@ This prompt includes:
   - Methodology analysis
   - Results evaluation
   - Practical and theoretical implications
-  - Future research directions
-  - Broader impacts
+- Future research directions
+- Broader impacts
+
+### Pro Prompt Pack
+
+- `summarize_paper`: concise structured summary for one paper.
+- `compare_papers`: side-by-side technical comparison across paper IDs.
+- `literature_review`: thematic synthesis across a topic and optional paper set.
 
 ## ⚙️ Configuration
 
