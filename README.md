@@ -66,6 +66,14 @@ uv tool install arxiv-mcp-server
 ```
 
 After this, the `arxiv-mcp-server` command will be available on your `PATH`.
+
+> **PDF fallback (older papers):** Most arXiv papers have an HTML version which
+> the base install handles automatically. For older papers that only have a PDF,
+> the server needs the `[pdf]` extra (pymupdf4llm). Install it with:
+>
+> ```bash
+> uv tool install 'arxiv-mcp-server[pdf]'
+> ```
 You can verify it with:
 
 ```bash

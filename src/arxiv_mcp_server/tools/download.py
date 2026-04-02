@@ -9,9 +9,18 @@ from pathlib import Path
 from typing import Dict, Any, List
 import mcp.types as types
 from ..config import Settings
-import pymupdf4llm
-import fitz
 import logging
+
+# Optional PDF-conversion dependencies — only needed for the PDF fallback path.
+# Install with: pip install arxiv-mcp-server[pdf]
+try:
+    import pymupdf4llm
+    import fitz
+    _pdf_available = True
+except ImportError:  # pragma: no cover
+    pymupdf4llm = None  # type: ignore[assignment]
+    fitz = None  # type: ignore[assignment]
+    _pdf_available = False
 
 # Optional pro feature — gracefully degrade when not installed
 try:
@@ -53,8 +62,9 @@ async def _run_index_from_result(arxiv_result) -> None:
         await asyncio.to_thread(index_paper_from_result, arxiv_result)
 settings = Settings()
 
-fitz.TOOLS.mupdf_display_errors(False)
-fitz.TOOLS.mupdf_display_warnings(False)
+if _pdf_available:
+    fitz.TOOLS.mupdf_display_errors(False)
+    fitz.TOOLS.mupdf_display_warnings(False)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +182,14 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
     Returns (markdown_text, arxiv_result).
     Raises PaperNotFoundError if the paper does not exist, or other exceptions
     on network/conversion failures.
+    Raises ImportError (with a helpful message) if the [pdf] extra is not installed.
     """
+    if not _pdf_available:
+        raise ImportError(
+            "PDF conversion requires the pdf extra: "
+            "pip install arxiv-mcp-server[pdf]"
+        )
+
     client = arxiv.Client()
     try:
         paper = next(client.results(arxiv.Search(id_list=[paper_id])))
@@ -254,6 +271,23 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             ]
 
         # --- HTML not available: fall back to PDF ---
+        if not _pdf_available:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "status": "error",
+                            "message": (
+                                "HTML version not available and PDF conversion "
+                                "requires the pdf extra: "
+                                "pip install arxiv-mcp-server[pdf]"
+                            ),
+                        }
+                    ),
+                )
+            ]
+
         logger.info(f"Falling back to PDF download for {paper_id}")
         markdown, arxiv_result = await asyncio.to_thread(_fetch_pdf_content, paper_id)
 
