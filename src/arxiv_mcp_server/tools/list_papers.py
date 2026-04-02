@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-import arxiv
 from typing import Dict, Any, List, Optional
 import mcp.types as types
 from ..config import Settings
@@ -51,22 +50,9 @@ async def handle_list_papers(
                 )
             ]
 
-        client = arxiv.Client()
-
-        results = client.results(arxiv.Search(id_list=papers))
-
         response_data = {
             "total_papers": len(papers),
-            "papers": [
-                {
-                    "title": result.title,
-                    "summary": result.summary,
-                    "authors": [author.name for author in result.authors],
-                    "links": [link.href for link in result.links],
-                    "pdf_url": result.pdf_url,
-                }
-                for result in results
-            ],
+            "papers": papers,
         }
 
         return [
