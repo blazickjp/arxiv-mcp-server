@@ -292,15 +292,28 @@ ADVANCED SEARCH PATTERNS:
 - Broad + narrow: "artificial intelligence" AND (robotics OR "computer vision")
 
 CATEGORY FILTERING (highly recommended for relevance):
+Computer Science:
 - cs.AI: Artificial Intelligence
-- cs.MA: Multi-Agent Systems  
 - cs.LG: Machine Learning
 - cs.CL: Computation and Language (NLP)
 - cs.CV: Computer Vision
+- cs.MA: Multi-Agent Systems
 - cs.RO: Robotics
+- cs.NE: Neural and Evolutionary Computing
+- cs.IR: Information Retrieval
 - cs.HC: Human-Computer Interaction
 - cs.CR: Cryptography and Security
 - cs.DB: Databases
+Statistics & Math:
+- stat.ML: Machine Learning (Statistics)
+- stat.AP: Applications
+- math.OC: Optimization and Control
+- math.ST: Statistics Theory
+Physics & Other:
+- quant-ph: Quantum Physics
+- eess.SP: Signal Processing
+- eess.AS: Audio and Speech Processing
+- physics.data-an: Data Analysis and Statistics
 
 EXAMPLES OF EFFECTIVE QUERIES:
 - ti:"reinforcement learning" with categories: ["cs.LG", "cs.AI"] - for RL papers by title
@@ -313,8 +326,11 @@ DATE FILTERING: Use YYYY-MM-DD format for historical research:
 - date_from: "2020-01-01" - for recent developments (post-2020)
 - Both together for specific time periods
 
-RESULT QUALITY: Results sorted by RELEVANCE (most relevant papers first), not just newest papers.
-This ensures you get the most pertinent results regardless of publication date.
+RESULT QUALITY: Default sort is RELEVANCE (most pertinent results first). Use sort_by: "date" to get newest papers first.
+Choose relevance for focused topic searches; choose date for monitoring recent developments.
+
+RATE LIMITING: arXiv enforces a 3-second minimum between requests. This server handles that automatically.
+If you see a rate limit error, wait 60 seconds before retrying — do not call the tool repeatedly in a loop.
 
 TIPS FOR FOUNDATIONAL RESEARCH:
 - Use date_to: "2010-12-31" to find classic papers on BDI, SOAR, ACT-R

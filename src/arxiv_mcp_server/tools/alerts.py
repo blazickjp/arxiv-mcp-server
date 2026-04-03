@@ -21,22 +21,35 @@ WATCH_FILE_NAME = "watched_topics.json"
 
 watch_topic_tool = types.Tool(
     name="watch_topic",
-    description="Save or update a watched research topic for alerts.",
+    description=(
+        "Save or update a persistent research topic watch. "
+        "When checked via check_alerts, returns only papers published since the last check — "
+        "acting as a standing alert for new work on a topic. "
+        "The topic string uses the same query syntax as search_papers (quoted phrases, field specifiers, boolean operators). "
+        "Examples: '\"diffusion models\" AND ti:\"video generation\"', 'au:\"LeCun\" AND cs.LG'. "
+        "Calling watch_topic with the same topic string updates the existing watch rather than creating a duplicate. "
+        "Pair with check_alerts to poll for new papers."
+    ),
     inputSchema={
         "type": "object",
         "properties": {
             "topic": {
                 "type": "string",
-                "description": "Topic query string to monitor.",
+                "description": (
+                    "Query string to monitor. Uses arXiv search syntax — "
+                    "quoted phrases for exact matches, field specifiers (ti:, au:, abs:), "
+                    "and boolean operators (AND, OR, ANDNOT). "
+                    "Example: '\"reinforcement learning\" AND \"robotics\"'."
+                ),
             },
             "categories": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional arXiv categories filter.",
+                "description": "Optional arXiv category filter (e.g. ['cs.LG', 'cs.AI']). Narrows results to specific fields.",
             },
             "max_results": {
                 "type": "integer",
-                "description": "Maximum papers to fetch per alert check.",
+                "description": "Maximum papers to return per alert check (default: 10).",
                 "default": 10,
             },
         },
@@ -46,13 +59,23 @@ watch_topic_tool = types.Tool(
 
 check_alerts_tool = types.Tool(
     name="check_alerts",
-    description="Run saved topic watches and return new papers since last check.",
+    description=(
+        "Check all saved topic watches for newly published papers since the last check. "
+        "Omitting the topic parameter runs ALL saved watches and returns new papers for each. "
+        "Passing a topic string checks only that specific watch. "
+        "Updates each watch's last_checked timestamp after running, so subsequent calls only return newer papers. "
+        "Use watch_topic to register topics before calling this. "
+        "Returns a summary with new paper counts and full paper metadata per topic."
+    ),
     inputSchema={
         "type": "object",
         "properties": {
             "topic": {
                 "type": "string",
-                "description": "Optional: check only this watched topic.",
+                "description": (
+                    "Optional: check only this specific watched topic (must match the topic string used in watch_topic exactly). "
+                    "Omit to check all saved watches."
+                ),
             }
         },
     },

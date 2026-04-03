@@ -10,7 +10,12 @@ settings = Settings()
 
 list_tool = types.Tool(
     name="list_papers",
-    description="List all existing papers available as resources",
+    description=(
+        "List all papers that have been downloaded and stored locally via download_paper. "
+        "Returns arXiv IDs only — use read_paper to access content. "
+        "Returns an empty list if no papers have been downloaded yet. "
+        "Workflow: search_papers -> download_paper -> list_papers -> read_paper."
+    ),
     inputSchema={
         "type": "object",
         "properties": {},

@@ -149,22 +149,35 @@ without review. See [SECURITY.md](SECURITY.md) for the full security policy.
 
 ## 💡 Available Tools
 
-The server provides core and pro tools:
+### Core Workflow
+
+The typical workflow for deep paper research is:
+
+```
+search_papers → download_paper → read_paper
+```
+
+`list_papers` shows what you have locally. `semantic_search` searches across your local collection.
+
+---
 
 ### 1. Paper Search
-Search for papers with optional filters:
+Search arXiv with optional category, date, and boolean filters. Enforces arXiv's 3-second rate limit automatically. If rate limited, wait 60 seconds before retrying.
 
 ```python
 result = await call_tool("search_papers", {
-    "query": "transformer architecture",
+    "query": "\"KAN\" OR \"Kolmogorov-Arnold Networks\"",
     "max_results": 10,
-    "date_from": "2023-01-01",
-    "categories": ["cs.AI", "cs.LG"]
+    "date_from": "2024-01-01",
+    "categories": ["cs.LG", "cs.AI"],
+    "sort_by": "date"   # or "relevance" (default)
 })
 ```
 
+Supported categories include `cs.AI`, `cs.LG`, `cs.CL`, `cs.CV`, `cs.NE`, `stat.ML`, `math.OC`, `quant-ph`, `eess.SP`, and more. See tool description for the full list.
+
 ### 2. Paper Download
-Download a paper by its arXiv ID:
+Download a paper by its arXiv ID. Tries HTML first, falls back to PDF. Stores the paper locally for `read_paper` and `semantic_search`.
 
 ```python
 result = await call_tool("download_paper", {
@@ -172,15 +185,17 @@ result = await call_tool("download_paper", {
 })
 ```
 
+> For older papers that only have a PDF, install the `[pdf]` extra: `uv tool install 'arxiv-mcp-server[pdf]'`
+
 ### 3. List Papers
-View all downloaded papers:
+List all papers downloaded locally. Returns arXiv IDs only — use `read_paper` to access content.
 
 ```python
 result = await call_tool("list_papers", {})
 ```
 
 ### 4. Read Paper
-Access the content of a downloaded paper:
+Read the full text of a locally downloaded paper in markdown. **Requires `download_paper` to be called first.**
 
 ```python
 result = await call_tool("read_paper", {
@@ -189,17 +204,22 @@ result = await call_tool("read_paper", {
 ```
 
 ### 5. Semantic Search (Pro)
-Find papers semantically related to a query or source paper:
+Semantic similarity search over your **locally downloaded** papers only. Returns empty results if no papers have been downloaded yet.
 
 ```python
 result = await call_tool("semantic_search", {
     "query": "test-time adaptation in multimodal transformers",
     "max_results": 5
 })
+# or find papers similar to a known paper:
+result = await call_tool("semantic_search", {
+    "paper_id": "2404.19756",
+    "max_results": 5
+})
 ```
 
 ### 6. Citation Graph (Pro)
-Fetch references and citing papers:
+Fetch references and citing papers via Semantic Scholar. Works on any arXiv ID — no local download required.
 
 ```python
 result = await call_tool("citation_graph", {
@@ -208,14 +228,21 @@ result = await call_tool("citation_graph", {
 ```
 
 ### 7. Research Alerts (Pro)
-Save a watch and check for new papers:
+Save topic watches and poll for newly published papers since last check. Uses the same query syntax as `search_papers`.
 
 ```python
+# Register a watch (idempotent — calling again updates the existing watch)
 await call_tool("watch_topic", {
-    "topic": "multi-agent reinforcement learning",
-    "categories": ["cs.AI", "cs.LG"]
+    "topic": "\"multi-agent reinforcement learning\"",
+    "categories": ["cs.AI", "cs.LG"],
+    "max_results": 10
 })
+
+# Check all watches — returns only papers published since last check
 result = await call_tool("check_alerts", {})
+
+# Check a single watch
+result = await call_tool("check_alerts", {"topic": "\"multi-agent reinforcement learning\""})
 ```
 
 ## 📝 Research Prompts

@@ -10,7 +10,12 @@ settings = Settings()
 
 read_tool = types.Tool(
     name="read_paper",
-    description="Read the full content of a stored paper in markdown format",
+    description=(
+        "Read the full text content of a paper that was previously downloaded via download_paper. "
+        "Returns the paper in markdown format. "
+        "Will fail with a clear error if the paper has not been downloaded yet — call download_paper first. "
+        "Workflow: search_papers -> download_paper -> read_paper."
+    ),
     inputSchema={
         "type": "object",
         "properties": {

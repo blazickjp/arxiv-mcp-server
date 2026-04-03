@@ -50,8 +50,13 @@ class IndexedPaper:
 semantic_search_tool = types.Tool(
     name="semantic_search",
     description=(
-        "Semantic search over downloaded papers. Supports free-text semantic queries "
-        "and finding papers similar to a given paper_id."
+        "Semantic similarity search over papers you have already downloaded locally via download_paper. "
+        "Supports free-text queries (e.g. 'attention mechanisms for long sequences') or finding papers "
+        "similar to a given paper_id. "
+        "IMPORTANT: only searches your local downloaded collection — will return empty results if no papers "
+        "have been downloaded yet. Use search_papers to find papers on arXiv, then download_paper to add "
+        "them to the local index before using this tool. "
+        "Requires pro dependencies: uv pip install -e \".[pro]\""
     ),
     inputSchema={
         "type": "object",
