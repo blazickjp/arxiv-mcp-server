@@ -123,7 +123,7 @@ def test_parse_arxiv_atom_response():
     paper = results[0]
     assert paper["id"] == "2301.00001"
     assert paper["title"] == "Test Paper Title"
-    assert paper["abstract"] == "This is a test abstract."
+    assert paper["abstract"] == "[EXTERNAL CONTENT] This is a test abstract."
     assert paper["authors"] == ["John Doe", "Jane Smith"]
     assert "cs.AI" in paper["categories"]
     assert paper["resource_uri"] == "arxiv://2301.00001"

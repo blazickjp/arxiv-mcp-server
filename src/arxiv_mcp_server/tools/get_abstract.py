@@ -119,7 +119,7 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
                         "paper_id": paper_id,
                         "title": text("atom:title"),
                         "authors": authors,
-                        "abstract": text("atom:summary"),
+                        "abstract": "[EXTERNAL CONTENT] " + text("atom:summary"),
                         "categories": categories,
                         "published": text("atom:published"),
                         "pdf_url": pdf_url,

@@ -221,7 +221,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
             # Abstract/Summary
             summary_elem = entry.find("atom:summary", ARXIV_NS)
-            abstract = (
+            abstract = "[EXTERNAL CONTENT] " + (
                 summary_elem.text.strip().replace("\n", " ")
                 if summary_elem is not None and summary_elem.text
                 else ""
@@ -422,7 +422,7 @@ def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
         "id": paper.get_short_id(),
         "title": paper.title,
         "authors": [author.name for author in paper.authors],
-        "abstract": paper.summary,
+        "abstract": "[EXTERNAL CONTENT] " + paper.summary,
         "categories": paper.categories,
         "published": paper.published.isoformat(),
         "url": paper.pdf_url,

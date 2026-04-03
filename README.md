@@ -36,6 +36,42 @@ The ArXiv MCP Server provides a bridge between AI assistants and arXiv's researc
 
 
 
+## 🔒 Security
+
+### Prompt Injection Risk
+
+**Paper content retrieved from arXiv is untrusted external input.**
+
+When an AI assistant downloads or reads a paper through this server, the paper's
+text is passed directly into the model's context. A maliciously crafted paper
+could embed adversarial instructions designed to hijack the AI's behavior — for
+example, instructing it to exfiltrate data, invoke other tools with unintended
+arguments, or override system-level instructions. This is a known class of
+attack described by OWASP as **LLM01: Prompt Injection** and by the OWASP
+Agentic AI framework as **AG01: Prompt Injection in LLM-Integrated Systems**.
+
+### Recommended Mitigations
+
+1. **Use read-only MCP configurations** — where possible, configure the MCP
+   client so that the arxiv-mcp-server cannot trigger write operations or invoke
+   other tools on your behalf.
+2. **Review paper content before acting on AI summaries** — if an AI summary
+   asks you to run commands or visit external URLs that were not part of your
+   original request, treat that as a red flag.
+3. **Be cautious in multi-tool setups** — agentic pipelines that combine this
+   server with filesystem, shell, or browser tools are higher risk; a prompt
+   injection in a paper could chain tool calls unexpectedly.
+4. **Treat AI-generated summaries as data, not instructions** — always apply
+   human judgment before executing any action the AI recommends after reading a
+   paper.
+
+### References
+
+- [OWASP LLM01: Prompt Injection](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
+- [OWASP Agentic AI - AG01: Prompt Injection](https://genai.owasp.org/llmrisk/ag01-prompt-injection/)
+
+---
+
 ## 🚀 Quick Start
 
 ### Installing via Smithery

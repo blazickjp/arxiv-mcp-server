@@ -112,7 +112,8 @@ async def test_html_endpoint_success(temp_storage_path, mocker):
 
     assert result["status"] == "success"
     assert result["source"] == "html"
-    assert result["content"] == html_text
+    assert result["content"].endswith(html_text)
+    assert result["content"].startswith("[UNTRUSTED EXTERNAL CONTENT")
     # Markdown file should have been saved to cache
     assert (temp_storage_path / f"{paper_id}.md").exists()
     mock_pdf.assert_not_called()
@@ -150,7 +151,8 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
 
     assert result["status"] == "success"
     assert result["source"] == "pdf"
-    assert result["content"] == pdf_markdown
+    assert result["content"].endswith(pdf_markdown)
+    assert result["content"].startswith("[UNTRUSTED EXTERNAL CONTENT")
     assert (temp_storage_path / f"{paper_id}.md").exists()
 
 
