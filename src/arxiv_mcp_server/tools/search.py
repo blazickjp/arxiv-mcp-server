@@ -4,6 +4,7 @@ import arxiv
 import json
 import logging
 import httpx
+import asyncio
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -126,10 +127,33 @@ async def _raw_arxiv_search(
     url = f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
     logger.debug(f"Raw API URL: {url}")
 
-    # Make the request
+    # Make the request with retry + exponential backoff
+    max_attempts = 4
+    base_delay = 3.0  # arXiv asks for 3s between requests
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+        for attempt in range(max_attempts):
+            try:
+                response = await client.get(url)
+                if response.status_code == 429 or response.status_code == 503:
+                    wait = base_delay * (2 ** attempt)
+                    logger.warning(f"arXiv rate limited (attempt {attempt+1}/{max_attempts}), retrying in {wait:.1f}s")
+                    await asyncio.sleep(wait)
+                    continue
+                response.raise_for_status()
+                break
+            except httpx.TimeoutException:
+                wait = base_delay * (2 ** attempt)
+                logger.warning(f"arXiv request timed out (attempt {attempt+1}/{max_attempts}), retrying in {wait:.1f}s")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        else:
+            raise httpx.HTTPStatusError(
+                f"arXiv API rate limited after {max_attempts} attempts",
+                request=response.request,
+                response=response,
+            )
 
     # Parse the Atom XML response
     return _parse_arxiv_atom_response(response.text)
@@ -476,12 +500,27 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             sort_by=sort_criterion,
         )
 
-        # Process results
+        # Process results with retry on rate limit
         results = []
-        for paper in client.results(search):
-            if len(results) >= max_results:
+        max_attempts = 4
+        base_delay = 3.0
+        for attempt in range(max_attempts):
+            try:
+                results = []
+                for paper in client.results(search):
+                    if len(results) >= max_results:
+                        break
+                    results.append(_process_paper(paper))
                 break
-            results.append(_process_paper(paper))
+            except arxiv.ArxivError as e:
+                if "429" in str(e) or "rate" in str(e).lower() or "503" in str(e):
+                    wait = base_delay * (2 ** attempt)
+                    logger.warning(f"arXiv rate limited (attempt {attempt+1}/{max_attempts}), retrying in {wait:.1f}s")
+                    await asyncio.sleep(wait)
+                    if attempt == max_attempts - 1:
+                        raise
+                else:
+                    raise
 
         logger.info(f"Search completed: {len(results)} results returned")
         response_data = {"total_results": len(results), "papers": results}
