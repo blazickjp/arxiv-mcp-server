@@ -12,16 +12,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+      with:
+        # Need full history + write access to push formatting fixes
+        ref: ${{ github.head_ref || github.ref_name }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: Install dependencies
+
+    - name: Install Black
+      run: pip install black
+
+    - name: Run Black (auto-format)
+      run: black .
+
+    - name: Commit formatting fixes if needed
       run: |
-        pip install black
-        
-    - name: Check code formatting with Black
-      run: |
-        black --check . 
+        git config --local user.name "github-actions[bot]"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git diff --quiet || (git add -A && git commit -m "style: auto-format with Black")
+
+    - name: Push fixes
+      if: github.event_name == 'push'
+      run: git push
