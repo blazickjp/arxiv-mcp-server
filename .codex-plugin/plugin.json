@@ -19,5 +19,6 @@
     "longDescription": "A Model Context Protocol server for searching and analyzing arXiv papers.",
     "category": "Research",
     "websiteURL": "https://github.com/blazickjp/arxiv-mcp-server"
-  }
+  },
+  "skills": "./skills/"
 }
