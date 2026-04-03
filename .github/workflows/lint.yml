@@ -7,13 +7,15 @@ on:
     branches: [ main, master ]
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: write
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
       with:
-        # Need full history + write access to push formatting fixes
         ref: ${{ github.head_ref || github.ref_name }}
         token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -28,12 +30,9 @@ jobs:
     - name: Run Black (auto-format)
       run: black .
 
-    - name: Commit formatting fixes if needed
+    - name: Commit and push formatting fixes (push events only)
+      if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
       run: |
         git config --local user.name "github-actions[bot]"
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git diff --quiet || (git add -A && git commit -m "style: auto-format with Black")
-
-    - name: Push fixes
-      if: github.event_name == 'push'
-      run: git push
+        git diff --quiet || (git add -A && git commit -m "style: auto-format with Black" && git push)
