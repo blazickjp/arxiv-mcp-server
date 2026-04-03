@@ -1,6 +1,7 @@
 """Download functionality for the arXiv MCP server."""
 
 import arxiv
+import gc
 import json
 import asyncio
 import httpx
@@ -8,8 +9,11 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, Any, List
 import mcp.types as types
-from ..config import Settings
+from mcp.types import ToolAnnotations
+from ..config import Settings, get_arxiv_client
 import logging
+
+_MAX_TRACKED_CONVERSIONS = 100  # prevent unbounded growth of conversion_statuses
 
 # Optional PDF-conversion dependencies — only needed for the PDF fallback path.
 # Install with: pip install arxiv-mcp-server[pdf]
@@ -128,6 +132,7 @@ def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
 
 download_tool = types.Tool(
     name="download_paper",
+    annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True),
     description=(
         "Download a paper from arXiv and return its full text content. "
         "Tries the HTML version first for clean extraction; falls back to "
@@ -190,7 +195,7 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
             "pip install arxiv-mcp-server[pdf]"
         )
 
-    client = arxiv.Client()
+    client = get_arxiv_client()
     try:
         paper = next(client.results(arxiv.Search(id_list=[paper_id])))
     except StopIteration:
@@ -202,6 +207,8 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
     logger.info(f"Converting PDF to markdown for {paper_id}")
     markdown = pymupdf4llm.to_markdown(pdf_path, show_progress=False)
 
+    # Release pymupdf C-level memory and clean up PDF
+    gc.collect()
     # Clean up the PDF — we only keep the markdown
     try:
         pdf_path.unlink()

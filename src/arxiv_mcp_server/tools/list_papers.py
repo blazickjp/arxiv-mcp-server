@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import mcp.types as types
+from mcp.types import ToolAnnotations
 from ..config import Settings
 
 settings = Settings()
 
 list_tool = types.Tool(
     name="list_papers",
+    annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "List all papers that have been downloaded and stored locally via download_paper. "
         "Returns arXiv IDs only — use read_paper to access content. "

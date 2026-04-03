@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List
 import mcp.types as types
+from mcp.types import ToolAnnotations
 from ..config import Settings
 
 settings = Settings()
 
 read_tool = types.Tool(
     name="read_paper",
+    annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "Read the full text content of a paper that was previously downloaded via download_paper. "
         "Returns the paper in markdown format. "

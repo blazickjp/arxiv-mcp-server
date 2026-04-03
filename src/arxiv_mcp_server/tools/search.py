@@ -11,7 +11,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from dateutil import parser
 import mcp.types as types
-from ..config import Settings
+from mcp.types import ToolAnnotations
+from ..config import Settings, get_arxiv_client
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -273,6 +274,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
 search_tool = types.Tool(
     name="search_papers",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description="""Search for papers on arXiv with advanced filtering and query optimization.
 
 QUERY CONSTRUCTION GUIDELINES:
@@ -494,8 +496,8 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             except ValueError as e:
                 return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
-        # For non-date queries, use the arxiv package (more robust parsing)
-        client = arxiv.Client()
+        # For non-date queries, use the shared arxiv client (lazy, avoids eager import overhead)
+        client = get_arxiv_client()
 
         # Build query components
         query_parts = []

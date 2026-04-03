@@ -13,8 +13,8 @@ from mcp.server.models import InitializationOptions
 from mcp.server import NotificationOptions
 from mcp.server.stdio import stdio_server
 from .config import Settings
-from .tools import handle_search, handle_download, handle_list_papers, handle_read_paper
-from .tools import search_tool, download_tool, list_tool, read_tool
+from .tools import handle_search, handle_download, handle_list_papers, handle_read_paper, handle_get_abstract
+from .tools import search_tool, download_tool, list_tool, read_tool, abstract_tool
 from .tools import (
     handle_semantic_search,
     handle_reindex,
@@ -58,6 +58,7 @@ async def list_tools() -> List[types.Tool]:
         download_tool,
         list_tool,
         read_tool,
+        abstract_tool,
         semantic_search_tool,
         reindex_tool,
         citation_graph_tool,
@@ -79,6 +80,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_list_papers(arguments)
         elif name == "read_paper":
             return await handle_read_paper(arguments)
+        elif name == "get_abstract":
+            return await handle_get_abstract(arguments)
         elif name == "semantic_search":
             return await handle_semantic_search(arguments)
         elif name == "reindex":
