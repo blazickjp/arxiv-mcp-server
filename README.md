@@ -26,21 +26,9 @@ The ArXiv MCP Server provides a bridge between AI assistants and arXiv's researc
 - 📄 **Paper Access**: Download and read paper content
 - 📋 **Paper Listing**: View all downloaded papers
 - 🗃️ **Local Storage**: Papers are saved locally for faster access
-- 📝 **Prompts**: A Set of Research Prompts
+- 📝 **Prompts**: A set of research prompts for paper analysis
 
-## 💼 Pro Features
 
-- 🧠 **Semantic Search**: `semantic_search` finds conceptually similar papers using local embeddings.
-- 🔁 **Index Rebuild**: `reindex` rebuilds the local semantic index from downloaded papers.
-- 🕸️ **Citation Graph**: `citation_graph` returns references and citation backlinks via Semantic Scholar.
-- 🔔 **Research Alerts**: `watch_topic` and `check_alerts` track topics and return newly published papers.
-- 🧩 **Advanced Prompts**: `summarize_paper`, `compare_papers`, and `literature_review` for deeper workflows.
-
-Install pro extras in development environments:
-
-```bash
-uv pip install -e ".[pro]"
-```
 
 ## 🚀 Quick Start
 
@@ -203,47 +191,7 @@ result = await call_tool("read_paper", {
 })
 ```
 
-### 5. Semantic Search (Pro)
-Semantic similarity search over your **locally downloaded** papers only. Returns empty results if no papers have been downloaded yet.
 
-```python
-result = await call_tool("semantic_search", {
-    "query": "test-time adaptation in multimodal transformers",
-    "max_results": 5
-})
-# or find papers similar to a known paper:
-result = await call_tool("semantic_search", {
-    "paper_id": "2404.19756",
-    "max_results": 5
-})
-```
-
-### 6. Citation Graph (Pro)
-Fetch references and citing papers via Semantic Scholar. Works on any arXiv ID — no local download required.
-
-```python
-result = await call_tool("citation_graph", {
-    "paper_id": "2401.12345"
-})
-```
-
-### 7. Research Alerts (Pro)
-Save topic watches and poll for newly published papers since last check. Uses the same query syntax as `search_papers`.
-
-```python
-# Register a watch (idempotent — calling again updates the existing watch)
-await call_tool("watch_topic", {
-    "topic": "\"multi-agent reinforcement learning\"",
-    "categories": ["cs.AI", "cs.LG"],
-    "max_results": 10
-})
-
-# Check all watches — returns only papers published since last check
-result = await call_tool("check_alerts", {})
-
-# Check a single watch
-result = await call_tool("check_alerts", {"topic": "\"multi-agent reinforcement learning\""})
-```
 
 ## 📝 Research Prompts
 
@@ -291,6 +239,63 @@ Run the test suite:
 ```bash
 python -m pytest
 ```
+
+## 🧪 Experimental Features
+
+> **These features are not yet fully tested and may behave unexpectedly. Use with caution.**
+
+The following tools require additional dependencies and are under active development:
+
+```bash
+uv pip install -e ".[pro]"
+```
+
+### Semantic Search
+Semantic similarity search over your **locally downloaded** papers only. Returns empty results if no papers have been downloaded yet. Requires `[pro]` dependencies.
+
+```python
+result = await call_tool("semantic_search", {
+    "query": "test-time adaptation in multimodal transformers",
+    "max_results": 5
+})
+# or find papers similar to a known paper:
+result = await call_tool("semantic_search", {
+    "paper_id": "2404.19756",
+    "max_results": 5
+})
+```
+
+### Citation Graph
+Fetch references and citing papers via Semantic Scholar. Works on any arXiv ID — no local download required.
+
+```python
+result = await call_tool("citation_graph", {
+    "paper_id": "2401.12345"
+})
+```
+
+### Research Alerts
+Save topic watches and poll for newly published papers since the last check. Uses the same query syntax as `search_papers`.
+
+```python
+# Register a watch (idempotent — calling again updates the existing watch)
+await call_tool("watch_topic", {
+    "topic": "\"multi-agent reinforcement learning\"",
+    "categories": ["cs.AI", "cs.LG"],
+    "max_results": 10
+})
+
+# Check all watches — returns only papers published since last check
+result = await call_tool("check_alerts", {})
+
+# Check a single watch
+result = await call_tool("check_alerts", {"topic": "\"multi-agent reinforcement learning\""})
+```
+
+### Advanced Prompts
+`summarize_paper`, `compare_papers`, and `literature_review` for deeper research workflows. Requires `[pro]` dependencies.
+
+---
 
 ## 📄 License
 
