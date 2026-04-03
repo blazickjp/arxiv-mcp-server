@@ -115,7 +115,8 @@ def _connect() -> sqlite3.Connection:
     """Open SQLite connection and ensure schema exists."""
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS semantic_index (
             paper_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -127,7 +128,8 @@ def _connect() -> sqlite3.Connection:
             embedding_dim INTEGER NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """)
+        """
+    )
     conn.commit()
     return conn
 

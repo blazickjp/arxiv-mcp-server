@@ -444,7 +444,16 @@ async def test_success_response_has_all_required_keys(mocker):
     )
     result = await handle_get_abstract({"paper_id": "2401.12345"})
     data = json.loads(result[0].text)
-    for key in ("status", "paper_id", "title", "authors", "abstract", "categories", "published", "pdf_url"):
+    for key in (
+        "status",
+        "paper_id",
+        "title",
+        "authors",
+        "abstract",
+        "categories",
+        "published",
+        "pdf_url",
+    ):
         assert key in data, f"Missing key: {key}"
 
 
