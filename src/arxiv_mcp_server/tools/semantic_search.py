@@ -57,7 +57,7 @@ semantic_search_tool = types.Tool(
         "IMPORTANT: only searches your local downloaded collection — will return empty results if no papers "
         "have been downloaded yet. Use search_papers to find papers on arXiv, then download_paper to add "
         "them to the local index before using this tool. "
-        "Requires pro dependencies: uv pip install -e \".[pro]\""
+        'Requires pro dependencies: uv pip install -e ".[pro]"'
     ),
     inputSchema={
         "type": "object",
@@ -101,7 +101,7 @@ def _dependency_error() -> Optional[str]:
     if np is None or SentenceTransformer is None:
         return (
             "Pro feature dependency missing. Install with: "
-            "`uv pip install -e \".[pro]\"`"
+            '`uv pip install -e ".[pro]"`'
         )
     return None
 
@@ -115,8 +115,7 @@ def _connect() -> sqlite3.Connection:
     """Open SQLite connection and ensure schema exists."""
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS semantic_index (
             paper_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -128,8 +127,7 @@ def _connect() -> sqlite3.Connection:
             embedding_dim INTEGER NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
+        """)
     conn.commit()
     return conn
 
@@ -228,7 +226,9 @@ def index_paper_from_result(paper: Any) -> bool:
             published = paper.published.isoformat()
 
         if not abstract.strip():
-            logger.warning("Skipping semantic indexing for %s: empty abstract", paper_id)
+            logger.warning(
+                "Skipping semantic indexing for %s: empty abstract", paper_id
+            )
             return False
 
         return _upsert_index_record(
@@ -256,7 +256,9 @@ def _load_vectors(exclude_paper_id: Optional[str] = None) -> List[Dict[str, Any]
 
     vectors: List[Dict[str, Any]] = []
     for row in rows:
-        vector = np.frombuffer(row["embedding"], dtype=np.float32, count=row["embedding_dim"])
+        vector = np.frombuffer(
+            row["embedding"], dtype=np.float32, count=row["embedding_dim"]
+        )
         vectors.append(
             {
                 "paper_id": row["paper_id"],
@@ -383,7 +385,9 @@ async def handle_semantic_search(arguments: Dict[str, Any]) -> List[types.TextCo
         if paper_id:
             query_vector = _get_indexed_paper_vector(paper_id)
             if query_vector is None:
-                logger.info("Paper %s not indexed yet, attempting to fetch and index", paper_id)
+                logger.info(
+                    "Paper %s not indexed yet, attempting to fetch and index", paper_id
+                )
                 if not index_paper_by_id(paper_id):
                     return [
                         types.TextContent(

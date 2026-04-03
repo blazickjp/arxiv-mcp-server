@@ -22,6 +22,7 @@ def get_arxiv_client():
     global _arxiv_client
     if _arxiv_client is None:
         import arxiv
+
         _arxiv_client = arxiv.Client()
     return _arxiv_client
 

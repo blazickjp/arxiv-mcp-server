@@ -47,7 +47,9 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
         try:
             response = await client.get(url, headers=ARXIV_HEADERS)
             if response.status_code in (429, 503):
-                logger.warning(f"arXiv rate limited ({response.status_code}) — backing off, not retrying")
+                logger.warning(
+                    f"arXiv rate limited ({response.status_code}) — backing off, not retrying"
+                )
                 raise RuntimeError(
                     f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
                     "Please wait 60 seconds before retrying."
@@ -62,6 +64,7 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
                 raise
 
     raise RuntimeError("arXiv request timed out after retry")
+
 
 # arXiv API endpoint for raw queries (bypasses arxiv package URL encoding issues)
 # Use HTTPS to avoid redirect from http -> https

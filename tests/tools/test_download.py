@@ -16,10 +16,10 @@ from arxiv_mcp_server.tools.download import (
     PaperNotFoundError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for HTML parser
 # ---------------------------------------------------------------------------
+
 
 def test_html_to_text_strips_scripts():
     html = "<html><body><script>alert(1)</script><p>Hello world</p></body></html>"
@@ -56,6 +56,7 @@ def test_html_to_text_extracts_article_text():
 # Integration-style handler tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_cached_paper_returns_immediately(temp_storage_path, mocker):
     """A paper already in cache is returned immediately without network calls."""
@@ -65,7 +66,9 @@ async def test_cached_paper_returns_immediately(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
 
     md_path = temp_storage_path / f"{paper_id}.md"
     md_path.write_text("# Cached Paper\nThis is cached content.", encoding="utf-8")
@@ -92,7 +95,9 @@ async def test_html_endpoint_success(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
 
     html_text = "Title of the Paper\nAbstract content goes here."
     mocker.patch(
@@ -121,7 +126,11 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+    # Simulate pdf extra being available so the PDF fallback path is reached
+    mocker.patch("arxiv_mcp_server.tools.download._pdf_available", True)
 
     # HTML not available
     mocker.patch(
@@ -153,7 +162,11 @@ async def test_paper_not_found_on_arxiv(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+    # Simulate pdf extra being available so the PDF fallback path is reached
+    mocker.patch("arxiv_mcp_server.tools.download._pdf_available", True)
 
     # HTML not available
     mocker.patch(
@@ -182,7 +195,9 @@ async def test_no_check_status_parameter(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
 
     html_text = "Some paper content"
     mocker.patch(
@@ -204,7 +219,9 @@ async def test_unexpected_error_returns_error_status(temp_storage_path, mocker):
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
 
-    mocker.patch("arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
 
     mocker.patch(
         "arxiv_mcp_server.tools.download._fetch_html_content",

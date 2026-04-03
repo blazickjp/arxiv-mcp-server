@@ -26,7 +26,7 @@ watch_topic_tool = types.Tool(
         "When checked via check_alerts, returns only papers published since the last check — "
         "acting as a standing alert for new work on a topic. "
         "The topic string uses the same query syntax as search_papers (quoted phrases, field specifiers, boolean operators). "
-        "Examples: '\"diffusion models\" AND ti:\"video generation\"', 'au:\"LeCun\" AND cs.LG'. "
+        'Examples: \'"diffusion models" AND ti:"video generation"\', \'au:"LeCun" AND cs.LG\'. '
         "Calling watch_topic with the same topic string updates the existing watch rather than creating a duplicate. "
         "Pair with check_alerts to poll for new papers."
     ),
@@ -39,7 +39,7 @@ watch_topic_tool = types.Tool(
                     "Query string to monitor. Uses arXiv search syntax — "
                     "quoted phrases for exact matches, field specifiers (ti:, au:, abs:), "
                     "and boolean operators (AND, OR, ANDNOT). "
-                    "Example: '\"reinforcement learning\" AND \"robotics\"'."
+                    'Example: \'"reinforcement learning" AND "robotics"\'.'
                 ),
             },
             "categories": {
@@ -110,7 +110,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _filter_by_topic(topics: List[Dict[str, Any]], topic_name: Optional[str]) -> List[Dict[str, Any]]:
+def _filter_by_topic(
+    topics: List[Dict[str, Any]], topic_name: Optional[str]
+) -> List[Dict[str, Any]]:
     """Filter watched topics by exact topic name if provided."""
     if not topic_name:
         return topics
@@ -201,7 +203,9 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
             last_checked = topic.get("last_checked")
             search_results = await _raw_arxiv_search(
                 query=topic_query,
-                max_results=min(int(topic.get("max_results", 10)), settings.MAX_RESULTS),
+                max_results=min(
+                    int(topic.get("max_results", 10)), settings.MAX_RESULTS
+                ),
                 sort_by="date",
                 date_from=last_checked,
                 categories=topic.get("categories") or None,

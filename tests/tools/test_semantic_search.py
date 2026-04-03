@@ -96,7 +96,9 @@ async def test_semantic_search_by_paper_id(semantic_test_env):
 
 
 @pytest.mark.asyncio
-async def test_reindex_uses_local_markdown_ids(monkeypatch, semantic_test_env, temp_storage_path):
+async def test_reindex_uses_local_markdown_ids(
+    monkeypatch, semantic_test_env, temp_storage_path
+):
     """Reindex should walk local markdown files and attempt indexing each ID."""
     Path(temp_storage_path, "2301.00001.md").write_text("paper", encoding="utf-8")
     Path(temp_storage_path, "2301.00002.md").write_text("paper", encoding="utf-8")

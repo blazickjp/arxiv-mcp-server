@@ -202,7 +202,9 @@ async def test_search_arxiv_error(mock_client):
     error = arxiv.ArxivError("http://example.com", retry=3, message="API Error")
     mock_client.results.side_effect = error
 
-    with patch("arxiv.Client", return_value=mock_client):
+    with patch(
+        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
+    ):
         result = await handle_search({"query": "test", "max_results": 1})
 
         assert "ArXiv API error" in result[0].text

@@ -8,7 +8,13 @@ from typing import Any, Dict, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from .search import _rate_limited_get, ARXIV_HEADERS, ARXIV_API_URL, _MIN_REQUEST_INTERVAL, _last_request_time
+from .search import (
+    _rate_limited_get,
+    ARXIV_HEADERS,
+    ARXIV_API_URL,
+    _MIN_REQUEST_INTERVAL,
+    _last_request_time,
+)
 import httpx
 import xml.etree.ElementTree as ET
 
@@ -41,7 +47,14 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
     try:
         paper_id = arguments["paper_id"].strip()
         if not paper_id:
-            return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": "paper_id is required"}))]
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"status": "error", "message": "paper_id is required"}
+                    ),
+                )
+            ]
 
         url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
 
@@ -56,10 +69,17 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
 
         entries = root.findall("atom:entry", ns)
         if not entries:
-            return [types.TextContent(type="text", text=json.dumps({
-                "status": "error",
-                "message": f"Paper {paper_id} not found on arXiv",
-            }))]
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"Paper {paper_id} not found on arXiv",
+                        }
+                    ),
+                )
+            ]
 
         entry = entries[0]
 
@@ -90,20 +110,36 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
         if not pdf_url:
             pdf_url = f"https://arxiv.org/pdf/{paper_id}"
 
-        return [types.TextContent(type="text", text=json.dumps({
-            "status": "success",
-            "paper_id": paper_id,
-            "title": text("atom:title"),
-            "authors": authors,
-            "abstract": text("atom:summary"),
-            "categories": categories,
-            "published": text("atom:published"),
-            "pdf_url": pdf_url,
-        }, indent=2))]
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "status": "success",
+                        "paper_id": paper_id,
+                        "title": text("atom:title"),
+                        "authors": authors,
+                        "abstract": text("atom:summary"),
+                        "categories": categories,
+                        "published": text("atom:published"),
+                        "pdf_url": pdf_url,
+                    },
+                    indent=2,
+                ),
+            )
+        ]
 
     except RuntimeError as e:
         # Rate limit or timeout from _rate_limited_get
-        return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": str(e)}))]
+        return [
+            types.TextContent(
+                type="text", text=json.dumps({"status": "error", "message": str(e)})
+            )
+        ]
     except Exception as e:
         logger.error(f"get_abstract error: {e}")
-        return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": str(e)}))]
+        return [
+            types.TextContent(
+                type="text", text=json.dumps({"status": "error", "message": str(e)})
+            )
+        ]

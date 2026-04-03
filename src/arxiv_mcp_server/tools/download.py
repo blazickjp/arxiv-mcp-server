@@ -20,6 +20,7 @@ _MAX_TRACKED_CONVERSIONS = 100  # prevent unbounded growth of conversion_statuse
 try:
     import pymupdf4llm
     import fitz
+
     _pdf_available = True
 except ImportError:  # pragma: no cover
     pymupdf4llm = None  # type: ignore[assignment]
@@ -29,6 +30,7 @@ except ImportError:  # pragma: no cover
 # Optional pro feature — gracefully degrade when not installed
 try:
     from .semantic_search import index_paper_by_id, index_paper_from_result
+
     _semantic_search_available = True
 except ImportError:  # pragma: no cover
     _semantic_search_available = False
@@ -64,6 +66,8 @@ async def _run_index_from_result(arxiv_result) -> None:
         return
     async with _get_index_semaphore():
         await asyncio.to_thread(index_paper_from_result, arxiv_result)
+
+
 settings = Settings()
 
 if _pdf_available:
@@ -74,6 +78,7 @@ if _pdf_available:
 # ---------------------------------------------------------------------------
 # HTML parsing helpers
 # ---------------------------------------------------------------------------
+
 
 class _ArticleTextExtractor(HTMLParser):
     """Extract readable text from an arXiv HTML paper page.
@@ -119,6 +124,7 @@ def _html_to_text(html: str) -> str:
 # Path helpers
 # ---------------------------------------------------------------------------
 
+
 def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
     """Get the absolute file path for a paper with given suffix."""
     storage_path = Path(settings.STORAGE_PATH)
@@ -155,6 +161,7 @@ download_tool = types.Tool(
 # ---------------------------------------------------------------------------
 # Core fetch functions (run synchronously, called via asyncio.to_thread)
 # ---------------------------------------------------------------------------
+
 
 def _fetch_html_content(paper_id: str) -> str | None:
     """Try to get paper content from the arXiv HTML endpoint.
@@ -221,6 +228,7 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
 # ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
+
 
 async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle paper download requests synchronously (HTML first, then PDF)."""
