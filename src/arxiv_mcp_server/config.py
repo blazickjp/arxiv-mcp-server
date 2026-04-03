@@ -1,9 +1,15 @@
 """Configuration settings for the arXiv MCP server."""
 
 import sys
+from importlib.metadata import version, PackageNotFoundError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import logging
+
+try:
+    _PACKAGE_VERSION = version("arxiv-mcp-server")
+except PackageNotFoundError:
+    _PACKAGE_VERSION = "0.0.0"
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +30,7 @@ class Settings(BaseSettings):
     """Server configuration settings."""
 
     APP_NAME: str = "arxiv-mcp-server"
-    APP_VERSION: str = "0.4.0"
+    APP_VERSION: str = _PACKAGE_VERSION
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
     REQUEST_TIMEOUT: int = 60
