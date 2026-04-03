@@ -14,6 +14,7 @@ import arxiv
 import mcp.types as types
 
 from ..config import Settings
+from .list_papers import is_valid_arxiv_id
 
 try:
     import numpy as np
@@ -320,7 +321,11 @@ def rebuild_index(clear_existing: bool = True) -> Dict[str, Any]:
     if dependency_error:
         return {"status": "error", "message": dependency_error}
 
-    paper_ids = sorted(p.stem for p in Path(settings.STORAGE_PATH).glob("*.md"))
+    paper_ids = sorted(
+        p.stem
+        for p in Path(settings.STORAGE_PATH).glob("*.md")
+        if is_valid_arxiv_id(p.stem)
+    )
 
     if clear_existing:
         with _connect() as conn:

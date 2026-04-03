@@ -1,6 +1,7 @@
 """List functionality for the arXiv MCP server."""
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import mcp.types as types
@@ -8,6 +9,19 @@ from mcp.types import ToolAnnotations
 from ..config import Settings
 
 settings = Settings()
+
+# Matches both new-style (YYMM.NNNNN) and old-style (cat/YYMMNNN) arXiv IDs,
+# with optional version suffix (v1, v2, …).
+_ARXIV_ID_RE = re.compile(
+    r'^(\d{4}\.\d{4,5}(v\d+)?'       # new-style: 2404.18922 or 2404.18922v3
+    r'|[a-z\-]+(/[a-z\-]+)?/\d{7}(v\d+)?)$',  # old-style: hep-ph/9901234
+    re.IGNORECASE,
+)
+
+
+def is_valid_arxiv_id(stem: str) -> bool:
+    """Return True if *stem* looks like a valid arXiv paper ID."""
+    return bool(_ARXIV_ID_RE.match(stem))
 
 list_tool = types.Tool(
     name="list_papers",
@@ -36,7 +50,11 @@ def list_papers() -> list[str]:
     storage = Path(settings.STORAGE_PATH)
     if not storage.exists():
         return []
-    return [p.stem for p in storage.iterdir() if p.is_file() and p.suffix == ".md"]
+    return [
+        p.stem
+        for p in storage.iterdir()
+        if p.is_file() and p.suffix == ".md" and is_valid_arxiv_id(p.stem)
+    ]
 
 
 async def handle_list_papers(
