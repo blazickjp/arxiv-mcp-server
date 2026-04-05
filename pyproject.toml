@@ -4,12 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arxiv-mcp-server"
-version = "0.4.11"
+version = "0.3.2"
 description = "A flexible arXiv search and analysis service with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-keywords = ["mcp", "arxiv", "model-context-protocol", "llm", "research", "papers", "semantic-search", "ai", "academic"]
 authors = [
     { name = "Joseph Blazick", email = "blazickjp@amazon.com" }
 ]
@@ -19,6 +18,7 @@ dependencies = [
     "python-dateutil>=2.8.2",
     "pydantic>=2.8.0",
     "mcp>=1.2.0",
+    "pymupdf4llm>=0.0.17",
     "aiohttp>=3.9.1",
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.1.0",
@@ -27,13 +27,10 @@ dependencies = [
     "sse-starlette>=1.8.2",
     "anyio>=4.2.0",
     "black>=25.1.0",
+    "pymupdf-layout>=1.26.6",
 ]
 
 [project.optional-dependencies]
-pdf = [
-    "pymupdf4llm>=0.0.17",
-    "pymupdf-layout>=1.26.6",
-]
 test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
@@ -43,10 +40,6 @@ test = [
 ]
 dev = [
     "black>=23.3.0"
-]
-pro = [
-    "sentence-transformers>=3.0.0",
-    "numpy>=1.26.0",
 ]
 
 [tool.pytest.ini_options]

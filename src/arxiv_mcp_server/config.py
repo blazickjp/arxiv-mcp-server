@@ -1,37 +1,18 @@
 """Configuration settings for the arXiv MCP server."""
 
 import sys
-from importlib.metadata import version, PackageNotFoundError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import logging
 
-try:
-    _PACKAGE_VERSION = version("arxiv-mcp-server")
-except PackageNotFoundError:
-    _PACKAGE_VERSION = "0.0.0"
-
 logger = logging.getLogger(__name__)
-
-# Lazy shared arxiv client — created on first use, not at import time
-_arxiv_client = None
-
-
-def get_arxiv_client():
-    """Return a shared arxiv.Client instance, creating it on first call."""
-    global _arxiv_client
-    if _arxiv_client is None:
-        import arxiv
-
-        _arxiv_client = arxiv.Client()
-    return _arxiv_client
 
 
 class Settings(BaseSettings):
     """Server configuration settings."""
 
     APP_NAME: str = "arxiv-mcp-server"
-    APP_VERSION: str = _PACKAGE_VERSION
+    APP_VERSION: str = "0.3.2"
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
     REQUEST_TIMEOUT: int = 60

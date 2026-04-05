@@ -40,40 +40,6 @@ PROMPTS = {
             ),
         ],
     ),
-    "summarize_paper": Prompt(
-        name="summarize_paper",
-        description="Summarize a paper with key methods, results, and limits",
-        arguments=[
-            PromptArgument(
-                name="paper_id", description="arXiv paper ID", required=True
-            ),
-        ],
-    ),
-    "compare_papers": Prompt(
-        name="compare_papers",
-        description="Compare two or more papers on methods and results",
-        arguments=[
-            PromptArgument(
-                name="paper_ids",
-                description="Comma-separated list of arXiv paper IDs",
-                required=True,
-            ),
-        ],
-    ),
-    "literature_review": Prompt(
-        name="literature_review",
-        description="Synthesize a literature review for a topic and paper set",
-        arguments=[
-            PromptArgument(
-                name="topic", description="Research topic or question", required=True
-            ),
-            PromptArgument(
-                name="paper_ids",
-                description="Comma-separated list of arXiv paper IDs",
-                required=False,
-            ),
-        ],
-    ),
     "literature-synthesis": Prompt(
         name="literature-synthesis",
         description="Synthesize findings across multiple papers",

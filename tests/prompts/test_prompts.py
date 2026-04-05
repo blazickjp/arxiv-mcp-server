@@ -10,16 +10,11 @@ from mcp.types import GetPromptResult, PromptMessage, TextContent
 async def test_list_prompts():
     """Test listing available prompts."""
     prompts = await list_prompts()
-    assert len(prompts) >= 4
+    assert len(prompts) == 1
 
     prompt_names = {p.name for p in prompts}
-    expected_names = {
-        "deep-paper-analysis",
-        "summarize_paper",
-        "compare_papers",
-        "literature_review",
-    }
-    assert expected_names.issubset(prompt_names)
+    expected_names = {"deep-paper-analysis"}
+    assert prompt_names == expected_names
 
 
 @pytest.mark.asyncio
@@ -56,17 +51,3 @@ async def test_get_prompt_with_missing_required_argument():
     """Test getting prompt with missing required argument."""
     with pytest.raises(ValueError, match="Missing required argument"):
         await get_prompt("deep-paper-analysis", {})
-
-
-@pytest.mark.asyncio
-async def test_get_compare_papers_prompt():
-    """Test getting compare papers prompt."""
-    result = await get_prompt("compare_papers", {"paper_ids": "2401.00123,2401.00999"})
-    assert "Compare papers: 2401.00123,2401.00999" in result.messages[0].content.text
-
-
-@pytest.mark.asyncio
-async def test_get_literature_review_prompt():
-    """Test getting literature review prompt."""
-    result = await get_prompt("literature_review", {"topic": "agentic systems"})
-    assert "topic: agentic systems" in result.messages[0].content.text

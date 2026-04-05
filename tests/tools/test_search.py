@@ -123,7 +123,7 @@ def test_parse_arxiv_atom_response():
     paper = results[0]
     assert paper["id"] == "2301.00001"
     assert paper["title"] == "Test Paper Title"
-    assert paper["abstract"] == "[EXTERNAL CONTENT] This is a test abstract."
+    assert paper["abstract"] == "This is a test abstract."
     assert paper["authors"] == ["John Doe", "Jane Smith"]
     assert "cs.AI" in paper["categories"]
     assert paper["resource_uri"] == "arxiv://2301.00001"
@@ -202,9 +202,7 @@ async def test_search_arxiv_error(mock_client):
     error = arxiv.ArxivError("http://example.com", retry=3, message="API Error")
     mock_client.results.side_effect = error
 
-    with patch(
-        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
-    ):
+    with patch("arxiv.Client", return_value=mock_client):
         result = await handle_search({"query": "test", "max_results": 1})
 
         assert "ArXiv API error" in result[0].text

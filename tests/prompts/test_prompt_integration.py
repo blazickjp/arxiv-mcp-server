@@ -8,7 +8,7 @@ from arxiv_mcp_server.prompts.handlers import list_prompts, get_prompt
 async def test_server_list_prompts():
     """Test server list_prompts endpoint."""
     prompts = await list_prompts()
-    assert len(prompts) >= 4
+    assert len(prompts) == 1
 
     # Check that all prompts have required fields
     for prompt in prompts:
@@ -40,10 +40,3 @@ async def test_server_get_prompt_missing_args():
     """Test server get_prompt endpoint with missing required arguments."""
     with pytest.raises(ValueError, match="Missing required argument"):
         await get_prompt("deep-paper-analysis", {})
-
-
-@pytest.mark.asyncio
-async def test_server_get_summarize_prompt():
-    """Test server get_prompt endpoint with summarize prompt."""
-    result = await get_prompt("summarize_paper", {"paper_id": "2401.00123"})
-    assert "Summarize paper 2401.00123." in result.messages[0].content.text

@@ -4,67 +4,15 @@ import arxiv
 import json
 import logging
 import httpx
-import asyncio
-import time
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from dateutil import parser
 import mcp.types as types
-from mcp.types import ToolAnnotations
-from ..config import Settings, get_arxiv_client
+from ..config import Settings
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
-
-# Module-level rate limiter: arXiv asks for >= 3s between requests
-_last_request_time: float = 0.0
-_request_lock = asyncio.Lock()
-_MIN_REQUEST_INTERVAL = 3.0  # seconds
-
-ARXIV_HEADERS = {
-    "User-Agent": "arxiv-mcp-server/0.4.1 (https://github.com/blazickjp/arxiv-mcp-server; research tool)"
-}
-
-
-async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """Make a GET request respecting arXiv's rate limit policy.
-
-    Enforces a minimum 3s gap between requests (arXiv's documented guideline).
-    Fails fast on 429/503 — retrying while rate-limited only extends the ban.
-    One retry on timeout only.
-    """
-    global _last_request_time
-
-    # Enforce minimum interval before sending
-    async with _request_lock:
-        elapsed = time.monotonic() - _last_request_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-        _last_request_time = time.monotonic()
-
-    for attempt in range(2):  # one retry on timeout only
-        try:
-            response = await client.get(url, headers=ARXIV_HEADERS)
-            if response.status_code in (429, 503):
-                logger.warning(
-                    f"arXiv rate limited ({response.status_code}) — backing off, not retrying"
-                )
-                raise RuntimeError(
-                    f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-                    "Please wait 60 seconds before retrying."
-                )
-            response.raise_for_status()
-            return response
-        except httpx.TimeoutException:
-            if attempt == 0:
-                logger.warning("arXiv request timed out, retrying once")
-                await asyncio.sleep(5.0)
-            else:
-                raise
-
-    raise RuntimeError("arXiv request timed out after retry")
-
 
 # arXiv API endpoint for raw queries (bypasses arxiv package URL encoding issues)
 # Use HTTPS to avoid redirect from http -> https
@@ -178,9 +126,10 @@ async def _raw_arxiv_search(
     url = f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
     logger.debug(f"Raw API URL: {url}")
 
-    # Make the request via rate-limited helper
+    # Make the request
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _rate_limited_get(client, url)
+        response = await client.get(url)
+        response.raise_for_status()
 
     # Parse the Atom XML response
     return _parse_arxiv_atom_response(response.text)
@@ -221,7 +170,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
             # Abstract/Summary
             summary_elem = entry.find("atom:summary", ARXIV_NS)
-            abstract = "[EXTERNAL CONTENT] " + (
+            abstract = (
                 summary_elem.text.strip().replace("\n", " ")
                 if summary_elem is not None and summary_elem.text
                 else ""
@@ -277,7 +226,6 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
 search_tool = types.Tool(
     name="search_papers",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description="""Search for papers on arXiv with advanced filtering and query optimization.
 
 QUERY CONSTRUCTION GUIDELINES:
@@ -297,28 +245,15 @@ ADVANCED SEARCH PATTERNS:
 - Broad + narrow: "artificial intelligence" AND (robotics OR "computer vision")
 
 CATEGORY FILTERING (highly recommended for relevance):
-Computer Science:
 - cs.AI: Artificial Intelligence
+- cs.MA: Multi-Agent Systems  
 - cs.LG: Machine Learning
 - cs.CL: Computation and Language (NLP)
 - cs.CV: Computer Vision
-- cs.MA: Multi-Agent Systems
 - cs.RO: Robotics
-- cs.NE: Neural and Evolutionary Computing
-- cs.IR: Information Retrieval
 - cs.HC: Human-Computer Interaction
 - cs.CR: Cryptography and Security
 - cs.DB: Databases
-Statistics & Math:
-- stat.ML: Machine Learning (Statistics)
-- stat.AP: Applications
-- math.OC: Optimization and Control
-- math.ST: Statistics Theory
-Physics & Other:
-- quant-ph: Quantum Physics
-- eess.SP: Signal Processing
-- eess.AS: Audio and Speech Processing
-- physics.data-an: Data Analysis and Statistics
 
 EXAMPLES OF EFFECTIVE QUERIES:
 - ti:"reinforcement learning" with categories: ["cs.LG", "cs.AI"] - for RL papers by title
@@ -331,11 +266,8 @@ DATE FILTERING: Use YYYY-MM-DD format for historical research:
 - date_from: "2020-01-01" - for recent developments (post-2020)
 - Both together for specific time periods
 
-RESULT QUALITY: Default sort is RELEVANCE (most pertinent results first). Use sort_by: "date" to get newest papers first.
-Choose relevance for focused topic searches; choose date for monitoring recent developments.
-
-RATE LIMITING: arXiv enforces a 3-second minimum between requests. This server handles that automatically.
-If you see a rate limit error, wait 60 seconds before retrying — do not call the tool repeatedly in a loop.
+RESULT QUALITY: Results sorted by RELEVANCE (most relevant papers first), not just newest papers.
+This ensures you get the most pertinent results regardless of publication date.
 
 TIPS FOR FOUNDATIONAL RESEARCH:
 - Use date_to: "2010-12-31" to find classic papers on BDI, SOAR, ACT-R
@@ -422,7 +354,7 @@ def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
         "id": paper.get_short_id(),
         "title": paper.title,
         "authors": [author.name for author in paper.authors],
-        "abstract": "[EXTERNAL CONTENT] " + paper.summary,
+        "abstract": paper.summary,
         "categories": paper.categories,
         "published": paper.published.isoformat(),
         "url": paper.pdf_url,
@@ -499,8 +431,8 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             except ValueError as e:
                 return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
-        # For non-date queries, use the shared arxiv client (lazy, avoids eager import overhead)
-        client = get_arxiv_client()
+        # For non-date queries, use the arxiv package (more robust parsing)
+        client = arxiv.Client()
 
         # Build query components
         query_parts = []
@@ -544,25 +476,12 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             sort_by=sort_criterion,
         )
 
-        # Respect rate limit before request
-        elapsed = time.monotonic() - _last_request_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-
-        # Process results — fail fast on rate limit, don't hammer the API
+        # Process results
         results = []
-        try:
-            for paper in client.results(search):
-                if len(results) >= max_results:
-                    break
-                results.append(_process_paper(paper))
-        except arxiv.ArxivError as e:
-            if "429" in str(e) or "rate" in str(e).lower() or "503" in str(e):
-                logger.warning(f"arXiv rate limited — not retrying: {e}")
-                raise RuntimeError(
-                    "arXiv is rate limiting this IP. Please wait 60 seconds before retrying."
-                )
-            raise
+        for paper in client.results(search):
+            if len(results) >= max_results:
+                break
+            results.append(_process_paper(paper))
 
         logger.info(f"Search completed: {len(results)} results returned")
         response_data = {"total_results": len(results), "papers": results}
