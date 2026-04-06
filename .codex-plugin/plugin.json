@@ -1,0 +1,21 @@
+{
+  "name": "arxiv-mcp-server",
+  "version": "0.4.11",
+  "description": "Search arXiv papers, download full text, semantic search, citation graphs, and alerts via MCP.",
+  "author": {
+    "name": "Joseph Blazick",
+    "url": "https://github.com/blazickjp"
+  },
+  "homepage": "https://github.com/blazickjp/arxiv-mcp-server",
+  "repository": "https://github.com/blazickjp/arxiv-mcp-server",
+  "keywords": ["mcp", "codex", "arxiv", "research", "academic"],
+  "mcpServers": "../.mcp.json",
+  "skills": "../skills/",
+  "interface": {
+    "displayName": "arXiv MCP Server",
+    "shortDescription": "Search and analyze arXiv papers from Codex-compatible MCP clients.",
+    "longDescription": "Adds arXiv search, download, semantic search, citation graph, and alert workflows to Codex-compatible MCP clients using the published PyPI package.",
+    "category": "Research",
+    "websiteURL": "https://github.com/blazickjp/arxiv-mcp-server"
+  }
+}

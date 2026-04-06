@@ -9,6 +9,7 @@
 [![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
 [![Install in VS Code Insiders](https://img.shields.io/badge/Install_in-VS_Code_Insiders-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D&quality=insiders)
 [![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
+[![Codex Plugin](https://img.shields.io/badge/Codex-Plugin-412991?style=flat-square)](./.codex-plugin/plugin.json)
 
 # ArXiv MCP Server
 
@@ -127,6 +128,30 @@ source .venv/bin/activate
 # Install with test dependencies (development only — no global executable)
 uv pip install -e ".[test]"
 ```
+
+### 🤖 Codex Plugin Integration
+
+This repository now includes a Codex plugin manifest at `.codex-plugin/plugin.json`
+and a portable MCP config at `.mcp.json` so Codex-oriented tooling can discover
+the server without inventing its own install recipe.
+
+The Codex integration uses the same stdio launch path documented elsewhere in
+this README:
+
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"]
+    }
+  }
+}
+```
+
+If your Codex client supports plugin manifests, point it at
+`./.codex-plugin/plugin.json`. If it only supports raw MCP configuration, use
+`./.mcp.json` directly.
 
 ### 🔌 MCP Integration
 
