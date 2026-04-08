@@ -10,6 +10,21 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["mcp", "arxiv", "model-context-protocol", "llm", "research", "papers", "semantic-search", "ai", "academic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 authors = [
     { name = "Joseph Blazick", email = "blazickjp@amazon.com" }
 ]
@@ -28,6 +43,10 @@ dependencies = [
     "anyio>=4.2.0",
     "black>=25.1.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/blazickjp/arxiv-mcp-server"
+Issues = "https://github.com/blazickjp/arxiv-mcp-server/issues"
 
 [project.optional-dependencies]
 pdf = [
