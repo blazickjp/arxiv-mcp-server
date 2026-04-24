@@ -1,0 +1,32 @@
+name: Build and Publish MCPB
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-mcpb:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build MCPB bundle
+        run: bash scripts/build-mcpb.sh
+
+      - name: Upload MCPB to release
+        run: gh release upload "${{ github.event.release.tag_name }}" mcpb-build/*.mcpb --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

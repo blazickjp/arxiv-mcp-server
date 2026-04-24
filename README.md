@@ -83,6 +83,16 @@ To install ArXiv Server for Claude Desktop automatically via [Smithery](https://
 npx -y @smithery/cli install arxiv-mcp-server --client claude
 ```
 
+### Installing via Claude Desktop (.mcpb)
+
+The `.mcpb` bundle is the zero-dependency install path for Claude Desktop — no Python, no `uv`, no package manager required.
+
+1. Download `arxiv-mcp-server-<version>.mcpb` from the [latest release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest).
+2. In Claude Desktop open **Settings → Extensions** (or drag-and-drop the file onto the Claude Desktop window).
+3. Click **Install** and, when prompted, set your preferred paper storage directory (defaults to `~/.arxiv-mcp-server/papers`).
+
+The bundle includes the server code and all Python runtime dependencies. Claude Desktop launches it automatically over stdio — no configuration file edits needed.
+
 ### Installing Manually
 
 > **Important — use `uv tool install`, not `uv pip install`**

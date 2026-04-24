@@ -1,0 +1,25 @@
+{
+  "id": "io.github.blazickjp/arxiv-mcp-server",
+  "version": "0.4.11",
+  "name": "ArXiv MCP Server",
+  "description": "Search arXiv papers, download full text, semantic search, citation graphs, and research alerts via MCP.",
+  "icon": "icon.png",
+  "server": {
+    "mcp_config": {
+      "command": "python3",
+      "args": ["-m", "arxiv_mcp_server"],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server:${__dirname}/server/vendor",
+        "ARXIV_STORAGE_PATH": "${user_config.storage_path}"
+      }
+    }
+  },
+  "user_config": {
+    "storage_path": {
+      "type": "string",
+      "title": "Paper Storage Path",
+      "description": "Local directory for storing downloaded arXiv papers",
+      "default": "~/.arxiv-mcp-server/papers"
+    }
+  }
+}
