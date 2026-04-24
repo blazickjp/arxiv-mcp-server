@@ -32,6 +32,14 @@ from .tools import (
     watch_topic_tool,
     handle_check_alerts,
     check_alerts_tool,
+    get_paper_latex_tool,
+    handle_get_paper_latex,
+    get_paper_latex_abstract_tool,
+    handle_get_paper_latex_abstract,
+    list_paper_latex_sections_tool,
+    handle_list_paper_latex_sections,
+    get_paper_latex_section_tool,
+    handle_get_paper_latex_section,
 )
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
@@ -70,6 +78,10 @@ async def list_tools() -> List[types.Tool]:
         citation_graph_tool,
         watch_topic_tool,
         check_alerts_tool,
+        get_paper_latex_tool,
+        get_paper_latex_abstract_tool,
+        list_paper_latex_sections_tool,
+        get_paper_latex_section_tool,
     ]
 
 
@@ -98,6 +110,14 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return await handle_watch_topic(arguments)
         elif name == "check_alerts":
             return await handle_check_alerts(arguments)
+        elif name == "get_paper_latex":
+            return await handle_get_paper_latex(arguments)
+        elif name == "get_paper_latex_abstract":
+            return await handle_get_paper_latex_abstract(arguments)
+        elif name == "list_paper_latex_sections":
+            return await handle_list_paper_latex_sections(arguments)
+        elif name == "get_paper_latex_section":
+            return await handle_get_paper_latex_section(arguments)
         else:
             return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
     except Exception as e:
