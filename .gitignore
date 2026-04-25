@@ -37,6 +37,7 @@ ENV/
 *.log
 
 # Local development settings
-.env.mcpregistry_github_token
+.env
+.mcpregistry_github_token
 .mcpregistry_registry_token
 mcp-publisher

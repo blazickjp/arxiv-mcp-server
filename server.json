@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.blazickjp/arxiv-mcp-server",
-  "version": "0.4.9",
+  "version": "0.4.12",
   "description": "Search arXiv papers, download full text, semantic search, citation graphs, and alerts via MCP.",
   "repository": {
     "url": "https://github.com/blazickjp/arxiv-mcp-server",
@@ -12,7 +12,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "arxiv-mcp-server",
-      "version": "0.4.9",
+      "version": "0.4.12",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
