@@ -17,13 +17,19 @@ logger = logging.getLogger(__name__)
 _arxiv_client = None
 
 
-def get_arxiv_client():
-    """Return a shared arxiv.Client instance, creating it on first call."""
+def get_arxiv_client(page_size: int = 100):
+    """Return a shared arxiv.Client instance, creating it on first call.
+
+    The arxiv Python client fetches pages using its own page_size setting. If
+    left at the library default of 100, even a small max_results request causes
+    an upstream API URL with max_results=100. Keep the client page size aligned
+    with the requested result count so small searches make small API requests.
+    """
     global _arxiv_client
-    if _arxiv_client is None:
+    if _arxiv_client is None or getattr(_arxiv_client, "page_size", None) != page_size:
         import arxiv
 
-        _arxiv_client = arxiv.Client()
+        _arxiv_client = arxiv.Client(page_size=page_size)
     return _arxiv_client
 
 
