@@ -18,6 +18,16 @@ from .alerts import (
     check_alerts_tool,
     handle_check_alerts,
 )
+from .latex import (
+    get_paper_latex_tool,
+    handle_get_paper_latex,
+    get_paper_latex_abstract_tool,
+    handle_get_paper_latex_abstract,
+    list_paper_latex_sections_tool,
+    handle_list_paper_latex_sections,
+    get_paper_latex_section_tool,
+    handle_get_paper_latex_section,
+)
 
 __all__ = [
     "search_tool",
@@ -40,4 +50,12 @@ __all__ = [
     "handle_watch_topic",
     "check_alerts_tool",
     "handle_check_alerts",
+    "get_paper_latex_tool",
+    "handle_get_paper_latex",
+    "get_paper_latex_abstract_tool",
+    "handle_get_paper_latex_abstract",
+    "list_paper_latex_sections_tool",
+    "handle_list_paper_latex_sections",
+    "get_paper_latex_section_tool",
+    "handle_get_paper_latex_section",
 ]

@@ -105,6 +105,13 @@ After this, the `arxiv-mcp-server` command will be available on your `PATH`.
 > ```bash
 > uv tool install 'arxiv-mcp-server[pdf]'
 > ```
+
+> **LaTeX source tools:** To access raw LaTeX source for precise math rendering,
+> install the `[latex]` extra (arxiv-to-prompt):
+>
+> ```bash
+> uv tool install 'arxiv-mcp-server[latex]'
+> ```
 You can verify it with:
 
 ```bash
@@ -361,6 +368,38 @@ result = await call_tool("check_alerts", {"topic": "\"multi-agent reinforcement 
 
 ### Advanced Prompts
 `summarize_paper`, `compare_papers`, and `literature_review` for deeper research workflows. Requires `[pro]` dependencies.
+
+### LaTeX Source Tools
+Access raw LaTeX source for precise mathematical expression handling. Requires the `[latex]` extra:
+
+```bash
+uv tool install 'arxiv-mcp-server[latex]'
+```
+
+**`get_paper_latex`** — fetch the full flattened LaTeX source of a paper:
+```python
+result = await call_tool("get_paper_latex", {"arxiv_id": "2403.12345"})
+```
+
+**`get_paper_latex_abstract`** — get only the abstract from the LaTeX source:
+```python
+result = await call_tool("get_paper_latex_abstract", {"arxiv_id": "2403.12345"})
+```
+
+**`list_paper_latex_sections`** — list section headings and their paths:
+```python
+result = await call_tool("list_paper_latex_sections", {"arxiv_id": "2403.12345"})
+```
+
+**`get_paper_latex_section`** — get a specific section by path (use `list_paper_latex_sections` first):
+```python
+result = await call_tool("get_paper_latex_section", {
+    "arxiv_id": "2403.12345",
+    "section_path": "2.1"  # or "Introduction", "1", etc.
+})
+```
+
+LaTeX source is useful when papers contain heavy mathematics — the raw LaTeX preserves equation structure that HTML/PDF conversion may lose. Powered by [arxiv-to-prompt](https://github.com/takashiishida/arxiv-to-prompt).
 
 ---
 
