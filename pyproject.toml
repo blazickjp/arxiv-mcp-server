@@ -8,7 +8,7 @@ version = "0.4.11"
 description = "A flexible arXiv search and analysis service with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 keywords = ["mcp", "arxiv", "model-context-protocol", "llm", "research", "papers", "semantic-search", "ai", "academic"]
 authors = [
     { name = "Joseph Blazick", email = "blazickjp@amazon.com" }
