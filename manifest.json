@@ -1,0 +1,60 @@
+{
+  "manifest_version": "0.3",
+  "name": "arxiv-mcp-server",
+  "display_name": "ArXiv MCP Server",
+  "version": "0.4.12",
+  "description": "Search, download, and analyze arXiv papers via MCP.",
+  "author": {
+    "name": "Joseph Blazick",
+    "email": "joe.blazick@yahoo.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blazickjp/arxiv-mcp-server.git"
+  },
+  "homepage": "https://github.com/blazickjp/arxiv-mcp-server",
+  "documentation": "https://github.com/blazickjp/arxiv-mcp-server#readme",
+  "support": "https://github.com/blazickjp/arxiv-mcp-server/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "server/arxiv_mcp_server/__main__.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "arxiv_mcp_server",
+        "--storage-path",
+        "${user_config.storage_path}"
+      ],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server:${__dirname}/server/vendor"
+      }
+    }
+  },
+  "keywords": [
+    "arxiv",
+    "research",
+    "papers",
+    "semantic-search",
+    "citation-graphs",
+    "mcp"
+  ],
+  "license": "Apache-2.0",
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  },
+  "user_config": {
+    "storage_path": {
+      "type": "directory",
+      "title": "Paper Storage Directory",
+      "description": "Local directory for storing downloaded arXiv papers.",
+      "required": false,
+      "default": "${HOME}/.arxiv-mcp-server/papers"
+    }
+  }
+}

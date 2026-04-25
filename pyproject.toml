@@ -97,5 +97,6 @@ exclude = '''
   | buck-out
   | build
   | dist
+  | mcpb-build
 )/
 '''

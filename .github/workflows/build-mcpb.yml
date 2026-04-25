@@ -1,0 +1,47 @@
+name: Build and Publish MCPB
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-mcpb:
+    # Python MCPB bundles vendor platform-specific wheels, so publish separate
+    # macOS artifacts for Intel and Apple Silicon runners.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build MCPB bundle
+        run: bash scripts/build-mcpb.sh
+
+      - name: Upload MCPB to release
+        if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" mcpb-build/*.mcpb --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload MCPB artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arxiv-mcp-server-mcpb-${{ matrix.os }}
+          path: mcpb-build/*.mcpb

@@ -83,6 +83,18 @@ To install ArXiv Server for Claude Desktop automatically via [Smithery](https://
 npx -y @smithery/cli install arxiv-mcp-server --client claude
 ```
 
+### Installing via Claude Desktop (.mcpb)
+
+The `.mcpb` bundle is the one-click install path for Claude Desktop on macOS. It bundles the server code and Python package dependencies, so users do not need `uv`, `pip`, or manual MCP JSON configuration. Python 3.11+ must still be available on the user's machine.
+
+1. Download the artifact matching your Mac from the [latest release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
+   - Apple Silicon: `arxiv-mcp-server-darwin-arm64-<version>.mcpb`
+   - Intel: `arxiv-mcp-server-darwin-x86_64-<version>.mcpb`
+2. In Claude Desktop open **Settings → Extensions** (or drag-and-drop the file onto the Claude Desktop window).
+3. Click **Install** and, when prompted, set your preferred paper storage directory (defaults to `~/.arxiv-mcp-server/papers`).
+
+Claude Desktop launches the bundled server over stdio — no configuration file edits needed.
+
 ### Installing Manually
 
 > **Important — use `uv tool install`, not `uv pip install`**
