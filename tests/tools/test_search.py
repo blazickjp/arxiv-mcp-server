@@ -223,6 +223,21 @@ async def test_search_max_results_limiting(mock_client):
 
 
 @pytest.mark.asyncio
+async def test_search_client_page_size_matches_requested_max_results(
+    mock_client, monkeypatch
+):
+    """Use the requested max_results as the arxiv client page size."""
+    from arxiv_mcp_server import config
+
+    monkeypatch.setattr(config, "_arxiv_client", None)
+
+    with patch("arxiv.Client", return_value=mock_client) as mock_client_class:
+        await handle_search({"query": "test", "max_results": 5})
+
+    mock_client_class.assert_called_once_with(page_size=5)
+
+
+@pytest.mark.asyncio
 async def test_search_sort_by_relevance(mock_client):
     """Test search with relevance sorting (default)."""
     with patch("arxiv.Client", return_value=mock_client):
