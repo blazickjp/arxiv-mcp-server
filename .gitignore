@@ -16,6 +16,8 @@ parts/
 sdist/
 var/
 wheels/
+mcpb-build/
+*.mcpb
 *.egg-info/
 .installed.cfg
 *.egg
