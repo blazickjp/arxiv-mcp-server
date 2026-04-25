@@ -74,35 +74,69 @@ async def list_tools() -> List[types.Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
+async def call_tool(
+    name: str, arguments: Dict[str, Any]
+) -> types.CallToolResult:
     """Handle tool calls for arXiv research functionality."""
     logger.debug(f"Calling tool {name} with arguments {arguments}")
     try:
         if name == "search_papers":
-            return await handle_search(arguments)
+            content = await handle_search(arguments)
         elif name == "download_paper":
-            return await handle_download(arguments)
+            content = await handle_download(arguments)
         elif name == "list_papers":
-            return await handle_list_papers(arguments)
+            content = await handle_list_papers(arguments)
         elif name == "read_paper":
-            return await handle_read_paper(arguments)
+            content = await handle_read_paper(arguments)
         elif name == "get_abstract":
-            return await handle_get_abstract(arguments)
+            content = await handle_get_abstract(arguments)
         elif name == "semantic_search":
-            return await handle_semantic_search(arguments)
+            content = await handle_semantic_search(arguments)
         elif name == "reindex":
-            return await handle_reindex(arguments)
+            content = await handle_reindex(arguments)
         elif name == "citation_graph":
-            return await handle_citation_graph(arguments)
+            content = await handle_citation_graph(arguments)
         elif name == "watch_topic":
-            return await handle_watch_topic(arguments)
+            content = await handle_watch_topic(arguments)
         elif name == "check_alerts":
-            return await handle_check_alerts(arguments)
+            content = await handle_check_alerts(arguments)
         else:
-            return [types.TextContent(type="text", text=f"Error: Unknown tool {name}")]
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=f"Unknown tool: {name}")],
+                isError=True,
+            )
+        return types.CallToolResult(
+            content=content,
+            isError=_is_error_content(content),
+        )
     except Exception as e:
         logger.error(f"Tool error: {str(e)}")
-        return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Error: {str(e)}")],
+            isError=True,
+        )
+
+
+def _is_error_content(content: List[types.TextContent]) -> bool:
+    """Check if the tool response content indicates an error.
+
+    Tool handlers return {"status": "error", ...} in the text body for error
+    cases. This helper detects that pattern so the dispatcher can set isError=True
+    on the CallToolResult, letting MCP clients distinguish errors from successes.
+    """
+    import json
+
+    if not content:
+        return False
+    for item in content:
+        if hasattr(item, "text") and item.text:
+            try:
+                data = json.loads(item.text)
+                if isinstance(data, dict) and data.get("status") == "error":
+                    return True
+            except (json.JSONDecodeError, TypeError):
+                continue
+    return False
 
 
 async def main():
