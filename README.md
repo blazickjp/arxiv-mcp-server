@@ -204,6 +204,29 @@ For Development:
 }
 ```
 
+### HTTP Transport
+
+For server deployments where stdio is not practical, run the server with Streamable HTTP:
+
+```bash
+TRANSPORT=http HOST=127.0.0.1 PORT=8080 arxiv-mcp-server --storage-path /path/to/papers
+```
+
+Then configure an MCP client that supports Streamable HTTP:
+
+```json
+{
+    "mcpServers": {
+        "arxiv-mcp-server": {
+            "type": "http",
+            "url": "http://127.0.0.1:8080/mcp"
+        }
+    }
+}
+```
+
+The default HTTP bind host is `127.0.0.1`. Streamable HTTP enables MCP DNS rebinding protection by default and allows loopback hosts for the configured port. If exposing the server through a reverse proxy, keep it bound to localhost unless you have added authentication and network controls upstream; set `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` to the external host/origin values your proxy forwards.
+
 ## 🔒 Security Note
 
 arXiv papers are user-generated, untrusted content. Paper text returned by this
@@ -305,11 +328,18 @@ This prompt includes:
 
 ## ⚙️ Configuration
 
-Configure through environment variables:
+Configure through command-line options and environment variables:
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ARXIV_STORAGE_PATH` | Paper storage location | ~/.arxiv-mcp-server/papers |
+| Setting | Purpose | Default |
+|---------|---------|---------|
+| `--storage-path` | Paper storage location | `~/.arxiv-mcp-server/papers` |
+| `MAX_RESULTS` | Maximum search results | `50` |
+| `REQUEST_TIMEOUT` | API timeout in seconds | `60` |
+| `TRANSPORT` | Transport type: `stdio`, `http`, or `streamable-http` | `stdio` |
+| `HOST` | Host to bind to in HTTP mode | `127.0.0.1` |
+| `PORT` | Port to listen on in HTTP mode | `8000` |
+| `ALLOWED_HOSTS` | Comma-separated extra allowed Host header values for Streamable HTTP DNS rebinding protection | empty |
+| `ALLOWED_ORIGINS` | Comma-separated extra allowed Origin header values for Streamable HTTP DNS rebinding protection | empty |
 
 ## 🧪 Testing
 
