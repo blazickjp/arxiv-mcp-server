@@ -41,8 +41,11 @@ class Settings(BaseSettings):
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
     REQUEST_TIMEOUT: int = 60
-    HOST: str = "0.0.0.0"
+    TRANSPORT: str = "stdio"
+    HOST: str = "127.0.0.1"
     PORT: int = 8000
+    ALLOWED_HOSTS: str = ""
+    ALLOWED_ORIGINS: str = ""
     model_config = SettingsConfigDict(extra="allow")
 
     @property

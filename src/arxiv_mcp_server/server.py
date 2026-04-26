@@ -6,12 +6,17 @@ This module implements an MCP server for interacting with arXiv.
 """
 
 import logging
+from typing import Any, Dict, List
+
 import mcp.types as types
-from typing import Dict, Any, List
-from mcp.server import Server
+import uvicorn
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-from mcp.server import NotificationOptions
 from mcp.server.stdio import stdio_server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.routing import Mount
 from .config import Settings
 from .tools import (
     handle_search,
@@ -105,18 +110,88 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
 
+def _initialization_options() -> InitializationOptions:
+    """Build shared MCP initialization options for every transport."""
+    return InitializationOptions(
+        server_name=settings.APP_NAME,
+        server_version=settings.APP_VERSION,
+        capabilities=server.get_capabilities(
+            notification_options=NotificationOptions(resources_changed=True),
+            experimental_capabilities={},
+        ),
+    )
+
+
+def _csv_settings(value: str) -> list[str]:
+    """Parse a comma-separated environment setting into non-empty strings."""
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _transport_security_settings() -> TransportSecuritySettings:
+    """Build explicit DNS rebinding protection for Streamable HTTP."""
+    host = settings.HOST
+    port = settings.PORT
+    loopback_hosts = {"127.0.0.1", "localhost", "[::1]"}
+    allowed_hosts = {
+        host,
+        f"{host}:{port}",
+        *(f"{h}:{port}" for h in loopback_hosts),
+        *loopback_hosts,
+    }
+    allowed_hosts.update(_csv_settings(settings.ALLOWED_HOSTS))
+
+    origin_hosts = {host, *loopback_hosts}
+    allowed_origins = {
+        f"http://{origin_host}:{port}" for origin_host in origin_hosts
+    } | {f"https://{origin_host}:{port}" for origin_host in origin_hosts}
+    allowed_origins.update(_csv_settings(settings.ALLOWED_ORIGINS))
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(allowed_hosts),
+        allowed_origins=sorted(allowed_origins),
+    )
+
+
+async def _run_stdio() -> None:
+    """Run the MCP server over stdio."""
+    async with stdio_server() as streams:
+        await server.run(streams[0], streams[1], _initialization_options())
+
+
+async def _run_streamable_http() -> None:
+    """Run the MCP server over Streamable HTTP."""
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=False,
+        security_settings=_transport_security_settings(),
+    )
+    starlette_app = Starlette(
+        routes=[Mount("/mcp", app=session_manager.handle_request)]
+    )
+    config = uvicorn.Config(
+        starlette_app,
+        host=settings.HOST,
+        port=settings.PORT,
+        log_level="info",
+    )
+    uvicorn_server = uvicorn.Server(config)
+    logger.info(
+        "Starting streamable HTTP transport on %s:%s", settings.HOST, settings.PORT
+    )
+    async with session_manager.run():
+        await uvicorn_server.serve()
+
+
 async def main():
     """Run the server async context."""
-    async with stdio_server() as streams:
-        await server.run(
-            streams[0],
-            streams[1],
-            InitializationOptions(
-                server_name=settings.APP_NAME,
-                server_version=settings.APP_VERSION,
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(resources_changed=True),
-                    experimental_capabilities={},
-                ),
-            ),
+    transport = settings.TRANSPORT.lower().replace("-", "_")
+    if transport in {"stdio", ""}:
+        await _run_stdio()
+    elif transport in {"http", "streamable_http"}:
+        await _run_streamable_http()
+    else:
+        raise ValueError(
+            f"Unsupported transport {settings.TRANSPORT!r}; expected 'stdio' or 'http'"
         )
