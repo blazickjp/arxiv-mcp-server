@@ -194,8 +194,68 @@ class PaperNotFoundError(Exception):
     """Raised when an arXiv paper ID cannot be found."""
 
 
+def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
+    """Persist the arXiv PDF for ``paper`` to ``pdf_path`` using HTTP streaming.
+
+    The public ``arxiv`` package recommends ``Result.download_pdf()`` for ad-hoc
+    scripts; internally it uses :func:`urllib.request.urlretrieve` against
+    ``export.arxiv.org``. In production we have observed **incomplete response
+    bodies** for some larger PDFs (e.g. ``retrieval incomplete`` / truncated
+    reads at ~1–2 MiB), which breaks the PDF-to-markdown pipeline.
+
+    We instead stream the canonical ``pdf_url`` returned by the arXiv API —
+    typically ``https://arxiv.org/pdf/...`` — via :mod:`httpx`, which matches
+    the host used for our HTML fetches and has proven stable for the same
+    papers that fail under ``download_pdf``.
+
+    Args:
+        paper: Metadata row from :meth:`arxiv.Client.results`; must expose
+            ``pdf_url``.
+        pdf_path: Destination path on disk (parent directory should exist or
+            be created by the caller via :func:`get_paper_path`).
+
+    Raises:
+        ValueError: If ``paper.pdf_url`` is missing.
+        httpx.HTTPStatusError: If the HTTP response is not successful.
+        httpx.RequestError: On transport-level failures.
+
+    Note:
+        Read timeout uses :attr:`Settings.REQUEST_TIMEOUT` with a floor of
+        120 seconds so large PDFs on slower links are less likely to fail
+        prematurely. Data is written in 256 KiB chunks to bound memory use.
+    """
+    if paper.pdf_url is None:
+        raise ValueError("No PDF URL available for this arXiv result")
+
+    pdf_url = paper.pdf_url
+    read_timeout = max(120.0, float(settings.REQUEST_TIMEOUT))
+    timeout = httpx.Timeout(
+        connect=30.0,
+        read=read_timeout,
+        write=30.0,
+        pool=30.0,
+    )
+    headers = {
+        "User-Agent": (
+            f"{settings.APP_NAME}/{settings.APP_VERSION} "
+            "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
+        ),
+    }
+
+    with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        with client.stream("GET", pdf_url) as response:
+            response.raise_for_status()
+            with pdf_path.open("wb") as out:
+                for chunk in response.iter_bytes(chunk_size=256 * 1024):
+                    out.write(chunk)
+
+
 def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
     """Download the PDF from arXiv and convert it to Markdown synchronously.
+
+    The PDF bytes are fetched with :func:`_download_arxiv_pdf_to_path` rather
+    than ``arxiv.Result.download_pdf()`` to avoid truncated downloads on
+    ``export.arxiv.org`` for some files.
 
     Returns (markdown_text, arxiv_result).
     Raises PaperNotFoundError if the paper does not exist, or other exceptions
@@ -215,7 +275,7 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
         raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
 
     pdf_path = get_paper_path(paper_id, ".pdf")
-    paper.download_pdf(dirpath=pdf_path.parent, filename=pdf_path.name)
+    _download_arxiv_pdf_to_path(paper, pdf_path)
 
     logger.info(f"Converting PDF to markdown for {paper_id}")
     markdown = pymupdf4llm.to_markdown(pdf_path, show_progress=False)
