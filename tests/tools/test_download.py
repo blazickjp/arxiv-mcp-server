@@ -214,6 +214,44 @@ async def test_no_check_status_parameter(temp_storage_path, mocker):
 
 
 @pytest.mark.asyncio
+async def test_pdf_extra_missing_error_message(temp_storage_path, mocker):
+    """When HTML is unavailable AND the pdf extra isn't installed, the error
+    message must clearly explain the cause AND give actionable remediation
+    for both direct pip users and downstream installers/embedders."""
+    paper_id = "2103.55555"
+
+    def fake_path(pid, suffix=".md"):
+        return temp_storage_path / f"{pid}{suffix}"
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+    # Simulate pdf extra NOT being available
+    mocker.patch("arxiv_mcp_server.tools.download._pdf_available", False)
+    # HTML not available
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content",
+        return_value=None,
+    )
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    msg = result["message"]
+    # Clear cause
+    assert "pdf" in msg.lower()
+    assert "not installed" in msg
+    # Direct remediation
+    assert "arxiv-mcp-server[pdf]" in msg
+    # Embedder remediation hint (the key fix — direct pip is often wrong for
+    # users running this server through a packaged installer)
+    assert "installer" in msg.lower() or "lockfile" in msg.lower()
+    # Includes the requested paper id so callers can correlate
+    assert paper_id in msg
+
+
+@pytest.mark.asyncio
 async def test_unexpected_error_returns_error_status(temp_storage_path, mocker):
     """Any unexpected exception results in a clean error response."""
     paper_id = "2103.44444"
