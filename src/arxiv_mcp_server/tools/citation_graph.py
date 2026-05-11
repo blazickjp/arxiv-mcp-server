@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import httpx
 import mcp.types as types
+from mcp.types import ToolAnnotations
 
 logger = logging.getLogger("arxiv-mcp-server")
 
@@ -16,6 +17,7 @@ SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
 
 citation_graph_tool = types.Tool(
     name="citation_graph",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Return papers citing an arXiv paper and papers that it references "
         "using Semantic Scholar's citation graph."

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import mcp.types as types
+from mcp.types import ToolAnnotations
+
 from dateutil import parser
 
 from ..config import Settings
@@ -21,6 +23,7 @@ WATCH_FILE_NAME = "watched_topics.json"
 
 watch_topic_tool = types.Tool(
     name="watch_topic",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     description=(
         "Save or update a persistent research topic watch. "
         "When checked via check_alerts, returns only papers published since the last check — "
@@ -59,6 +62,7 @@ watch_topic_tool = types.Tool(
 
 check_alerts_tool = types.Tool(
     name="check_alerts",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Check all saved topic watches for newly published papers since the last check. "
         "Omitting the topic parameter runs ALL saved watches and returns new papers for each. "
