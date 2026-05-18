@@ -2,19 +2,65 @@
 
 import pytest
 import json
-from unittest.mock import MagicMock, patch
-from pathlib import Path
+from unittest.mock import MagicMock
 
 import arxiv
-import httpx
 
 from arxiv_mcp_server.tools.download import (
     handle_download,
     get_paper_path,
     _html_to_text,
     _fetch_html_content,
+    _download_arxiv_pdf_to_path,
     PaperNotFoundError,
 )
+
+# ---------------------------------------------------------------------------
+# PDF download helper (httpx streaming)
+# ---------------------------------------------------------------------------
+
+
+def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
+    """_download_arxiv_pdf_to_path streams from paper.pdf_url; never calls download_pdf."""
+    import arxiv_mcp_server.tools.download as dl
+
+    stream_response = MagicMock()
+    stream_response.raise_for_status = MagicMock()
+    stream_response.iter_bytes.return_value = [b"chunk-one", b"chunk-two"]
+
+    stream_cm = MagicMock()
+    stream_cm.__enter__.return_value = stream_response
+    stream_cm.__exit__.return_value = False
+
+    http_client = MagicMock()
+    http_client.stream.return_value = stream_cm
+    http_client.__enter__.return_value = http_client
+    http_client.__exit__.return_value = False
+
+    mocker.patch.object(dl.httpx, "Client", return_value=http_client)
+
+    paper = MagicMock(spec=arxiv.Result)
+    paper.pdf_url = "https://arxiv.org/pdf/2103.00000.pdf"
+    dest = temp_storage_path / "paper.pdf"
+
+    _download_arxiv_pdf_to_path(paper, dest)
+
+    assert dest.read_bytes() == b"chunk-onechunk-two"
+    http_client.stream.assert_called_once()
+    assert http_client.stream.call_args[0][0] == "GET"
+    assert http_client.stream.call_args[0][1] == paper.pdf_url
+    paper.download_pdf.assert_not_called()
+
+
+def test_download_arxiv_pdf_requires_pdf_url(temp_storage_path):
+    """Missing pdf_url must fail fast with a clear error."""
+    paper = MagicMock(spec=arxiv.Result)
+    paper.pdf_url = None
+    dest = temp_storage_path / "missing.pdf"
+
+    with pytest.raises(ValueError, match="No PDF URL available"):
+        _download_arxiv_pdf_to_path(paper, dest)
+
 
 # ---------------------------------------------------------------------------
 # Unit tests for HTML parser
