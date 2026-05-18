@@ -78,6 +78,7 @@ semantic_search_tool = types.Tool(
                 "default": 10,
             },
         },
+        "additionalProperties": False,
     },
 )
 
@@ -97,6 +98,7 @@ reindex_tool = types.Tool(
                 "default": True,
             }
         },
+        "additionalProperties": False,
     },
 )
 

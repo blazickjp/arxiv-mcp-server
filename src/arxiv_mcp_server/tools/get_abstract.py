@@ -38,6 +38,7 @@ abstract_tool = types.Tool(
             }
         },
         "required": ["paper_id"],
+        "additionalProperties": False,
     },
 )
 

@@ -372,6 +372,7 @@ TIPS FOR FOUNDATIONAL RESEARCH:
             },
         },
         "required": ["query"],
+        "additionalProperties": False,
     },
 )
 

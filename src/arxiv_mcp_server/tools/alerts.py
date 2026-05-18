@@ -59,6 +59,7 @@ watch_topic_tool = types.Tool(
             },
         },
         "required": ["topic"],
+        "additionalProperties": False,
     },
 )
 
@@ -84,6 +85,7 @@ check_alerts_tool = types.Tool(
                 ),
             }
         },
+        "additionalProperties": False,
     },
 )
 
