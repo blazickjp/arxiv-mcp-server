@@ -128,6 +128,45 @@ async def test_cached_paper_returns_immediately(temp_storage_path, mocker):
     assert result["status"] == "success"
     assert result["source"] == "cache"
     assert "Cached Paper" in result["content"]
+    assert result["content_length"] == len("# Cached Paper\nThis is cached content.")
+    assert result["next_start"] is None
+    assert result["is_truncated"] is False
+    mock_httpx.assert_not_called()
+    mock_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_cache_supports_content_pagination(temp_storage_path, mocker):
+    """download_paper can return a bounded chunk to avoid MCP client truncation."""
+    paper_id = "2505.13525"
+
+    def fake_path(pid, suffix=".md"):
+        return temp_storage_path / f"{pid}{suffix}"
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+
+    md_path = temp_storage_path / f"{paper_id}.md"
+    content = "abcdefghijklmnopqrstuvwxyz"
+    md_path.write_text(content, encoding="utf-8")
+    mock_httpx = mocker.patch("arxiv_mcp_server.tools.download._fetch_html_content")
+    mock_pdf = mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download(
+        {"paper_id": paper_id, "start": 10, "max_chars": 5}
+    )
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["source"] == "cache"
+    assert result["content_length"] == len(content)
+    assert result["start"] == 10
+    assert result["returned_chars"] == 5
+    assert result["next_start"] == 15
+    assert result["is_truncated"] is True
+    chunk = result["content"].split("\n\n", 1)[1]
+    assert chunk == "klmno"
     mock_httpx.assert_not_called()
     mock_pdf.assert_not_called()
 

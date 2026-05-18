@@ -272,11 +272,18 @@ result = await call_tool("search_papers", {
 Supported categories include `cs.AI`, `cs.LG`, `cs.CL`, `cs.CV`, `cs.NE`, `stat.ML`, `math.OC`, `quant-ph`, `eess.SP`, and more. See tool description for the full list.
 
 ### 2. Paper Download
-Download a paper by its arXiv ID. Tries HTML first, falls back to PDF. Stores the paper locally for `read_paper` and `semantic_search`.
+Download a paper by its arXiv ID. Tries HTML first, falls back to PDF. Stores the paper locally for `read_paper` and `semantic_search`. The response includes `content_length`, `returned_chars`, `next_start`, and `is_truncated` so clients can safely page through very large papers without mistaking client-side output caps for failed downloads.
 
 ```python
 result = await call_tool("download_paper", {
     "paper_id": "2401.12345"
+})
+
+# For very large papers, request bounded chunks:
+result = await call_tool("download_paper", {
+    "paper_id": "2401.12345",
+    "start": 0,
+    "max_chars": 50000
 })
 ```
 
@@ -290,11 +297,17 @@ result = await call_tool("list_papers", {})
 ```
 
 ### 4. Read Paper
-Read the full text of a locally downloaded paper in markdown. **Requires `download_paper` to be called first.**
+Read the full text of a locally downloaded paper in markdown. **Requires `download_paper` to be called first.** Use `start` and `max_chars` with the returned `next_start` value to page through large papers.
 
 ```python
 result = await call_tool("read_paper", {
     "paper_id": "2401.12345"
+})
+
+result = await call_tool("read_paper", {
+    "paper_id": "2401.12345",
+    "start": 50000,
+    "max_chars": 50000
 })
 ```
 
