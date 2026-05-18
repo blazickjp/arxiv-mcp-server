@@ -97,7 +97,12 @@ Claude Desktop launches the bundled server over stdio — no configuration file 
 
 ### Installing Manually
 
-> **Important — use `uv tool install`, not `uv pip install`**
+> **Important — use `uv tool install`, not npm/pnpm or `uv pip install`**
+>
+> This project publishes the supported server as a Python package on PyPI.
+> Do **not** install `arxiv-mcp-server` with `npm install`, `pnpm add`, or
+> `npx arxiv-mcp-server`: the npm package with this name is an unrelated
+> third-party package and has its own Python-detection wrapper.
 >
 > Running `uv pip install arxiv-mcp-server` installs the package into the
 > current virtual environment but does **not** place the `arxiv-mcp-server`
