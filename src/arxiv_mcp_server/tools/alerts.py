@@ -23,7 +23,9 @@ WATCH_FILE_NAME = "watched_topics.json"
 
 watch_topic_tool = types.Tool(
     name="watch_topic",
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, openWorldHint=False
+    ),
     description=(
         "Save or update a persistent research topic watch. "
         "When checked via check_alerts, returns only papers published since the last check — "
