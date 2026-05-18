@@ -25,8 +25,11 @@ async def test_watch_topic_persists_topic(alerts_test_env):
         {"topic": "multi-agent systems", "categories": ["cs.AI"]}
     )
 
+    assert len(response) >= 1
     payload = json.loads(response[0].text)
     assert payload["status"] == "success"
+    assert "topic" in payload
+    assert isinstance(payload["topic"], dict)
     assert payload["topic"]["topic"] == "multi-agent systems"
 
 
@@ -53,7 +56,36 @@ async def test_check_alerts_returns_new_papers(monkeypatch, alerts_test_env):
     await alerts_module.handle_watch_topic({"topic": "agents"})
     response = await alerts_module.handle_check_alerts({})
 
+    assert len(response) >= 1
     payload = json.loads(response[0].text)
     assert payload["status"] == "success"
     assert payload["checked_topics"] == 1
+    assert "alerts" in payload
+    assert len(payload["alerts"]) >= 1
+    assert "new_paper_count" in payload["alerts"][0]
     assert payload["alerts"][0]["new_paper_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_handles_partial_paper_fields(monkeypatch, alerts_test_env):
+    """check_alerts must not raise KeyError when a paper entry is missing optional fields."""
+
+    async def _mock_partial(**kwargs):
+        return [
+            {
+                "id": "2501.00002",
+                "title": "Sparse Paper",
+                # "authors", "abstract", "url", "resource_uri" intentionally absent
+                "categories": ["cs.AI"],
+                "published": "2025-01-01T00:00:00Z",
+            }
+        ]
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_partial)
+
+    await alerts_module.handle_watch_topic({"topic": "agents"})
+    response = await alerts_module.handle_check_alerts({})
+
+    assert len(response) >= 1
+    payload = json.loads(response[0].text)
+    assert "status" in payload
