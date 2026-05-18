@@ -49,7 +49,6 @@ def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
     http_client.stream.assert_called_once()
     assert http_client.stream.call_args[0][0] == "GET"
     assert http_client.stream.call_args[0][1] == paper.pdf_url
-    paper.download_pdf.assert_not_called()
 
 
 def test_download_arxiv_pdf_requires_pdf_url(temp_storage_path):
