@@ -242,7 +242,9 @@ def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
         ),
     }
 
-    with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+    with httpx.Client(
+        timeout=timeout, follow_redirects=True, headers=headers
+    ) as client:
         with client.stream("GET", pdf_url) as response:
             response.raise_for_status()
             with pdf_path.open("wb") as out:
