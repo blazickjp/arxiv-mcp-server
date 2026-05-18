@@ -11,6 +11,7 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
+from .content import add_content_payload
 import logging
 
 _MAX_TRACKED_CONVERSIONS = 100  # prevent unbounded growth of conversion_statuses
@@ -146,10 +147,10 @@ download_tool = types.Tool(
     name="download_paper",
     annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True),
     description=(
-        "Download a paper from arXiv and return its full text content. "
+        "Download a paper from arXiv and return its text content. "
         "Tries the HTML version first for clean extraction; falls back to "
-        "PDF conversion if HTML is unavailable. Returns the paper content "
-        "directly so you can read it immediately."
+        "PDF conversion if HTML is unavailable. Stores the paper locally "
+        "and supports start/max_chars pagination for very large papers."
     ),
     inputSchema={
         "type": "object",
@@ -157,6 +158,16 @@ download_tool = types.Tool(
             "paper_id": {
                 "type": "string",
                 "description": "The arXiv ID of the paper to download (e.g. '2103.12345')",
+            },
+            "start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based character offset for returning large papers in chunks",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum raw paper characters to return from start; omit for full content",
             },
         },
         "required": ["paper_id"],
@@ -313,18 +324,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 asyncio.create_task(_run_index_by_id(paper_id))
             except RuntimeError:
                 pass
+            payload = add_content_payload(
+                {
+                    "status": "success",
+                    "message": "Paper already available (returned from cache)",
+                    "paper_id": paper_id,
+                    "source": "cache",
+                },
+                content,
+                arguments,
+                _CONTENT_WARNING,
+            )
             return [
                 types.TextContent(
                     type="text",
-                    text=json.dumps(
-                        {
-                            "status": "success",
-                            "message": "Paper already available (returned from cache)",
-                            "paper_id": paper_id,
-                            "source": "cache",
-                            "content": _CONTENT_WARNING + content,
-                        }
-                    ),
+                    text=json.dumps(payload),
                 )
             ]
 
@@ -339,18 +353,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 asyncio.create_task(_run_index_by_id(paper_id))
             except RuntimeError:
                 pass
+            payload = add_content_payload(
+                {
+                    "status": "success",
+                    "message": "Paper fetched from arXiv HTML endpoint",
+                    "paper_id": paper_id,
+                    "source": "html",
+                },
+                html_text,
+                arguments,
+                _CONTENT_WARNING,
+            )
             return [
                 types.TextContent(
                     type="text",
-                    text=json.dumps(
-                        {
-                            "status": "success",
-                            "message": "Paper fetched from arXiv HTML endpoint",
-                            "paper_id": paper_id,
-                            "source": "html",
-                            "content": _CONTENT_WARNING + html_text,
-                        }
-                    ),
+                    text=json.dumps(payload),
                 )
             ]
 
@@ -384,18 +401,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         except RuntimeError:
             pass
 
+        payload = add_content_payload(
+            {
+                "status": "success",
+                "message": "Paper fetched via PDF conversion",
+                "paper_id": paper_id,
+                "source": "pdf",
+            },
+            markdown,
+            arguments,
+            _CONTENT_WARNING,
+        )
         return [
             types.TextContent(
                 type="text",
-                text=json.dumps(
-                    {
-                        "status": "success",
-                        "message": "Paper fetched via PDF conversion",
-                        "paper_id": paper_id,
-                        "source": "pdf",
-                        "content": _CONTENT_WARNING + markdown,
-                    }
-                ),
+                text=json.dumps(payload),
             )
         ]
 

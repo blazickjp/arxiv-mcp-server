@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
+from .content import add_content_payload
 
 settings = Settings()
 
@@ -19,8 +20,8 @@ read_tool = types.Tool(
     name="read_paper",
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
-        "Read the full text content of a paper that was previously downloaded via download_paper. "
-        "Returns the paper in markdown format. "
+        "Read the text content of a paper that was previously downloaded via download_paper. "
+        "Returns the paper in markdown format and supports start/max_chars pagination for large papers. "
         "Will fail with a clear error if the paper has not been downloaded yet — call download_paper first. "
         "Workflow: search_papers -> download_paper -> read_paper."
     ),
@@ -30,7 +31,17 @@ read_tool = types.Tool(
             "paper_id": {
                 "type": "string",
                 "description": "The arXiv ID of the paper to read",
-            }
+            },
+            "start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based character offset for reading large papers in chunks",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum raw paper characters to return from start; omit for full content",
+            },
         },
         "required": ["paper_id"],
         "additionalProperties": False,
@@ -67,16 +78,20 @@ async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent
             encoding="utf-8"
         )
 
+        payload = add_content_payload(
+            {
+                "status": "success",
+                "paper_id": paper_id,
+            },
+            content,
+            arguments,
+            _CONTENT_WARNING,
+        )
+
         return [
             types.TextContent(
                 type="text",
-                text=json.dumps(
-                    {
-                        "status": "success",
-                        "paper_id": paper_id,
-                        "content": _CONTENT_WARNING + content,
-                    }
-                ),
+                text=json.dumps(payload),
             )
         ]
 
