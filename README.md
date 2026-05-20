@@ -77,10 +77,10 @@ Agentic AI framework as **AG01: Prompt Injection in LLM-Integrated Systems**.
 
 ### Installing via Smithery
 
-To install ArXiv Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/arxiv-mcp-server):
+To install ArXiv Server for Claude Desktop automatically via [Smithery](https://smithery.ai/servers/cyanheads/arxiv-mcp-server):
 
 ```bash
-npx -y @smithery/cli install arxiv-mcp-server --client claude
+npx -y @smithery/cli install @cyanheads/arxiv-mcp-server --client claude
 ```
 
 ### Installing via Claude Desktop (.mcpb)
