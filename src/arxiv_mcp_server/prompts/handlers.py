@@ -101,14 +101,16 @@ async def get_prompt(
     elif name == "summarize_paper":
         content = (
             f"Summarize paper {paper_id}.\n\n"
-            "Use list_papers/download_paper/read_paper as needed before summarizing.\n\n"
+            "Use get_abstract for metadata and abstract. Use read_paper only if a markdown cache exists; "
+            "download_paper saves the original PDF but does not create markdown.\n\n"
             f"{SUMMARIZE_PAPER_PROMPT}"
         )
     elif name == "compare_papers":
         paper_ids = arguments.get("paper_ids", "")
         content = (
             f"Compare papers: {paper_ids}.\n\n"
-            "Use list_papers/download_paper/read_paper to gather full text for each paper.\n\n"
+            "Use get_abstract for each paper. Use read_paper only for papers with existing markdown caches; "
+            "download_paper saves original PDFs but does not create markdown.\n\n"
             f"{COMPARE_PAPERS_PROMPT}"
         )
     else:

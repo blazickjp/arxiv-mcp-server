@@ -53,12 +53,11 @@ semantic_search_tool = types.Tool(
     name="semantic_search",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
-        "Semantic similarity search over papers you have already downloaded locally via download_paper. "
+        "Semantic similarity search over papers with existing markdown content in local storage. "
         "Supports free-text queries (e.g. 'attention mechanisms for long sequences') or finding papers "
         "similar to a given paper_id. "
-        "IMPORTANT: only searches your local downloaded collection — will return empty results if no papers "
-        "have been downloaded yet. Use search_papers to find papers on arXiv, then download_paper to add "
-        "them to the local index before using this tool. "
+        "IMPORTANT: only searches the local semantic index and returns empty results if no markdown papers "
+        "have been indexed yet. PDF files saved by download_paper are not parsed or indexed automatically. "
         'Requires pro dependencies: uv pip install -e ".[pro]"'
     ),
     inputSchema={

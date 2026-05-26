@@ -25,6 +25,7 @@ mcpb-build/
 *.DS_Store
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/

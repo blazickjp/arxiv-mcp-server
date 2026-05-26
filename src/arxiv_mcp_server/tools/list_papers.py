@@ -3,15 +3,17 @@
 import json
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 import mcp.types as types
 from mcp.types import ToolAnnotations
+
 from ..config import Settings
 
 settings = Settings()
 
 # Matches both new-style (YYMM.NNNNN) and old-style (cat/YYMMNNN) arXiv IDs,
-# with optional version suffix (v1, v2, …).
+# with optional version suffix (v1, v2, ...).
 _ARXIV_ID_RE = re.compile(
     r"^(\d{4}\.\d{4,5}(v\d+)?"  # new-style: 2404.18922 or 2404.18922v3
     r"|[a-z\-]+(/[a-z\-]+)?/\d{7}(v\d+)?)$",  # old-style: hep-ph/9901234
@@ -28,10 +30,9 @@ list_tool = types.Tool(
     name="list_papers",
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
-        "List all papers that have been downloaded and stored locally via download_paper. "
-        "Returns arXiv IDs only — use read_paper to access content. "
-        "Returns an empty list if no papers have been downloaded yet. "
-        "Workflow: search_papers -> download_paper -> list_papers -> read_paper."
+        "List all papers that have existing markdown content in local storage. "
+        "Returns arXiv IDs only; use read_paper to access cached markdown content. "
+        "This does not list PDFs downloaded by download_paper."
     ),
     inputSchema={
         "type": "object",
@@ -43,11 +44,11 @@ list_tool = types.Tool(
 
 
 def list_papers() -> list[str]:
-    """List all stored paper IDs.
+    """List all stored markdown paper IDs.
 
     Returns an empty list if the storage directory does not exist yet or
-    contains no .md files.  Only plain files with the .md suffix are
-    considered; sub-directories and other file types are silently ignored.
+    contains no .md files. Only plain files with the .md suffix are considered;
+    sub-directories and other file types are silently ignored.
     """
     storage = Path(settings.STORAGE_PATH)
     if not storage.exists():
@@ -62,11 +63,10 @@ def list_papers() -> list[str]:
 async def handle_list_papers(
     arguments: Optional[Dict[str, Any]] = None,
 ) -> List[types.TextContent]:
-    """Handle requests to list all stored papers."""
+    """Handle requests to list all stored markdown papers."""
     try:
         papers = list_papers()
 
-        # Short-circuit: nothing stored yet — avoid an empty arXiv API call
         if not papers:
             return [
                 types.TextContent(

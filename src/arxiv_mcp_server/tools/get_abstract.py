@@ -27,7 +27,7 @@ abstract_tool = types.Tool(
         "Fetch the abstract and metadata of an arXiv paper by ID, WITHOUT downloading the full paper. "
         "Use this before download_paper to assess relevance and save tokens. "
         "Returns: title, authors, abstract, categories, published date, and PDF URL. "
-        "Workflow tip: search_papers -> get_abstract (check relevance) -> download_paper (if needed) -> read_paper."
+        "Workflow tip: search_papers -> get_abstract (check relevance) -> download_paper (if you need the PDF)."
     ),
     inputSchema={
         "type": "object",
