@@ -115,13 +115,6 @@ uv tool install arxiv-mcp-server
 
 After this, the `arxiv-mcp-server` command will be available on your `PATH`.
 
-> **PDF fallback (older papers):** Most arXiv papers have an HTML version which
-> the base install handles automatically. For older papers that only have a PDF,
-> the server needs the `[pdf]` extra (pymupdf4llm). Install it with:
->
-> ```bash
-> uv tool install 'arxiv-mcp-server[pdf]'
-> ```
 You can verify it with:
 
 ```bash
@@ -246,18 +239,20 @@ without review. See [SECURITY.md](SECURITY.md) for the full security policy.
 
 ### Core Workflow
 
-The typical workflow for deep paper research is:
+The typical workflow for finding and saving papers is:
 
 ```
-search_papers → download_paper → read_paper
+search_papers → get_abstract → download_paper
 ```
 
-`list_papers` shows what you have locally. `semantic_search` searches across your local collection.
+`download_paper` saves the original arXiv PDF locally. `read_paper` and `list_papers`
+operate only on existing markdown caches; they do not parse PDFs downloaded by
+`download_paper`.
 
 ---
 
 ### 1. Paper Search
-Search arXiv with optional category, date, and boolean filters. Enforces arXiv's 3-second rate limit automatically. If rate limited, wait 60 seconds before retrying.
+Search arXiv with optional category, date, and boolean filters. Enforces arXiv's 3-second rate limit automatically. If rate limited, wait 10 minutes before retrying.
 
 ```python
 result = await call_tool("search_papers", {
@@ -272,32 +267,37 @@ result = await call_tool("search_papers", {
 Supported categories include `cs.AI`, `cs.LG`, `cs.CL`, `cs.CV`, `cs.NE`, `stat.ML`, `math.OC`, `quant-ph`, `eess.SP`, and more. See tool description for the full list.
 
 ### 2. Paper Download
-Download a paper by its arXiv ID. Tries HTML first, falls back to PDF. Stores the paper locally for `read_paper` and `semantic_search`. The response includes `content_length`, `returned_chars`, `next_start`, and `is_truncated` so clients can safely page through very large papers without mistaking client-side output caps for failed downloads.
+Download the original arXiv PDF by paper ID. The file is streamed directly from
+`https://arxiv.org/pdf/{paper_id}`, validated as a PDF, and saved locally. This
+tool does not extract text, convert to markdown, or update the semantic-search
+index. The response includes the saved path, filename, source PDF URL, and file
+size.
 
 ```python
 result = await call_tool("download_paper", {
     "paper_id": "2401.12345"
 })
 
-# For very large papers, request bounded chunks:
+# Optional: choose the output directory and filename.
 result = await call_tool("download_paper", {
     "paper_id": "2401.12345",
-    "start": 0,
-    "max_chars": 50000
+    "output_dir": "/path/to/pdfs",
+    "filename": "attention-paper.pdf"
 })
 ```
 
-> For older papers that only have a PDF, install the `[pdf]` extra: `uv tool install 'arxiv-mcp-server[pdf]'`
-
 ### 3. List Papers
-List all papers downloaded locally. Returns arXiv IDs only — use `read_paper` to access content.
+List paper IDs that already have markdown content in local storage. This does
+not list PDFs saved by `download_paper`.
 
 ```python
 result = await call_tool("list_papers", {})
 ```
 
 ### 4. Read Paper
-Read the full text of a locally downloaded paper in markdown. **Requires `download_paper` to be called first.** Use `start` and `max_chars` with the returned `next_start` value to page through large papers.
+Read the full text of a paper from an existing markdown cache. This does not
+parse PDFs saved by `download_paper`. Use `start` and `max_chars` with the
+returned `next_start` value to page through large markdown files.
 
 ```python
 result = await call_tool("read_paper", {
@@ -327,7 +327,7 @@ result = await call_prompt("deep-paper-analysis", {
 ```
 
 This prompt includes:
-- Detailed instructions for using available tools (list_papers, download_paper, read_paper, search_papers)
+- Detailed instructions for using available tools (search_papers, get_abstract, download_paper, list_papers, read_paper)
 - A systematic workflow for paper analysis
 - Comprehensive analysis structure covering:
   - Executive summary
