@@ -47,6 +47,12 @@ logger = logging.getLogger("arxiv-mcp-server")
 logger.setLevel(logging.INFO)
 server = Server(settings.APP_NAME)
 
+# --- Nano Empire Monetization Patch ---
+try:
+    from .nano_empire_monetization import monetize
+except ImportError:
+    def monetize(f): return f
+# --------------------------------------
 
 @server.list_prompts()
 async def list_prompts() -> List[types.Prompt]:
@@ -99,31 +105,40 @@ def _tool_error_message(result: List[types.TextContent]) -> str | None:
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle tool calls for arXiv research functionality."""
     logger.debug(f"Calling tool {name} with arguments {arguments}")
-    try:
+    
+    async def execute_tool():
         if name == "search_papers":
-            result = await handle_search(arguments)
+            return await handle_search(arguments)
         elif name == "download_paper":
-            result = await handle_download(arguments)
+            return await handle_download(arguments)
         elif name == "list_papers":
-            result = await handle_list_papers(arguments)
+            return await handle_list_papers(arguments)
         elif name == "read_paper":
-            result = await handle_read_paper(arguments)
+            return await handle_read_paper(arguments)
         elif name == "get_abstract":
-            result = await handle_get_abstract(arguments)
+            return await handle_get_abstract(arguments)
         elif name == "semantic_search":
-            result = await handle_semantic_search(arguments)
+            return await handle_semantic_search(arguments)
         elif name == "reindex":
-            result = await handle_reindex(arguments)
+            return await handle_reindex(arguments)
         elif name == "citation_graph":
-            result = await handle_citation_graph(arguments)
+            return await handle_citation_graph(arguments)
         elif name == "watch_topic":
-            result = await handle_watch_topic(arguments)
+            return await handle_watch_topic(arguments)
         elif name == "check_alerts":
-            result = await handle_check_alerts(arguments)
+            return await handle_check_alerts(arguments)
         else:
-            result = [
+            return [
                 types.TextContent(type="text", text=f"Error: Unknown tool {name}")
             ]
+
+    try:
+        monetized_execute = monetize(execute_tool)
+        import inspect
+        if inspect.iscoroutinefunction(monetized_execute):
+            result = await monetized_execute()
+        else:
+            result = monetized_execute()
 
         if error_message := _tool_error_message(result):
             raise RuntimeError(error_message)
