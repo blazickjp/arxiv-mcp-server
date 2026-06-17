@@ -47,7 +47,10 @@ async def _s2_get(client, url, *, max_retries=4, base_delay=1.0):
     max_retries times (max_retries + 1 total GETs). Honors a numeric Retry-After
     header on status responses (clamped to MAX_RETRY_DELAY); transport errors use
     jittered exponential backoff. Returns the final response (caller still calls
-    raise_for_status())."""
+    raise_for_status()).
+
+    Worst-case blocking per call is bounded by max_retries * MAX_RETRY_DELAY
+    (~64s); the paginated path makes three such calls sequentially."""
     response = None
     for attempt in range(max_retries + 1):
         try:

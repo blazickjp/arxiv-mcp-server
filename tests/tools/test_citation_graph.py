@@ -1148,3 +1148,32 @@ async def test_citation_graph_negative_cap_ignored(monkeypatch):
     assert "truncated" not in result
     assert result["citation_count"] == 2
     assert len(result["citations"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_cap_zero(monkeypatch):
+    """A cap of 0 is a real "zero edges" request: empty lists + truncated when
+    edges existed (distinct from None/negative = no cap)."""
+    monkeypatch.setattr(citation_graph.settings, "CITATION_MAX_EDGES", 0)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = _legacy_mock_payload()  # 1 citation + 1 ref
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    result = json.loads(response[0].text)
+    assert result["citation_count"] == 0
+    assert result["reference_count"] == 0
+    assert result["citations"] == []
+    assert result["references"] == []
+    assert result["truncated"] is True
