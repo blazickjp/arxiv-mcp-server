@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
     CITATION_MAX_EDGES: int | None = None
+    SEMANTIC_SCHOLAR_API_KEY: str | None = None
     model_config = SettingsConfigDict(extra="allow")
 
     @property

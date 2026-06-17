@@ -358,6 +358,7 @@ Configure through command-line options and environment variables:
 | `PORT` | Port to listen on in HTTP mode | `8000` |
 | `ALLOWED_HOSTS` | Comma-separated extra allowed Host header values for Streamable HTTP DNS rebinding protection | empty |
 | `ALLOWED_ORIGINS` | Comma-separated extra allowed Origin header values for Streamable HTTP DNS rebinding protection | empty |
+| `SEMANTIC_SCHOLAR_API_KEY` | Optional Semantic Scholar API key. When set, `citation_graph` sends it as the `x-api-key` header; per [Semantic Scholar's docs](https://www.semanticscholar.org/product/api) this grants a higher authenticated request-rate limit. When unset, requests are unauthenticated (unchanged behavior). | empty |
 
 ## 🧪 Testing
 

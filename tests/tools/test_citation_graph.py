@@ -1151,6 +1151,105 @@ async def test_citation_graph_negative_cap_ignored(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_citation_graph_sends_api_key(monkeypatch):
+    """When SEMANTIC_SCHOLAR_API_KEY is set, the legacy path sends it as the
+    `x-api-key` header on the S2 request."""
+    monkeypatch.setattr(
+        citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", "secret-key"
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = _legacy_mock_payload()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345"})
+
+    sent_headers = mock_client.get.call_args.kwargs["headers"]
+    assert sent_headers.get("x-api-key") == "secret-key"
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_no_api_key_no_header():
+    """With no API key configured (default None), the `headers` kwarg carries no
+    `x-api-key` (byte-for-byte unauthenticated behavior is preserved)."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = _legacy_mock_payload()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345"})
+
+    sent_headers = mock_client.get.call_args.kwargs["headers"]
+    assert "x-api-key" not in sent_headers
+    assert sent_headers == {}
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_api_key_paginated(monkeypatch):
+    """When the API key is set, ALL THREE paginated sub-requests (root,
+    /citations, /references) carry the `x-api-key` header."""
+    monkeypatch.setattr(
+        citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", "secret-key"
+    )
+
+    root_response = MagicMock()
+    root_response.status_code = 200
+    root_response.headers = {}
+    root_response.raise_for_status = MagicMock()
+    root_response.json.return_value = {
+        "paperId": "root-paper",
+        "title": "Root Paper",
+        "year": 2024,
+        "authors": [{"name": "Author A"}],
+        "externalIds": {"ArXiv": "2401.12345"},
+    }
+
+    citations_response = MagicMock()
+    citations_response.status_code = 200
+    citations_response.headers = {}
+    citations_response.raise_for_status = MagicMock()
+    citations_response.json.return_value = {"offset": 0, "data": []}
+
+    references_response = MagicMock()
+    references_response.status_code = 200
+    references_response.headers = {}
+    references_response.raise_for_status = MagicMock()
+    references_response.json.return_value = {"offset": 0, "data": []}
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=[root_response, citations_response, references_response]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345", "limit": 5})
+
+    assert mock_client.get.await_count == 3
+    for call in mock_client.get.call_args_list:
+        assert call.kwargs["headers"].get("x-api-key") == "secret-key"
+
+
+@pytest.mark.asyncio
 async def test_citation_graph_cap_zero(monkeypatch):
     """A cap of 0 is a real "zero edges" request: empty lists + truncated when
     edges existed (distinct from None/negative = no cap)."""

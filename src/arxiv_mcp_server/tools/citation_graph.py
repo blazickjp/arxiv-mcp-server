@@ -18,6 +18,14 @@ from ..config import Settings
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
 
+
+def _auth_headers() -> Dict[str, str]:
+    """x-api-key header when SEMANTIC_SCHOLAR_API_KEY is configured, else {}.
+    Absent key -> no header -> identical unauthenticated behavior."""
+    key = settings.SEMANTIC_SCHOLAR_API_KEY
+    return {"x-api-key": key} if key else {}
+
+
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
 
 # Cap on any single backoff sleep. asyncio.sleep is NOT covered by the httpx
@@ -40,7 +48,7 @@ def _backoff_delay(retry_after, base_delay, attempt):
     return random.uniform(0, min(base_delay * (2**attempt), MAX_RETRY_DELAY))
 
 
-async def _s2_get(client, url, *, max_retries=4, base_delay=1.0):
+async def _s2_get(client, url, *, headers=None, max_retries=4, base_delay=1.0):
     """GET with backoff on transient failures (S2 rate limits / 5xx / transport).
 
     Retries on RETRYABLE_STATUS responses and httpx.TransportError up to
@@ -54,7 +62,7 @@ async def _s2_get(client, url, *, max_retries=4, base_delay=1.0):
     response = None
     for attempt in range(max_retries + 1):
         try:
-            response = await client.get(url)
+            response = await client.get(url, headers=headers or {})
         except httpx.TransportError:
             if attempt == max_retries:
                 raise
@@ -208,12 +216,13 @@ async def _handle_citation_graph_paginated(
         f"?fields={page_fields}&limit={page_limit}&offset={page_offset}"
     )
 
+    headers = _auth_headers()
     async with httpx.AsyncClient(timeout=30.0) as client:
-        root_response = await _s2_get(client, root_url)
+        root_response = await _s2_get(client, root_url, headers=headers)
         root_response.raise_for_status()
-        citations_response = await _s2_get(client, citations_url)
+        citations_response = await _s2_get(client, citations_url, headers=headers)
         citations_response.raise_for_status()
-        references_response = await _s2_get(client, references_url)
+        references_response = await _s2_get(client, references_url, headers=headers)
         references_response.raise_for_status()
 
     root_payload = root_response.json()
@@ -323,8 +332,9 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
         url = f"{SEMANTIC_SCHOLAR_BASE_URL}/{s2_paper_identifier}?fields={fields}"
 
+        headers = _auth_headers()
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await _s2_get(client, url)
+            response = await _s2_get(client, url, headers=headers)
             response.raise_for_status()
 
         payload = response.json()
