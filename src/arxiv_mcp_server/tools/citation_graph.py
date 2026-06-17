@@ -23,15 +23,20 @@ def _auth_headers() -> Dict[str, str]:
     """x-api-key header when SEMANTIC_SCHOLAR_API_KEY is configured, else {}.
 
     Absent key -> no header -> identical unauthenticated behavior. The key is
-    stripped and validated for illegal header characters (control chars); an
-    invalid key is ignored (warned WITHOUT echoing its value) so a malformed
-    key (e.g. a stray trailing newline) can never reach the HTTP layer and leak
-    back through an exception message into logs or returned error text."""
+    stripped and accepted only if it is entirely printable ASCII (0x20-0x7e);
+    any other key (control chars, or non-ASCII like U+2028) is dropped and
+    warned WITHOUT echoing its value. This makes the no-leak guarantee
+    self-contained: a malformed key never reaches the HTTP layer, so it can
+    never be echoed back through an h11/httpx exception message into logs or
+    returned error text (independent of the dependency's error formatting)."""
     key = (settings.SEMANTIC_SCHOLAR_API_KEY or "").strip()
     if not key:
         return {}
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in key):
-        logger.warning("Ignoring invalid SEMANTIC_SCHOLAR_API_KEY (illegal characters)")
+    if any(not (32 <= ord(ch) <= 126) for ch in key):
+        logger.warning(
+            "Ignoring invalid SEMANTIC_SCHOLAR_API_KEY "
+            "(must be printable ASCII; non-printable or non-ASCII characters)"
+        )
         return {}
     return {"x-api-key": key}
 

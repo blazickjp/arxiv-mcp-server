@@ -1309,6 +1309,30 @@ async def test_citation_graph_whitespace_key_stripped(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_citation_graph_nonascii_key_ignored(monkeypatch, caplog):
+    """A non-ASCII key (e.g. U+2028) is dropped before reaching httpx, and the
+    warning never echoes the key value (self-contained no-leak guarantee)."""
+    monkeypatch.setattr(
+        citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", "secret\u2028key"
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_legacy_200_mock())
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        with caplog.at_level("WARNING"):
+            response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    assert mock_client.get.call_args.kwargs["headers"] == {}
+    assert "secret" not in response[0].text
+    assert "secret" not in caplog.text
+    assert json.loads(response[0].text)["status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_citation_graph_api_key_paginated_unset(monkeypatch):
     """With no key, ALL THREE paginated sub-requests carry no `x-api-key`."""
     monkeypatch.setattr(citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", None)
