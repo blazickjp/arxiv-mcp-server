@@ -823,3 +823,328 @@ async def test_citation_graph_cap_unset_no_key():
         response = await handle_citation_graph({"paper_id": "2401.12345"})
 
     assert "truncated" not in json.loads(response[0].text)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_retries_on_5xx():
+    """A transient 503 is retried; the subsequent 200 legacy payload succeeds."""
+    server_error = MagicMock()
+    server_error.status_code = 503
+    server_error.headers = {}
+
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    ok_response.headers = {}
+    ok_response.raise_for_status = MagicMock()
+    ok_response.json.return_value = _legacy_mock_payload()
+
+    with (
+        patch("httpx.AsyncClient") as mock_client_class,
+        patch("arxiv_mcp_server.tools.citation_graph.asyncio.sleep", new=AsyncMock()),
+    ):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[server_error, ok_response])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert mock_client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_retries_on_transport_error():
+    """A transport error (ConnectError) is retried; the next 200 succeeds."""
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    ok_response.headers = {}
+    ok_response.raise_for_status = MagicMock()
+    ok_response.json.return_value = _legacy_mock_payload()
+
+    with (
+        patch("httpx.AsyncClient") as mock_client_class,
+        patch("arxiv_mcp_server.tools.citation_graph.asyncio.sleep", new=AsyncMock()),
+    ):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=[httpx.ConnectError("boom"), ok_response]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert mock_client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_retry_after_clamped():
+    """An absurd Retry-After is clamped to MAX_RETRY_DELAY, not slept literally."""
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"Retry-After": "99999"}
+
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    ok_response.headers = {}
+    ok_response.raise_for_status = MagicMock()
+    ok_response.json.return_value = _legacy_mock_payload()
+
+    sleep_mock = AsyncMock()
+    with (
+        patch("httpx.AsyncClient") as mock_client_class,
+        patch("arxiv_mcp_server.tools.citation_graph.asyncio.sleep", new=sleep_mock),
+    ):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[rate_limited, ok_response])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345"})
+
+    # Clamped to MAX_RETRY_DELAY (16.0), NOT the literal 99999.
+    sleep_mock.assert_awaited_once_with(16.0)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_backoff_jitter():
+    """With no Retry-After, the backoff uses jittered random.uniform."""
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {}
+
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    ok_response.headers = {}
+    ok_response.raise_for_status = MagicMock()
+    ok_response.json.return_value = _legacy_mock_payload()
+
+    sleep_mock = AsyncMock()
+    with (
+        patch("httpx.AsyncClient") as mock_client_class,
+        patch("arxiv_mcp_server.tools.citation_graph.asyncio.sleep", new=sleep_mock),
+        patch(
+            "arxiv_mcp_server.tools.citation_graph.random.uniform", return_value=0.5
+        ) as uniform_mock,
+    ):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[rate_limited, ok_response])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345"})
+
+    uniform_mock.assert_called()
+    sleep_mock.assert_awaited_once_with(0.5)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_paginated_retries():
+    """The paginated path retries a 429 on a sub-request and still succeeds."""
+    root_response = MagicMock()
+    root_response.status_code = 200
+    root_response.headers = {}
+    root_response.raise_for_status = MagicMock()
+    root_response.json.return_value = {
+        "paperId": "root-paper",
+        "title": "Root Paper",
+        "year": 2024,
+        "authors": [{"name": "Author A"}],
+        "externalIds": {"ArXiv": "2401.12345"},
+    }
+
+    citations_429 = MagicMock()
+    citations_429.status_code = 429
+    citations_429.headers = {}
+
+    citations_ok = MagicMock()
+    citations_ok.status_code = 200
+    citations_ok.headers = {}
+    citations_ok.raise_for_status = MagicMock()
+    citations_ok.json.return_value = {
+        "offset": 0,
+        "next": 5,
+        "data": [
+            {
+                "citingPaper": {
+                    "paperId": "citing-1",
+                    "title": "Citing Paper",
+                    "year": 2025,
+                    "authors": [{"name": "Author B"}],
+                    "externalIds": {"ArXiv": "2501.00001"},
+                }
+            }
+        ],
+    }
+
+    references_response = MagicMock()
+    references_response.status_code = 200
+    references_response.headers = {}
+    references_response.raise_for_status = MagicMock()
+    references_response.json.return_value = {"offset": 0, "data": []}
+
+    with (
+        patch("httpx.AsyncClient") as mock_client_class,
+        patch("arxiv_mcp_server.tools.citation_graph.asyncio.sleep", new=AsyncMock()),
+    ):
+        mock_client = AsyncMock()
+        # root, citations(429), citations(200 retry), references.
+        mock_client.get = AsyncMock(
+            side_effect=[
+                root_response,
+                citations_429,
+                citations_ok,
+                references_response,
+            ]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345", "limit": 5})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert "pagination" in payload
+    assert payload["citation_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_paginated_no_cap(monkeypatch):
+    """The output cap must NOT apply in the paginated path (cursor integrity)."""
+    monkeypatch.setattr(citation_graph.settings, "CITATION_MAX_EDGES", 1)
+
+    root_response = MagicMock()
+    root_response.status_code = 200
+    root_response.headers = {}
+    root_response.raise_for_status = MagicMock()
+    root_response.json.return_value = {
+        "paperId": "root-paper",
+        "title": "Root Paper",
+        "year": 2024,
+        "authors": [{"name": "Author A"}],
+        "externalIds": {"ArXiv": "2401.12345"},
+    }
+
+    citations_response = MagicMock()
+    citations_response.status_code = 200
+    citations_response.headers = {}
+    citations_response.raise_for_status = MagicMock()
+    citations_response.json.return_value = {
+        "offset": 0,
+        "next": 5,
+        "data": [
+            {
+                "citingPaper": {
+                    "paperId": "citing-1",
+                    "title": "Citing Paper",
+                    "year": 2025,
+                    "authors": [{"name": "Author B"}],
+                    "externalIds": {"ArXiv": "2501.00001"},
+                }
+            },
+            {
+                "citingPaper": {
+                    "paperId": "citing-2",
+                    "title": "Citing Paper 2",
+                    "year": 2025,
+                    "authors": [{"name": "Author D"}],
+                    "externalIds": {"ArXiv": "2501.00002"},
+                }
+            },
+        ],
+    }
+
+    references_response = MagicMock()
+    references_response.status_code = 200
+    references_response.headers = {}
+    references_response.raise_for_status = MagicMock()
+    references_response.json.return_value = {
+        "offset": 0,
+        "next": 5,
+        "data": [
+            {
+                "citedPaper": {
+                    "paperId": "ref-1",
+                    "title": "Referenced Paper",
+                    "year": 2020,
+                    "authors": [{"name": "Author C"}],
+                    "externalIds": {"ArXiv": "2001.00001"},
+                }
+            },
+            {
+                "citedPaper": {
+                    "paperId": "ref-2",
+                    "title": "Referenced Paper 2",
+                    "year": 2019,
+                    "authors": [{"name": "Author E"}],
+                    "externalIds": {"ArXiv": "2001.00002"},
+                }
+            },
+        ],
+    }
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=[root_response, citations_response, references_response]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345", "limit": 5})
+
+    payload = json.loads(response[0].text)
+    # Cap (1) is NOT applied in the paginated path: full page returned, no flag.
+    assert "truncated" not in payload
+    assert payload["citation_count"] == 2
+    assert payload["reference_count"] == 2
+    assert len(payload["citations"]) == 2
+    assert len(payload["references"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_negative_cap_ignored(monkeypatch):
+    """A negative cap is treated as "no cap" (no negative-slice truncation)."""
+    monkeypatch.setattr(citation_graph.settings, "CITATION_MAX_EDGES", -1)
+
+    payload = _legacy_mock_payload()
+    payload["citations"].append(
+        {
+            "paperId": "citing-2",
+            "title": "Citing Paper 2",
+            "year": 2025,
+            "authors": [{"name": "Author D"}],
+            "externalIds": {"ArXiv": "2501.00002"},
+        }
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = payload
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    result = json.loads(response[0].text)
+    # Negative cap == no cap: both citations returned, no truncation flag.
+    assert "truncated" not in result
+    assert result["citation_count"] == 2
+    assert len(result["citations"]) == 2

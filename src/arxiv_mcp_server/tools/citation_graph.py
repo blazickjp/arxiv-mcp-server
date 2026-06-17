@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -19,23 +20,47 @@ settings = Settings()
 
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
 
+# Cap on any single backoff sleep. asyncio.sleep is NOT covered by the httpx
+# request timeout, so an unbounded server-supplied Retry-After (or an unbounded
+# exponential backoff) could otherwise hang the tool for hours.
+MAX_RETRY_DELAY = 16.0
 
-async def _s2_get(client, url, *, headers=None, max_retries=4, base_delay=1.0):
-    """GET with exponential backoff on HTTP 429 (S2 unauthenticated rate limit).
+# Transient HTTP statuses worth retrying. 500 is deliberately excluded: it is
+# often a permanent server-side error, not a transient one.
+RETRYABLE_STATUS = {429, 502, 503, 504}
 
-    Honors a numeric Retry-After header when present. Returns the final response
-    (caller still calls raise_for_status())."""
-    response = await client.get(url, headers=headers or {})
-    for attempt in range(max_retries):
-        if response.status_code != 429:
+
+def _backoff_delay(retry_after, base_delay, attempt):
+    """Compute the next sleep, clamped to MAX_RETRY_DELAY.
+
+    A numeric Retry-After (status responses only) is honored but clamped. Absent
+    that, full jitter over the clamped exponential window is used."""
+    if retry_after is not None and str(retry_after).isdigit():
+        return min(float(retry_after), MAX_RETRY_DELAY)
+    return random.uniform(0, min(base_delay * (2**attempt), MAX_RETRY_DELAY))
+
+
+async def _s2_get(client, url, *, max_retries=4, base_delay=1.0):
+    """GET with backoff on transient failures (S2 rate limits / 5xx / transport).
+
+    Retries on RETRYABLE_STATUS responses and httpx.TransportError up to
+    max_retries times (max_retries + 1 total GETs). Honors a numeric Retry-After
+    header on status responses (clamped to MAX_RETRY_DELAY); transport errors use
+    jittered exponential backoff. Returns the final response (caller still calls
+    raise_for_status())."""
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.get(url)
+        except httpx.TransportError:
+            if attempt == max_retries:
+                raise
+            await asyncio.sleep(_backoff_delay(None, base_delay, attempt))
+            continue
+        if response.status_code not in RETRYABLE_STATUS or attempt == max_retries:
             return response
         retry_after = response.headers.get("Retry-After")
-        if retry_after is not None and str(retry_after).isdigit():
-            delay = float(retry_after)
-        else:
-            delay = base_delay * (2**attempt)
-        await asyncio.sleep(delay)
-        response = await client.get(url, headers=headers or {})
+        await asyncio.sleep(_backoff_delay(retry_after, base_delay, attempt))
     return response
 
 
@@ -44,9 +69,13 @@ def _apply_edge_cap(
     references: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
     """Truncate edge lists to settings.CITATION_MAX_EDGES (per direction) when
-    configured. Returns (citations, references, truncated: bool)."""
+    configured. Returns (citations, references, truncated: bool).
+
+    A negative cap is treated as "no cap" (graceful handling of bad config) so a
+    negative value never produces the surprising `lst[:-n]` slice. cap == 0 is a
+    valid "return zero edges" request."""
     cap: Optional[int] = settings.CITATION_MAX_EDGES
-    if cap is None:
+    if cap is None or cap < 0:
         return citations, references, False
     truncated = len(citations) > cap or len(references) > cap
     return citations[:cap], references[:cap], truncated
@@ -61,7 +90,8 @@ citation_graph_tool = types.Tool(
         "(`limit` or `compact` set), `citation_count`/`reference_count` report "
         "edges returned in the current page; each direction has its own cursor "
         "(`pagination.citations.next` / `pagination.references.next`) to pass as "
-        "the next `offset`."
+        "the next `offset`. If an output cap is configured (CITATION_MAX_EDGES), "
+        "a `truncated` flag is added when results were capped (legacy path only)."
     ),
     inputSchema={
         "type": "object",
@@ -219,16 +249,17 @@ async def _handle_citation_graph_paginated(
             "external_ids": root_payload.get("externalIds", {}),
         }
 
-    citations, references, truncated = _apply_edge_cap(citations, references)
-
+    # NOTE: no _apply_edge_cap here. The caller-supplied `limit` already bounds
+    # this path coherently with the per-direction pagination cursors; truncating
+    # edges while `pagination.<dir>.next` still reflects S2's uncapped cursor
+    # would make a paging client silently skip edges. The output cap is applied
+    # ONLY in the legacy/unbounded path.
     result = {
         "status": "success",
         "paper": paper,
         "citation_count": len(citations),
         "reference_count": len(references),
     }
-    if truncated:
-        result["truncated"] = True
     result.update(
         {
             "citations": citations,
