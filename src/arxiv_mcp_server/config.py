@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
+    CITATION_MAX_EDGES: int | None = None
     model_config = SettingsConfigDict(extra="allow")
 
     @property

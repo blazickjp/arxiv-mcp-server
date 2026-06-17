@@ -2,18 +2,55 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
+from ..config import Settings
+
 logger = logging.getLogger("arxiv-mcp-server")
+settings = Settings()
 
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
+
+
+async def _s2_get(client, url, *, headers=None, max_retries=4, base_delay=1.0):
+    """GET with exponential backoff on HTTP 429 (S2 unauthenticated rate limit).
+
+    Honors a numeric Retry-After header when present. Returns the final response
+    (caller still calls raise_for_status())."""
+    response = await client.get(url, headers=headers or {})
+    for attempt in range(max_retries):
+        if response.status_code != 429:
+            return response
+        retry_after = response.headers.get("Retry-After")
+        if retry_after is not None and str(retry_after).isdigit():
+            delay = float(retry_after)
+        else:
+            delay = base_delay * (2**attempt)
+        await asyncio.sleep(delay)
+        response = await client.get(url, headers=headers or {})
+    return response
+
+
+def _apply_edge_cap(
+    citations: List[Dict[str, Any]],
+    references: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+    """Truncate edge lists to settings.CITATION_MAX_EDGES (per direction) when
+    configured. Returns (citations, references, truncated: bool)."""
+    cap: Optional[int] = settings.CITATION_MAX_EDGES
+    if cap is None:
+        return citations, references, False
+    truncated = len(citations) > cap or len(references) > cap
+    return citations[:cap], references[:cap], truncated
+
 
 citation_graph_tool = types.Tool(
     name="citation_graph",
@@ -139,11 +176,11 @@ async def _handle_citation_graph_paginated(
     )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        root_response = await client.get(root_url)
+        root_response = await _s2_get(client, root_url)
         root_response.raise_for_status()
-        citations_response = await client.get(citations_url)
+        citations_response = await _s2_get(client, citations_url)
         citations_response.raise_for_status()
-        references_response = await client.get(references_url)
+        references_response = await _s2_get(client, references_url)
         references_response.raise_for_status()
 
     root_payload = root_response.json()
@@ -182,27 +219,35 @@ async def _handle_citation_graph_paginated(
             "external_ids": root_payload.get("externalIds", {}),
         }
 
+    citations, references, truncated = _apply_edge_cap(citations, references)
+
     result = {
         "status": "success",
         "paper": paper,
         "citation_count": len(citations),
         "reference_count": len(references),
-        "citations": citations,
-        "references": references,
-        "pagination": {
-            "limit": page_limit,
-            "citations": {
-                "offset": page_offset,
-                "next": citations_payload.get("next"),
-                "returned": len(citations),
-            },
-            "references": {
-                "offset": page_offset,
-                "next": references_payload.get("next"),
-                "returned": len(references),
-            },
-        },
     }
+    if truncated:
+        result["truncated"] = True
+    result.update(
+        {
+            "citations": citations,
+            "references": references,
+            "pagination": {
+                "limit": page_limit,
+                "citations": {
+                    "offset": page_offset,
+                    "next": citations_payload.get("next"),
+                    "returned": len(citations),
+                },
+                "references": {
+                    "offset": page_offset,
+                    "next": references_payload.get("next"),
+                    "returned": len(references),
+                },
+            },
+        }
+    )
 
     if compact:
         text = json.dumps(result, separators=(",", ":"))
@@ -245,12 +290,14 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         url = f"{SEMANTIC_SCHOLAR_BASE_URL}/{s2_paper_identifier}?fields={fields}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
+            response = await _s2_get(client, url)
             response.raise_for_status()
 
         payload = response.json()
         citations = _normalize_paper_items(payload.get("citations", []))
         references = _normalize_paper_items(payload.get("references", []))
+
+        citations, references, truncated = _apply_edge_cap(citations, references)
 
         result = {
             "status": "success",
@@ -266,9 +313,11 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             },
             "citation_count": len(citations),
             "reference_count": len(references),
-            "citations": citations,
-            "references": references,
         }
+        if truncated:
+            result["truncated"] = True
+        result["citations"] = citations
+        result["references"] = references
 
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
