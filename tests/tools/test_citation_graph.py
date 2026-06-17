@@ -123,6 +123,43 @@ async def test_citation_graph_default_unchanged():
     assert "authors" in reference_edge
     assert "external_ids" in reference_edge
 
+    # Golden byte-for-byte: pin the EXACT default output so a future change to
+    # the legacy path cannot silently alter it (backward-compat guarantee).
+    expected = {
+        "status": "success",
+        "paper": {
+            "paper_id": "root-paper",
+            "arxiv_id": "2401.12345",
+            "title": "Root Paper",
+            "year": 2024,
+            "authors": ["Author A"],
+            "external_ids": {"ArXiv": "2401.12345"},
+        },
+        "citation_count": 1,
+        "reference_count": 1,
+        "citations": [
+            {
+                "paper_id": "citing-1",
+                "title": "Citing Paper",
+                "year": 2025,
+                "authors": ["Author B"],
+                "external_ids": {"ArXiv": "2501.00001"},
+                "arxiv_id": "2501.00001",
+            }
+        ],
+        "references": [
+            {
+                "paper_id": "ref-1",
+                "title": "Referenced Paper",
+                "year": 2020,
+                "authors": ["Author C"],
+                "external_ids": {"ArXiv": "2001.00001"},
+                "arxiv_id": "2001.00001",
+            }
+        ],
+    }
+    assert text == json.dumps(expected, indent=2)
+
 
 @pytest.mark.asyncio
 async def test_citation_graph_compact():
@@ -516,3 +553,113 @@ async def test_citation_graph_limit_offset_clamped():
     for url in paged_urls:
         assert "limit=1000" in url
         assert "offset=0" in url
+
+
+def _paginated_mocks(citations_next):
+    """Build (root, citations, references) response mocks for the paginated path."""
+    root = MagicMock()
+    root.raise_for_status = MagicMock()
+    root.json.return_value = {
+        "paperId": "root-paper",
+        "title": "Root Paper",
+        "year": 2024,
+        "authors": [{"name": "Author A"}],
+        "externalIds": {"ArXiv": "2401.12345"},
+    }
+    citations = MagicMock()
+    citations.raise_for_status = MagicMock()
+    citations.json.return_value = {
+        "offset": 0,
+        "next": citations_next,
+        "data": [{"citingPaper": {"paperId": "c1", "title": "C", "year": 2025}}],
+    }
+    references = MagicMock()
+    references.raise_for_status = MagicMock()
+    references.json.return_value = {"offset": 0, "data": []}
+    return root, citations, references
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_pagination_next_offset_roundtrip():
+    """The `next` cursor from page 1 is usable as the `offset` for page 2.
+
+    Pins the README's documented paging loop: read pagination.citations.next,
+    feed it back as `offset`, and the next request URL carries that offset.
+    """
+    # Page 1: limit=5, offset 0 -> citations.next == 5.
+    root1, cit1, ref1 = _paginated_mocks(citations_next=5)
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[root1, cit1, ref1])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        page1 = await handle_citation_graph({"paper_id": "2401.12345", "limit": 5})
+
+    next_cursor = json.loads(page1[0].text)["pagination"]["citations"]["next"]
+    assert next_cursor == 5
+
+    # Page 2: feed next_cursor back as offset; the citations URL must carry it.
+    root2, cit2, ref2 = _paginated_mocks(citations_next=None)
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[root2, cit2, ref2])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph(
+            {"paper_id": "2401.12345", "limit": 5, "offset": next_cursor}
+        )
+
+    citations_urls = [
+        c.args[0] for c in mock_client.get.call_args_list if "/citations" in c.args[0]
+    ]
+    assert citations_urls and f"offset={next_cursor}" in citations_urls[0]
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_old_style_id_quoted():
+    """Old-style arXiv IDs contain a slash (e.g. hep-th/9901001); it must be
+    percent-encoded so it is not treated as a URL path separator."""
+    root, cit, ref = _paginated_mocks(citations_next=None)
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[root, cit, ref])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "hep-th/9901001", "limit": 5})
+
+    urls = [c.args[0] for c in mock_client.get.call_args_list]
+    assert urls, "expected requests to be made"
+    for u in urls:
+        # The id's slash is encoded (%2F); the raw `hep-th/9901001` never appears.
+        assert "hep-th%2F9901001" in u
+        assert "hep-th/9901001" not in u
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_compact_strict_bool():
+    """A non-bool truthy `compact` (e.g. the string "false") must NOT enable the
+    compact/paginated path — only a real JSON true does (defense-in-depth)."""
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = _legacy_mock_payload()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph(
+            {"paper_id": "2401.12345", "compact": "false"}
+        )
+
+    # Legacy path: exactly one request, no pagination block.
+    assert mock_client.get.await_count == 1
+    assert "pagination" not in json.loads(response[0].text)

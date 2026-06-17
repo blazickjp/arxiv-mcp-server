@@ -20,10 +20,11 @@ citation_graph_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Return papers citing an arXiv paper and papers that it references "
-        "using Semantic Scholar's citation graph. In paginated mode, "
-        "`citation_count`/`reference_count` report edges returned in the current "
-        "page; use the `pagination` block's `next` value as the `offset` for the "
-        "next page."
+        "using Semantic Scholar's citation graph. In paginated mode "
+        "(`limit` or `compact` set), `citation_count`/`reference_count` report "
+        "edges returned in the current page; each direction has its own cursor "
+        "(`pagination.citations.next` / `pagination.references.next`) to pass as "
+        "the next `offset`."
     ),
     inputSchema={
         "type": "object",
@@ -119,12 +120,10 @@ async def _handle_citation_graph_paginated(
     page_limit = max(1, min(1000, int(page_limit)))
     page_offset = max(0, int(page_offset))
 
-    s2_paper_identifier = quote(f"ARXIV:{paper_id}")
+    s2_paper_identifier = quote(f"ARXIV:{paper_id}", safe="")
 
-    # Request order (matches the test's side_effect ordering):
-    #   1. root paper metadata
-    #   2. /citations page
-    #   3. /references page
+    # Three sequential requests: root paper metadata, then the /citations and
+    # /references pages.
     root_url = (
         f"{SEMANTIC_SCHOLAR_BASE_URL}/{s2_paper_identifier}"
         "?fields=title,year,authors,externalIds"
@@ -161,10 +160,11 @@ async def _handle_citation_graph_paginated(
     if compact:
         citations = _normalize_paper_items_compact(citation_items)
         references = _normalize_paper_items_compact(reference_items)
-        root_external_ids = root_payload.get("externalIds") or {}
+        # arxiv_id echoes the input id on every path (legacy + both paginated
+        # branches) for a consistent paper.arxiv_id contract.
         paper = {
             "paper_id": root_payload.get("paperId"),
-            "arxiv_id": root_external_ids.get("ArXiv") or paper_id,
+            "arxiv_id": paper_id,
             "title": root_payload.get("title", ""),
             "year": root_payload.get("year"),
         }
@@ -221,7 +221,9 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
         limit = arguments.get("limit")
         offset = arguments.get("offset")
-        compact = bool(arguments.get("compact", False))
+        # Strict bool: only a JSON `true` enables compact. Guards against a
+        # truthy non-bool (e.g. the string "false") from a non-validating client.
+        compact = arguments.get("compact") is True
 
         # Pagination is triggered only by `limit` or `compact`. `offset` alone is
         # a no-op here (it falls through to the legacy path, which has no paging);
@@ -233,7 +235,7 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
                 paper_id, page_limit, page_offset, compact
             )
 
-        s2_paper_identifier = quote(f"ARXIV:{paper_id}")
+        s2_paper_identifier = quote(f"ARXIV:{paper_id}", safe="")
         fields = (
             "title,year,authors,externalIds,"
             "citations.paperId,citations.title,citations.year,citations.authors,citations.externalIds,"

@@ -407,7 +407,7 @@ Optional parameters (all opt-in; omit them for the legacy full-output behavior):
 - `offset` (integer, ≥ 0): pagination offset. Applies **only** together with `limit` or `compact`; passing `offset` alone is ignored and falls through to the legacy path.
 - `compact` (boolean): strips author lists + nested `external_ids` and minifies the JSON for lower token cost.
 
-When paginating (`limit` or `compact` set), `citation_count`/`reference_count` report the edges returned in the **current page**, not the paper's totals. Use the `pagination` block's `next` value as the `offset` for the next page.
+When paginating (`limit` or `compact` set), `citation_count`/`reference_count` report the edges returned in the **current page**, not the paper's totals. The response carries a `pagination` block with an independent cursor per direction — `pagination.citations.next` and `pagination.references.next` (each is the next `offset`, or `null` when that direction is exhausted). `offset` is a single value applied to **both** directions, so to page deeply through one direction, advance `offset` to its `next`; the other direction re-paginates from the same `offset` (references are usually small enough to fit one page).
 
 ```python
 result = await call_tool("citation_graph", {
