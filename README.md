@@ -401,6 +401,22 @@ result = await call_tool("citation_graph", {
 })
 ```
 
+Optional parameters (all opt-in; omit them for the legacy full-output behavior):
+
+- `limit` (integer, 1–1000): max edges per direction, using Semantic Scholar's paginated endpoints.
+- `offset` (integer, ≥ 0): pagination offset. Applies **only** together with `limit` or `compact`; passing `offset` alone is ignored and falls through to the legacy path.
+- `compact` (boolean): strips author lists + nested `external_ids` and minifies the JSON for lower token cost.
+
+When paginating (`limit` or `compact` set), `citation_count`/`reference_count` report the edges returned in the **current page**, not the paper's totals. Use the `pagination` block's `next` value as the `offset` for the next page.
+
+```python
+result = await call_tool("citation_graph", {
+    "paper_id": "2401.12345",
+    "compact": True,
+    "limit": 50
+})
+```
+
 ### Research Alerts
 Save topic watches and poll for newly published papers since the last check. Uses the same query syntax as `search_papers`.
 

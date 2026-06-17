@@ -20,7 +20,10 @@ citation_graph_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Return papers citing an arXiv paper and papers that it references "
-        "using Semantic Scholar's citation graph."
+        "using Semantic Scholar's citation graph. In paginated mode, "
+        "`citation_count`/`reference_count` report edges returned in the current "
+        "page; use the `pagination` block's `next` value as the `offset` for the "
+        "next page."
     ),
     inputSchema={
         "type": "object",
@@ -41,7 +44,10 @@ citation_graph_tool = types.Tool(
             "offset": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Pagination offset applied to both directions.",
+                "description": (
+                    "Pagination offset (applies only together with `limit` or "
+                    "`compact`)."
+                ),
             },
             "compact": {
                 "type": "boolean",
@@ -106,6 +112,13 @@ async def _handle_citation_graph_paginated(
     compact: bool,
 ) -> List[types.TextContent]:
     """Opt-in paginated/compact path using Semantic Scholar's dedicated endpoints."""
+    # Defense-in-depth: the schema bounds (1..1000, >=0) are enforced only by the
+    # MCP SDK validator. Coerce + clamp per-param here so the handler never trusts
+    # the input blindly. NOTE: no `limit + offset <= 1000` sum-clamp — that claim
+    # was tested against the live Semantic Scholar API and refuted.
+    page_limit = max(1, min(1000, int(page_limit)))
+    page_offset = max(0, int(page_offset))
+
     s2_paper_identifier = quote(f"ARXIV:{paper_id}")
 
     # Request order (matches the test's side_effect ordering):
@@ -210,7 +223,10 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         offset = arguments.get("offset")
         compact = bool(arguments.get("compact", False))
 
-        if not (limit is None and offset is None and not compact):
+        # Pagination is triggered only by `limit` or `compact`. `offset` alone is
+        # a no-op here (it falls through to the legacy path, which has no paging);
+        # it is honored only as a modifier when already paginating.
+        if limit is not None or compact:
             page_limit = limit if limit is not None else 100
             page_offset = offset or 0
             return await _handle_citation_graph_paginated(
