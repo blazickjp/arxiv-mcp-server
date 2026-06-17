@@ -1178,9 +1178,11 @@ async def test_citation_graph_sends_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_citation_graph_no_api_key_no_header():
+async def test_citation_graph_no_api_key_no_header(monkeypatch):
     """With no API key configured (default None), the `headers` kwarg carries no
     `x-api-key` (byte-for-byte unauthenticated behavior is preserved)."""
+    # Self-contained: pin the precondition rather than relying on import-time state.
+    monkeypatch.setattr(citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", None)
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
@@ -1247,6 +1249,99 @@ async def test_citation_graph_api_key_paginated(monkeypatch):
     assert mock_client.get.await_count == 3
     for call in mock_client.get.call_args_list:
         assert call.kwargs["headers"].get("x-api-key") == "secret-key"
+
+
+def _legacy_200_mock():
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = _legacy_mock_payload()
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_malformed_key_ignored(monkeypatch):
+    """A malformed key with an INTERIOR illegal header char (which strip cannot
+    salvage) is dropped, NOT sent to the HTTP layer. This prevents the key from
+    leaking back through an h11 'Illegal header value' exception into logs /
+    returned text. (A merely trailing newline is stripped and still sent — see
+    test_citation_graph_whitespace_key_stripped.)"""
+    monkeypatch.setattr(
+        citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", "secret\nkey"
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_legacy_200_mock())
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    # No malformed header reaches httpx, the call succeeds, and the key value
+    # never appears in the returned text.
+    sent_headers = mock_client.get.call_args.kwargs["headers"]
+    assert "x-api-key" not in sent_headers
+    assert sent_headers == {}
+    assert "secret" not in response[0].text  # key fragment never leaks
+    assert json.loads(response[0].text)["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_whitespace_key_stripped(monkeypatch):
+    """A key with surrounding whitespace is stripped before being sent."""
+    monkeypatch.setattr(
+        citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", "  realkey  "
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_legacy_200_mock())
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345"})
+
+    assert mock_client.get.call_args.kwargs["headers"]["x-api-key"] == "realkey"
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_api_key_paginated_unset(monkeypatch):
+    """With no key, ALL THREE paginated sub-requests carry no `x-api-key`."""
+    monkeypatch.setattr(citation_graph.settings, "SEMANTIC_SCHOLAR_API_KEY", None)
+
+    root = MagicMock()
+    root.status_code = 200
+    root.headers = {}
+    root.raise_for_status = MagicMock()
+    root.json.return_value = {
+        "paperId": "root-paper",
+        "title": "Root Paper",
+        "year": 2024,
+        "authors": [{"name": "Author A"}],
+        "externalIds": {"ArXiv": "2401.12345"},
+    }
+    page = MagicMock()
+    page.status_code = 200
+    page.headers = {}
+    page.raise_for_status = MagicMock()
+    page.json.return_value = {"offset": 0, "data": []}
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[root, page, page])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        await handle_citation_graph({"paper_id": "2401.12345", "limit": 5})
+
+    assert mock_client.get.await_count == 3
+    for call in mock_client.get.call_args_list:
+        assert "x-api-key" not in call.kwargs["headers"]
 
 
 @pytest.mark.asyncio

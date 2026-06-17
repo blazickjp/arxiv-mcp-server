@@ -21,9 +21,19 @@ settings = Settings()
 
 def _auth_headers() -> Dict[str, str]:
     """x-api-key header when SEMANTIC_SCHOLAR_API_KEY is configured, else {}.
-    Absent key -> no header -> identical unauthenticated behavior."""
-    key = settings.SEMANTIC_SCHOLAR_API_KEY
-    return {"x-api-key": key} if key else {}
+
+    Absent key -> no header -> identical unauthenticated behavior. The key is
+    stripped and validated for illegal header characters (control chars); an
+    invalid key is ignored (warned WITHOUT echoing its value) so a malformed
+    key (e.g. a stray trailing newline) can never reach the HTTP layer and leak
+    back through an exception message into logs or returned error text."""
+    key = (settings.SEMANTIC_SCHOLAR_API_KEY or "").strip()
+    if not key:
+        return {}
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in key):
+        logger.warning("Ignoring invalid SEMANTIC_SCHOLAR_API_KEY (illegal characters)")
+        return {}
+    return {"x-api-key": key}
 
 
 SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1/paper"
