@@ -37,7 +37,15 @@ class PaperManager:
 
         try:
             paper = next(self.client.results(arxiv.Search(id_list=[paper_id])))
-            paper.download_pdf(dirpath=self.storage_path, filename=paper_pdf_path)
+            # arxiv v4: download_pdf() removed; download via httpx using canonical URL
+            import httpx
+            pdf_url = f"https://arxiv.org/pdf/{paper.get_short_id()}.pdf"
+            with httpx.Client(timeout=120, follow_redirects=True) as client:
+                with client.stream("GET", pdf_url) as response:
+                    response.raise_for_status()
+                    with open(paper_pdf_path, "wb") as out:
+                        for chunk in response.iter_bytes(chunk_size=256 * 1024):
+                            out.write(chunk)
             markdown = pymupdf4llm.to_markdown(paper_pdf_path, show_progress=False)
 
             async with aiofiles.open(paper_md_path, "w", encoding="utf-8") as f:

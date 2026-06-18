@@ -426,7 +426,7 @@ def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
         "abstract": "[EXTERNAL CONTENT] " + paper.summary,
         "categories": paper.categories,
         "published": paper.published.isoformat(),
-        "url": paper.pdf_url,
+        "url": f"https://arxiv.org/pdf/{paper.get_short_id()}.pdf",
         "resource_uri": f"arxiv://{paper.get_short_id()}",
     }
 

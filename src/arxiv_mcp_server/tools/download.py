@@ -236,10 +236,8 @@ def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
         120 seconds so large PDFs on slower links are less likely to fail
         prematurely. Data is written in 256 KiB chunks to bound memory use.
     """
-    if paper.pdf_url is None:
-        raise ValueError("No PDF URL available for this arXiv result")
-
-    pdf_url = paper.pdf_url
+    # arxiv v4: pdf_url property removed; construct canonical PDF URL from short ID
+    pdf_url = f"https://arxiv.org/pdf/{paper.get_short_id()}.pdf"
     read_timeout = max(120.0, float(settings.REQUEST_TIMEOUT))
     timeout = httpx.Timeout(
         connect=30.0,
