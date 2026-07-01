@@ -1,4 +1,4 @@
-[![mcp-customs](https://img.shields.io/badge/mcp--customs-CLEARED_94%2F100-brightgreen)](https://github.com/mcpcustoms/mcp-customs)
+[![mcp-customs](https://img.shields.io/badge/mcp--customs-CLEARED_94%2F100-brightgreen)](https://mcpcustoms.github.io/?server=arxiv-mcp-server))
 [![PyPI Version](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![GitHub Stars](https://img.shields.io/github/stars/blazickjp/arxiv-mcp-server?style=flat)](https://github.com/blazickjp/arxiv-mcp-server/stargazers)
