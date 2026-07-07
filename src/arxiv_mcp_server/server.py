@@ -158,7 +158,7 @@ def _transport_security_settings() -> TransportSecuritySettings:
     allowed_hosts = {
         host,
         f"{host}:{port}",
-        *(f"{h}:{port}" for h in loopback_hosts),
+        *(f"{h}:*" for h in loopback_hosts),
         *loopback_hosts,
     }
     allowed_hosts.update(_csv_settings(settings.ALLOWED_HOSTS))

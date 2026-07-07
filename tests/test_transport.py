@@ -82,7 +82,7 @@ async def test_streamable_http_uses_configured_host_port():
     security_settings = manager_kwargs["security_settings"]
     assert security_settings.enable_dns_rebinding_protection is True
     assert "127.0.0.1:8765" in security_settings.allowed_hosts
-    assert "localhost:8765" in security_settings.allowed_hosts
+    assert "localhost:*" in security_settings.allowed_hosts
     config_class.assert_called_once()
     _, config_kwargs = config_class.call_args
     assert config_kwargs["host"] == "127.0.0.1"
@@ -105,8 +105,8 @@ def test_transport_security_allows_loopback_and_configured_hosts():
 
     assert security_settings.enable_dns_rebinding_protection is True
     assert "0.0.0.0:9000" in security_settings.allowed_hosts
-    assert "127.0.0.1:9000" in security_settings.allowed_hosts
-    assert "localhost:9000" in security_settings.allowed_hosts
+    assert "127.0.0.1:*" in security_settings.allowed_hosts
+    assert "localhost:*" in security_settings.allowed_hosts
     assert "arxiv.example.com" in security_settings.allowed_hosts
     assert "arxiv.example.com:443" in security_settings.allowed_hosts
     assert "http://127.0.0.1:9000" in security_settings.allowed_origins
