@@ -163,30 +163,72 @@ async def test_index_task_not_created_without_semantic_dependencies(mocker):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_and_drains_index_tasks(mocker):
-    """Owned indexing tasks cannot survive server shutdown."""
+async def test_shutdown_waits_for_running_index_worker(mocker):
+    """Shutdown must not return while a to_thread indexing worker is running."""
+    import threading
+
     from arxiv_mcp_server.tools import download as download_module
 
-    started = asyncio.Event()
-    cancelled = asyncio.Event()
+    worker_started = threading.Event()
+    release_worker = threading.Event()
 
-    async def pending_index():
-        started.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.set()
+    def worker():
+        worker_started.set()
+        release_worker.wait(timeout=5)
+
+    async def threaded_index():
+        await asyncio.to_thread(worker)
 
     mocker.patch.object(
         download_module, "_semantic_dependencies_available", return_value=True
     )
-    download_module._track_index_task(pending_index())
-    await started.wait()
+    download_module._track_index_task(threaded_index())
+    await asyncio.to_thread(worker_started.wait, 1)
 
-    await download_module.shutdown_background_tasks()
+    shutdown = asyncio.create_task(download_module.shutdown_background_tasks())
+    await asyncio.sleep(0.02)
+    returned_while_worker_running = shutdown.done()
+    release_worker.set()
+    await shutdown
 
-    assert cancelled.is_set()
+    assert not returned_while_worker_running
     assert not download_module._index_tasks
+    assert download_module._index_semaphore is None
+
+
+def test_same_paper_pdf_conversions_are_serialized(mocker):
+    """Concurrent requests for one paper cannot share/delete the same PDF."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from arxiv_mcp_server.tools import download as download_module
+
+    active = 0
+    max_active = 0
+    guard = threading.Lock()
+    both_requested = threading.Barrier(2)
+
+    def conversion(_paper_id):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        threading.Event().wait(0.03)
+        with guard:
+            active -= 1
+        return "markdown", object()
+
+    def request():
+        both_requested.wait(timeout=2)
+        return download_module._fetch_pdf_content("2401.00001")
+
+    mocker.patch.object(download_module, "_fetch_pdf_content_unlocked", conversion)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(request) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=3)
+
+    assert max_active == 1
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +413,7 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
 @pytest.mark.asyncio
 async def test_paper_not_found_on_arxiv(temp_storage_path, mocker):
     """StopIteration from PDF fallback -> error message returned."""
-    paper_id = "invalid.00000"
+    paper_id = "9999.99999"
 
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
@@ -423,6 +465,22 @@ async def test_no_check_status_parameter(temp_storage_path, mocker):
     response = await handle_download({"paper_id": paper_id})
     result = json.loads(response[0].text)
     assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_path_traversal_paper_id(temp_storage_path, mocker):
+    """Paper IDs cannot escape the configured storage directory."""
+    mocker.patch.object(
+        __import__("arxiv_mcp_server.tools.download", fromlist=["settings"]).settings,
+        "_get_storage_path_from_args",
+        return_value=temp_storage_path,
+    )
+
+    response = await handle_download({"paper_id": "../../private/secret"})
+    payload = json.loads(response[0].text)
+
+    assert payload["status"] == "error"
+    assert "invalid arxiv id" in payload["message"].lower()
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,9 @@
 """Shared compatibility helpers for the upstream arxiv package."""
 
 import asyncio
+import os
 from pathlib import Path
+import tempfile
 import threading
 import time
 from typing import Awaitable, Callable, Protocol, TypeVar
@@ -92,8 +94,13 @@ def stream_pdf_to_path(
     )
     headers = {"User-Agent": user_agent}
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = destination.with_suffix(f"{destination.suffix}.part")
-    staging.unlink(missing_ok=True)
+    descriptor, staging_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".part",
+    )
+    os.close(descriptor)
+    staging = Path(staging_name)
 
     try:
         with httpx.Client(

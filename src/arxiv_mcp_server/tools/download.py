@@ -13,7 +13,9 @@ from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
+from .list_papers import is_valid_arxiv_id
 import logging
+import threading
 
 pymupdf4llm: Any = None
 fitz: Any = None
@@ -52,6 +54,8 @@ _CONTENT_WARNING = (
 # server shutdown can cancel and drain them deterministically.
 _index_semaphore: asyncio.Semaphore | None = None
 _index_tasks: set[asyncio.Task[None]] = set()
+# Fixed-size lock striping bounds memory while preventing same-paper PDF races.
+_pdf_conversion_locks = tuple(threading.Lock() for _ in range(64))
 
 
 def _get_index_semaphore() -> asyncio.Semaphore:
@@ -107,13 +111,15 @@ def _track_index_task(coroutine) -> None:
 
 
 async def shutdown_background_tasks() -> None:
-    """Cancel and drain all owned indexing work during server shutdown."""
+    """Wait for owned indexing workers before releasing shared resources."""
+    global _index_semaphore
     tasks = list(_index_tasks)
-    for task in tasks:
-        task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _index_tasks.clear()
+    # Semaphores are event-loop-bound once contended; do not reuse one after
+    # this server lifecycle ends.
+    _index_semaphore = None
 
 
 settings = Settings()
@@ -256,7 +262,7 @@ def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
     )
 
 
-def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
+def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
     """Download the PDF from arXiv and convert it to Markdown synchronously.
 
     The PDF bytes are fetched with :func:`_download_arxiv_pdf_to_path` rather
@@ -299,6 +305,13 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
             pass
 
 
+def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
+    """Serialize download and conversion for requests targeting the same paper."""
+    lock = _pdf_conversion_locks[hash(paper_id) % len(_pdf_conversion_locks)]
+    with lock:
+        return _fetch_pdf_content_unlocked(paper_id)
+
+
 # ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
@@ -307,7 +320,19 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
 async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle paper download requests synchronously (HTML first, then PDF)."""
     try:
-        paper_id = arguments["paper_id"]
+        paper_id = arguments["paper_id"].strip()
+        if not is_valid_arxiv_id(paper_id):
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"Invalid arXiv ID: {paper_id}",
+                        }
+                    ),
+                )
+            ]
         md_path = get_paper_path(paper_id, ".md")
 
         # --- Cache hit: return immediately with content ---
