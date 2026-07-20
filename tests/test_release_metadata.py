@@ -23,4 +23,4 @@ def test_release_metadata_and_arxiv_dependency_are_synchronized():
     )
     assert server["version"] == version
     assert server["packages"][0]["version"] == version
-    assert arxiv_requirement == "arxiv>=2.1.0,<4"
+    assert arxiv_requirement == "arxiv>=2.1.0"

@@ -9,6 +9,7 @@ import logging
 from pydantic import AnyUrl
 import mcp.types as types
 from ..config import Settings
+from ..arxiv_api import stream_pdf_to_path
 
 logger = logging.getLogger("arxiv-mcp-server")
 
@@ -37,7 +38,12 @@ class PaperManager:
 
         try:
             paper = next(self.client.results(arxiv.Search(id_list=[paper_id])))
-            paper.download_pdf(dirpath=self.storage_path, filename=paper_pdf_path)
+            stream_pdf_to_path(
+                paper,
+                paper_pdf_path,
+                request_timeout=120.0,
+                user_agent="arxiv-mcp-server",
+            )
             markdown = pymupdf4llm.to_markdown(paper_pdf_path, show_progress=False)
 
             async with aiofiles.open(paper_md_path, "w", encoding="utf-8") as f:

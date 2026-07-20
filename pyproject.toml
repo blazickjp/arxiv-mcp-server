@@ -27,7 +27,7 @@ authors = [
     { name = "Joseph Blazick", email = "blazickjp@amazon.com" }
 ]
 dependencies = [
-    "arxiv>=2.1.0,<4",
+    "arxiv>=2.1.0",
     "httpx>=0.24.0",
     "python-dateutil>=2.8.2",
     "pydantic>=2.8.0",
