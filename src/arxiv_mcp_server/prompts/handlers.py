@@ -1,6 +1,6 @@
 """Handlers for prompt-related requests with paper analysis functionality."""
 
-from typing import List, Dict, Optional
+from typing import List, Dict
 from mcp.types import Prompt, PromptMessage, TextContent, GetPromptResult
 from .prompts import PROMPTS
 from .deep_research_analysis_prompt import PAPER_ANALYSIS_PROMPT
@@ -8,26 +8,6 @@ from .summarize_paper_prompt import SUMMARIZE_PAPER_PROMPT
 from .compare_papers_prompt import COMPARE_PAPERS_PROMPT
 from .literature_review_prompt import LITERATURE_REVIEW_PROMPT
 
-
-# Legacy global research context - used as fallback when no session_id is provided
-class ResearchContext:
-    """Maintains context throughout a research session."""
-
-    def __init__(self):
-        self.expertise_level = "intermediate"  # default
-        self.explored_papers = {}  # paper_id -> basic metadata
-        self.paper_analyses = {}  # paper_id -> analysis focus and summary
-
-    def update_from_arguments(self, args: Dict[str, str]) -> None:
-        """Update context based on new arguments."""
-        if "expertise_level" in args:
-            self.expertise_level = args["expertise_level"]
-        if "paper_id" in args and args["paper_id"] not in self.explored_papers:
-            self.explored_papers[args["paper_id"]] = {"id": args["paper_id"]}
-
-
-# Global research context for backward compatibility
-_research_context = ResearchContext()
 
 # Output structure for deep paper analysis
 OUTPUT_STRUCTURE = """
@@ -46,7 +26,7 @@ async def list_prompts() -> List[Prompt]:
 
 
 async def get_prompt(
-    name: str, arguments: Dict[str, str] | None = None, session_id: Optional[str] = None
+    name: str, arguments: Dict[str, str] | None = None, session_id: str | None = None
 ) -> GetPromptResult:
     """Handle prompts/get request for paper analysis.
 
@@ -73,29 +53,14 @@ async def get_prompt(
         if arg.required and (arg.name not in arguments or not arguments.get(arg.name)):
             raise ValueError(f"Missing required argument: {arg.name}")
 
-    # Use only global research context since research sessions are removed
-    _research_context.update_from_arguments(arguments)
-
-    # Process deep-paper-analysis prompt
+    # Prompt generation is intentionally stateless. MCP does not currently pass
+    # a reliable session lifecycle here, so retaining process-global paper IDs
+    # would leak context between unrelated clients and grow without bound.
     paper_id = arguments.get("paper_id", "")
-
-    # Add context from previous papers if available
-    previous_papers_context = ""
-
-    # Use global context
-    if len(_research_context.explored_papers) > 1:
-        previous_ids = [
-            pid for pid in _research_context.explored_papers.keys() if pid != paper_id
-        ]
-        if previous_ids:
-            previous_papers_context = f"\nI've previously analyzed papers: {', '.join(previous_ids)}. If relevant, note connections to these works."
-
-    # Track this analysis in context (for global context only)
-    _research_context.paper_analyses[paper_id] = {"analysis": "complete"}
 
     if name == "deep-paper-analysis":
         content = (
-            f"Analyze paper {paper_id}.{previous_papers_context}\n\n"
+            f"Analyze paper {paper_id}.\n\n"
             f"{OUTPUT_STRUCTURE}\n\n{PAPER_ANALYSIS_PROMPT}"
         )
     elif name == "summarize_paper":

@@ -1,6 +1,7 @@
 """Tests for paper download functionality (sync HTML-first pipeline)."""
 
 import pytest
+import asyncio
 import json
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from arxiv_mcp_server.tools.download import (
     _html_to_text,
     _fetch_html_content,
     _download_arxiv_pdf_to_path,
+    _fetch_pdf_content,
     PaperNotFoundError,
 )
 
@@ -77,6 +79,156 @@ def test_download_arxiv_pdf_supports_legacy_ids(temp_storage_path, mocker):
     client.stream.assert_called_once_with(
         "GET", "https://arxiv.org/pdf/hep-th/9901001v3.pdf"
     )
+
+
+def test_download_arxiv_pdf_removes_partial_file_on_stream_failure(
+    temp_storage_path, mocker
+):
+    """Failed downloads never leave a destination or staging file behind."""
+    import arxiv_mcp_server.arxiv_api as api
+
+    def chunks():
+        yield b"partial"
+        raise RuntimeError("connection lost")
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.iter_bytes.return_value = chunks()
+    response_context = MagicMock()
+    response_context.__enter__.return_value = response
+    response_context.__exit__.return_value = False
+    client = MagicMock()
+    client.stream.return_value = response_context
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    mocker.patch.object(api.httpx, "Client", return_value=client)
+
+    class Result:
+        def get_short_id(self):
+            return "2401.00001"
+
+    destination = temp_storage_path / "paper.pdf"
+    with pytest.raises(RuntimeError, match="connection lost"):
+        _download_arxiv_pdf_to_path(Result(), destination)
+
+    assert not destination.exists()
+    assert not destination.with_suffix(".pdf.part").exists()
+
+
+def test_pdf_conversion_failure_removes_downloaded_pdf(temp_storage_path, mocker):
+    """A converter exception must not retain a complete temporary PDF."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    paper = MagicMock(spec=arxiv.Result)
+    client = MagicMock()
+    client.results.return_value = iter([paper])
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=client)
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda operation: operation(),
+    )
+    pdf_path = temp_storage_path / "2401.00001.pdf"
+    mocker.patch.object(download_module, "get_paper_path", return_value=pdf_path)
+    mocker.patch.object(
+        download_module,
+        "_download_arxiv_pdf_to_path",
+        side_effect=lambda _paper, destination: destination.write_bytes(b"pdf"),
+    )
+    converter = MagicMock()
+    converter.to_markdown.side_effect = RuntimeError("conversion failed")
+    mocker.patch.object(download_module, "pymupdf4llm", converter)
+
+    with pytest.raises(RuntimeError, match="conversion failed"):
+        _fetch_pdf_content("2401.00001")
+
+    assert not pdf_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_index_task_not_created_without_semantic_dependencies(mocker):
+    """Missing pro dependencies must not create orphan background tasks."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    create_task = mocker.patch.object(asyncio, "create_task")
+    mocker.patch.object(
+        download_module, "_semantic_dependencies_available", return_value=False
+    )
+
+    download_module._track_index_task(download_module._run_index_by_id("2401.00001"))
+
+    create_task.assert_not_called()
+    assert not download_module._index_tasks
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_running_index_worker(mocker):
+    """Shutdown must not return while a to_thread indexing worker is running."""
+    import threading
+
+    from arxiv_mcp_server.tools import download as download_module
+
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    def worker():
+        worker_started.set()
+        release_worker.wait(timeout=5)
+
+    async def threaded_index():
+        await asyncio.to_thread(worker)
+
+    mocker.patch.object(
+        download_module, "_semantic_dependencies_available", return_value=True
+    )
+    download_module._track_index_task(threaded_index())
+    await asyncio.to_thread(worker_started.wait, 1)
+
+    shutdown = asyncio.create_task(download_module.shutdown_background_tasks())
+    await asyncio.sleep(0.02)
+    returned_while_worker_running = shutdown.done()
+    release_worker.set()
+    await shutdown
+
+    assert not returned_while_worker_running
+    assert not download_module._index_tasks
+    assert download_module._index_semaphore is None
+
+
+def test_same_paper_pdf_conversions_are_serialized(mocker):
+    """Concurrent requests for one paper cannot share/delete the same PDF."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from arxiv_mcp_server.tools import download as download_module
+
+    active = 0
+    max_active = 0
+    guard = threading.Lock()
+    both_requested = threading.Barrier(2)
+
+    def conversion(_paper_id):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        threading.Event().wait(0.03)
+        with guard:
+            active -= 1
+        return "markdown", object()
+
+    def request():
+        both_requested.wait(timeout=2)
+        return download_module._fetch_pdf_content("2401.00001")
+
+    mocker.patch.object(download_module, "_fetch_pdf_content_unlocked", conversion)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(request) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=3)
+
+    assert max_active == 1
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +413,7 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
 @pytest.mark.asyncio
 async def test_paper_not_found_on_arxiv(temp_storage_path, mocker):
     """StopIteration from PDF fallback -> error message returned."""
-    paper_id = "invalid.00000"
+    paper_id = "9999.99999"
 
     def fake_path(pid, suffix=".md"):
         return temp_storage_path / f"{pid}{suffix}"
@@ -313,6 +465,22 @@ async def test_no_check_status_parameter(temp_storage_path, mocker):
     response = await handle_download({"paper_id": paper_id})
     result = json.loads(response[0].text)
     assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_path_traversal_paper_id(temp_storage_path, mocker):
+    """Paper IDs cannot escape the configured storage directory."""
+    mocker.patch.object(
+        __import__("arxiv_mcp_server.tools.download", fromlist=["settings"]).settings,
+        "_get_storage_path_from_args",
+        return_value=temp_storage_path,
+    )
+
+    response = await handle_download({"paper_id": "../../private/secret"})
+    payload = json.loads(response[0].text)
+
+    assert payload["status"] == "error"
+    assert "invalid arxiv id" in payload["message"].lower()
 
 
 @pytest.mark.asyncio

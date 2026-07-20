@@ -36,6 +36,7 @@ def semantic_test_env(monkeypatch, temp_storage_path):
         "_get_storage_path_from_args",
         lambda: Path(temp_storage_path),
     )
+    monkeypatch.setattr(semantic_module, "np", np)
     monkeypatch.setattr(semantic_module, "SentenceTransformer", object)
     monkeypatch.setattr(semantic_module, "_get_model", lambda: DummyModel())
     semantic_module._model = None

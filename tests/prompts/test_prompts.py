@@ -38,6 +38,24 @@ async def test_get_paper_analysis_prompt():
 
 
 @pytest.mark.asyncio
+async def test_prompt_calls_do_not_share_paper_context():
+    """Prompt generation is stateless across clients and calls."""
+    from arxiv_mcp_server.prompts import handlers
+
+    await handlers.get_prompt(
+        "deep-paper-analysis", {"paper_id": "2401.00001"}, session_id="client-a"
+    )
+    result = await handlers.get_prompt(
+        "deep-paper-analysis", {"paper_id": "2401.00002"}, session_id="client-b"
+    )
+
+    content = result.messages[0].content
+    assert isinstance(content, TextContent)
+    assert "2401.00001" not in content.text
+    assert not hasattr(handlers, "_research_context")
+
+
+@pytest.mark.asyncio
 async def test_get_prompt_with_invalid_name():
     """Test getting prompt with invalid name."""
     with pytest.raises(ValueError, match="Prompt not found"):
