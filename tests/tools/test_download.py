@@ -1,6 +1,7 @@
 """Tests for paper download functionality (sync HTML-first pipeline)."""
 
 import pytest
+import asyncio
 import json
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from arxiv_mcp_server.tools.download import (
     _html_to_text,
     _fetch_html_content,
     _download_arxiv_pdf_to_path,
+    _fetch_pdf_content,
     PaperNotFoundError,
 )
 
@@ -77,6 +79,114 @@ def test_download_arxiv_pdf_supports_legacy_ids(temp_storage_path, mocker):
     client.stream.assert_called_once_with(
         "GET", "https://arxiv.org/pdf/hep-th/9901001v3.pdf"
     )
+
+
+def test_download_arxiv_pdf_removes_partial_file_on_stream_failure(
+    temp_storage_path, mocker
+):
+    """Failed downloads never leave a destination or staging file behind."""
+    import arxiv_mcp_server.arxiv_api as api
+
+    def chunks():
+        yield b"partial"
+        raise RuntimeError("connection lost")
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.iter_bytes.return_value = chunks()
+    response_context = MagicMock()
+    response_context.__enter__.return_value = response
+    response_context.__exit__.return_value = False
+    client = MagicMock()
+    client.stream.return_value = response_context
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    mocker.patch.object(api.httpx, "Client", return_value=client)
+
+    class Result:
+        def get_short_id(self):
+            return "2401.00001"
+
+    destination = temp_storage_path / "paper.pdf"
+    with pytest.raises(RuntimeError, match="connection lost"):
+        _download_arxiv_pdf_to_path(Result(), destination)
+
+    assert not destination.exists()
+    assert not destination.with_suffix(".pdf.part").exists()
+
+
+def test_pdf_conversion_failure_removes_downloaded_pdf(temp_storage_path, mocker):
+    """A converter exception must not retain a complete temporary PDF."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    paper = MagicMock(spec=arxiv.Result)
+    client = MagicMock()
+    client.results.return_value = iter([paper])
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=client)
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda operation: operation(),
+    )
+    pdf_path = temp_storage_path / "2401.00001.pdf"
+    mocker.patch.object(download_module, "get_paper_path", return_value=pdf_path)
+    mocker.patch.object(
+        download_module,
+        "_download_arxiv_pdf_to_path",
+        side_effect=lambda _paper, destination: destination.write_bytes(b"pdf"),
+    )
+    converter = MagicMock()
+    converter.to_markdown.side_effect = RuntimeError("conversion failed")
+    mocker.patch.object(download_module, "pymupdf4llm", converter)
+
+    with pytest.raises(RuntimeError, match="conversion failed"):
+        _fetch_pdf_content("2401.00001")
+
+    assert not pdf_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_index_task_not_created_without_semantic_dependencies(mocker):
+    """Missing pro dependencies must not create orphan background tasks."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    create_task = mocker.patch.object(asyncio, "create_task")
+    mocker.patch.object(
+        download_module, "_semantic_dependencies_available", return_value=False
+    )
+
+    download_module._track_index_task(download_module._run_index_by_id("2401.00001"))
+
+    create_task.assert_not_called()
+    assert not download_module._index_tasks
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_drains_index_tasks(mocker):
+    """Owned indexing tasks cannot survive server shutdown."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def pending_index():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    mocker.patch.object(
+        download_module, "_semantic_dependencies_available", return_value=True
+    )
+    download_module._track_index_task(pending_index())
+    await started.wait()
+
+    await download_module.shutdown_background_tasks()
+
+    assert cancelled.is_set()
+    assert not download_module._index_tasks
 
 
 # ---------------------------------------------------------------------------

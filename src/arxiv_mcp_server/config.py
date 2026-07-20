@@ -32,6 +32,18 @@ def get_arxiv_client():
     return _arxiv_client
 
 
+def close_arxiv_client() -> None:
+    """Close the shared HTTP session and clear the process-wide client."""
+    global _arxiv_client
+    if _arxiv_client is None:
+        return
+    session = getattr(_arxiv_client, "_session", None)
+    close = getattr(session, "close", None)
+    if callable(close):
+        close()
+    _arxiv_client = None
+
+
 class Settings(BaseSettings):
     """Server configuration settings."""
 

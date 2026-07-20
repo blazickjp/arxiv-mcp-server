@@ -92,12 +92,19 @@ def stream_pdf_to_path(
     )
     headers = {"User-Agent": user_agent}
     destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.with_suffix(f"{destination.suffix}.part")
+    staging.unlink(missing_ok=True)
 
-    with httpx.Client(
-        timeout=timeout, follow_redirects=True, headers=headers
-    ) as client:
-        with client.stream("GET", canonical_pdf_url(paper)) as response:
-            response.raise_for_status()
-            with destination.open("wb") as output:
-                for chunk in response.iter_bytes(chunk_size=256 * 1024):
-                    output.write(chunk)
+    try:
+        with httpx.Client(
+            timeout=timeout, follow_redirects=True, headers=headers
+        ) as client:
+            with client.stream("GET", canonical_pdf_url(paper)) as response:
+                response.raise_for_status()
+                with staging.open("wb") as output:
+                    for chunk in response.iter_bytes(chunk_size=256 * 1024):
+                        output.write(chunk)
+        staging.replace(destination)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise

@@ -40,7 +40,6 @@ dependencies = [
     "starlette>=0.27.0",
     "sse-starlette>=1.8.2",
     "anyio>=4.2.0",
-    "black>=25.1.0",
 ]
 
 [project.urls]
@@ -70,7 +69,7 @@ pro = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_fixture_loop_scope = "function"  # Added this line
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-v --cov=arxiv_mcp_server"
 

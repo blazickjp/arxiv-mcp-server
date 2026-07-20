@@ -15,29 +15,29 @@ from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
 import logging
 
-_MAX_TRACKED_CONVERSIONS = 100  # prevent unbounded growth of conversion_statuses
+pymupdf4llm: Any = None
+fitz: Any = None
+_pdf_available: bool | None = None
 
-# Optional PDF-conversion dependencies — only needed for the PDF fallback path.
-# Install with: pip install arxiv-mcp-server[pdf]
-try:
-    import pymupdf4llm
-    import fitz
 
+def _load_pdf_dependencies() -> bool:
+    """Load PDF conversion modules only when the fallback path is invoked."""
+    global pymupdf4llm, fitz, _pdf_available
+    if _pdf_available is not None:
+        return _pdf_available
+    try:
+        import fitz as fitz_module
+        import pymupdf4llm as pymupdf4llm_module
+    except ImportError:  # pragma: no cover - environment dependent
+        _pdf_available = False
+        return False
+    fitz = fitz_module
+    pymupdf4llm = pymupdf4llm_module
+    fitz.TOOLS.mupdf_display_errors(False)
+    fitz.TOOLS.mupdf_display_warnings(False)
     _pdf_available = True
-except ImportError:  # pragma: no cover
-    pymupdf4llm = None  # type: ignore[assignment]
-    fitz = None  # type: ignore[assignment]
-    _pdf_available = False
+    return True
 
-# Optional pro feature — gracefully degrade when not installed
-try:
-    from .semantic_search import index_paper_by_id, index_paper_from_result
-
-    _semantic_search_available = True
-except ImportError:  # pragma: no cover
-    _semantic_search_available = False
-    index_paper_by_id = None  # type: ignore[assignment]
-    index_paper_from_result = None  # type: ignore[assignment]
 
 logger = logging.getLogger("arxiv-mcp-server")
 
@@ -48,8 +48,10 @@ _CONTENT_WARNING = (
 )
 
 # Serialise background indexing to avoid hammering the GPU/CPU when multiple
-# papers are downloaded in parallel (issue #68).
+# papers are downloaded in parallel (issue #68). Tasks are explicitly owned so
+# server shutdown can cancel and drain them deterministically.
 _index_semaphore: asyncio.Semaphore | None = None
+_index_tasks: set[asyncio.Task[None]] = set()
 
 
 def _get_index_semaphore() -> asyncio.Semaphore:
@@ -60,27 +62,61 @@ def _get_index_semaphore() -> asyncio.Semaphore:
     return _index_semaphore
 
 
+def _semantic_dependencies_available() -> bool:
+    """Check pro dependencies only when automatic indexing is requested."""
+    from .semantic_search import _dependency_error
+
+    return _dependency_error() is None
+
+
 async def _run_index_by_id(paper_id: str) -> None:
-    """Acquire the index semaphore then run index_paper_by_id in a thread."""
-    if not _semantic_search_available:
-        return
+    """Acquire the index semaphore then index a paper in a worker thread."""
+    from .semantic_search import index_paper_by_id
+
     async with _get_index_semaphore():
         await asyncio.to_thread(index_paper_by_id, paper_id)
 
 
 async def _run_index_from_result(arxiv_result) -> None:
-    """Acquire the index semaphore then run index_paper_from_result in a thread."""
-    if not _semantic_search_available:
-        return
+    """Acquire the index semaphore then index a result in a worker thread."""
+    from .semantic_search import index_paper_from_result
+
     async with _get_index_semaphore():
         await asyncio.to_thread(index_paper_from_result, arxiv_result)
 
 
-settings = Settings()
+def _finish_index_task(task: asyncio.Task[None]) -> None:
+    """Release task ownership and consume failures to avoid teardown warnings."""
+    _index_tasks.discard(task)
+    if not task.cancelled():
+        task.exception()
 
-if _pdf_available:
-    fitz.TOOLS.mupdf_display_errors(False)
-    fitz.TOOLS.mupdf_display_warnings(False)
+
+def _track_index_task(coroutine) -> None:
+    """Create and retain one background indexing task when pro deps exist."""
+    if not _semantic_dependencies_available():
+        coroutine.close()
+        return
+    try:
+        task = asyncio.create_task(coroutine)
+    except RuntimeError:
+        coroutine.close()
+        return
+    _index_tasks.add(task)
+    task.add_done_callback(_finish_index_task)
+
+
+async def shutdown_background_tasks() -> None:
+    """Cancel and drain all owned indexing work during server shutdown."""
+    tasks = list(_index_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _index_tasks.clear()
+
+
+settings = Settings()
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +268,7 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
     on network/conversion failures.
     Raises ImportError (with a helpful message) if the [pdf] extra is not installed.
     """
-    if not _pdf_available:
+    if not _load_pdf_dependencies():
         raise ImportError(
             "PDF conversion requires the pdf extra: "
             "pip install arxiv-mcp-server[pdf]"
@@ -249,18 +285,18 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
     pdf_path = get_paper_path(paper_id, ".pdf")
     _download_arxiv_pdf_to_path(paper, pdf_path)
 
-    logger.info(f"Converting PDF to markdown for {paper_id}")
-    markdown = pymupdf4llm.to_markdown(pdf_path, show_progress=False)
-
-    # Release pymupdf C-level memory and clean up PDF
-    gc.collect()
-    # Clean up the PDF — we only keep the markdown
     try:
-        pdf_path.unlink()
-    except OSError:
-        pass
-
-    return markdown, paper
+        logger.info(f"Converting PDF to markdown for {paper_id}")
+        markdown = pymupdf4llm.to_markdown(pdf_path, show_progress=False)
+        return markdown, paper
+    finally:
+        # Release pymupdf C-level memory and never retain temporary PDFs,
+        # including when conversion raises midway through processing.
+        gc.collect()
+        try:
+            pdf_path.unlink()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +313,6 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # --- Cache hit: return immediately with content ---
         if md_path.exists():
             content = md_path.read_text(encoding="utf-8")
-            # Best-effort background index refresh (serialised via semaphore)
-            try:
-                asyncio.create_task(_run_index_by_id(paper_id))
-            except RuntimeError:
-                pass
             payload = add_content_payload(
                 {
                     "status": "success",
@@ -306,11 +337,8 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         if html_text is not None:
             # Save to cache
             md_path.write_text(html_text, encoding="utf-8")
-            # Best-effort index (serialised via semaphore)
-            try:
-                asyncio.create_task(_run_index_by_id(paper_id))
-            except RuntimeError:
-                pass
+            # Best-effort index; the tracked task is drained at shutdown.
+            _track_index_task(_run_index_by_id(paper_id))
             payload = add_content_payload(
                 {
                     "status": "success",
@@ -330,7 +358,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             ]
 
         # --- HTML not available: fall back to PDF ---
-        if not _pdf_available:
+        if not _load_pdf_dependencies():
             return [
                 types.TextContent(
                     type="text",
@@ -353,11 +381,8 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Save to cache
         md_path.write_text(markdown, encoding="utf-8")
 
-        # Best-effort index (serialised via semaphore)
-        try:
-            asyncio.create_task(_run_index_from_result(arxiv_result))
-        except RuntimeError:
-            pass
+        # Best-effort index; the tracked task is drained at shutdown.
+        _track_index_task(_run_index_from_result(arxiv_result))
 
         payload = add_content_payload(
             {

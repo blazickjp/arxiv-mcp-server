@@ -18,7 +18,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
-from .config import Settings
+from .config import Settings, close_arxiv_client
 from .tools import (
     handle_search,
     handle_download,
@@ -41,6 +41,7 @@ from .tools import (
 )
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
+from .tools.download import shutdown_background_tasks
 
 settings = Settings()
 logger = logging.getLogger("arxiv-mcp-server")
@@ -213,13 +214,17 @@ async def _run_streamable_http() -> None:
 
 
 async def main():
-    """Run the server async context."""
-    transport = settings.TRANSPORT.lower().replace("-", "_")
-    if transport in {"stdio", ""}:
-        await _run_stdio()
-    elif transport in {"http", "streamable_http"}:
-        await _run_streamable_http()
-    else:
-        raise ValueError(
-            f"Unsupported transport {settings.TRANSPORT!r}; expected 'stdio' or 'http'"
-        )
+    """Run the server async context and release process-wide resources."""
+    try:
+        transport = settings.TRANSPORT.lower().replace("-", "_")
+        if transport in {"stdio", ""}:
+            await _run_stdio()
+        elif transport in {"http", "streamable_http"}:
+            await _run_streamable_http()
+        else:
+            raise ValueError(
+                f"Unsupported transport {settings.TRANSPORT!r}; expected 'stdio' or 'http'"
+            )
+    finally:
+        await shutdown_background_tasks()
+        close_arxiv_client()

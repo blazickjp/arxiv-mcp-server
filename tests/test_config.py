@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 from arxiv_mcp_server.config import Settings
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 @patch.object(Path, "mkdir")
@@ -129,3 +129,15 @@ def test_path_normalization_with_windows_paths():
 
         # Instead of checking exact string equality, verify the Path objects are equivalent
         assert subpath == Path(windows_path).joinpath("subdir")
+
+
+def test_close_arxiv_client_releases_shared_session(monkeypatch):
+    from arxiv_mcp_server import config
+
+    client = MagicMock()
+    monkeypatch.setattr(config, "_arxiv_client", client)
+
+    config.close_arxiv_client()
+
+    client._session.close.assert_called_once_with()
+    assert config._arxiv_client is None
