@@ -197,7 +197,7 @@ wheels = [
 
 [[package]]
 name = "arxiv-mcp-server"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -242,7 +242,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.1" },
     { name = "aioresponses", marker = "extra == 'test'", specifier = ">=0.7.6" },
     { name = "anyio", specifier = ">=4.2.0" },
-    { name = "arxiv", specifier = ">=2.1.0" },
+    { name = "arxiv", specifier = ">=2.1.0,<4" },
     { name = "black", specifier = ">=25.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.3.0" },
     { name = "httpx", specifier = ">=0.24.0" },
