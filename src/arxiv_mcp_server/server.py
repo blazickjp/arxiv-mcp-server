@@ -158,7 +158,7 @@ def _transport_security_settings() -> TransportSecuritySettings:
     allowed_hosts = {
         host,
         f"{host}:{port}",
-        *(f"{h}:{port}" for h in loopback_hosts),
+        *(f"{h}:*" for h in loopback_hosts),
         *loopback_hosts,
     }
     allowed_hosts.update(_csv_settings(settings.ALLOWED_HOSTS))
@@ -167,6 +167,11 @@ def _transport_security_settings() -> TransportSecuritySettings:
     allowed_origins = {
         f"http://{origin_host}:{port}" for origin_host in origin_hosts
     } | {f"https://{origin_host}:{port}" for origin_host in origin_hosts}
+    allowed_origins.update(
+        f"{scheme}://{loopback}:*"
+        for scheme in ("http", "https")
+        for loopback in loopback_hosts
+    )
     allowed_origins.update(_csv_settings(settings.ALLOWED_ORIGINS))
 
     return TransportSecuritySettings(
