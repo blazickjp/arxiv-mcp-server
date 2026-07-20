@@ -21,8 +21,8 @@ from arxiv_mcp_server.tools.download import (
 
 
 def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
-    """_download_arxiv_pdf_to_path streams from paper.pdf_url; never calls download_pdf."""
-    import arxiv_mcp_server.tools.download as dl
+    """PDF streaming uses a canonical URL without relying on removed v4 attributes."""
+    import arxiv_mcp_server.arxiv_api as api
 
     stream_response = MagicMock()
     stream_response.raise_for_status = MagicMock()
@@ -37,28 +37,46 @@ def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
     http_client.__enter__.return_value = http_client
     http_client.__exit__.return_value = False
 
-    mocker.patch.object(dl.httpx, "Client", return_value=http_client)
+    mocker.patch.object(api.httpx, "Client", return_value=http_client)
 
-    paper = MagicMock(spec=arxiv.Result)
-    paper.pdf_url = "https://arxiv.org/pdf/2103.00000.pdf"
+    class Arxiv4Result:
+        def get_short_id(self):
+            return "2103.00000v2"
+
     dest = temp_storage_path / "paper.pdf"
-
-    _download_arxiv_pdf_to_path(paper, dest)
+    _download_arxiv_pdf_to_path(Arxiv4Result(), dest)
 
     assert dest.read_bytes() == b"chunk-onechunk-two"
-    http_client.stream.assert_called_once()
-    assert http_client.stream.call_args[0][0] == "GET"
-    assert http_client.stream.call_args[0][1] == paper.pdf_url
+    http_client.stream.assert_called_once_with(
+        "GET", "https://arxiv.org/pdf/2103.00000v2.pdf"
+    )
 
 
-def test_download_arxiv_pdf_requires_pdf_url(temp_storage_path):
-    """Missing pdf_url must fail fast with a clear error."""
-    paper = MagicMock(spec=arxiv.Result)
-    paper.pdf_url = None
-    dest = temp_storage_path / "missing.pdf"
+def test_download_arxiv_pdf_supports_legacy_ids(temp_storage_path, mocker):
+    """Canonical URLs retain legacy category-based arXiv IDs."""
+    import arxiv_mcp_server.arxiv_api as api
 
-    with pytest.raises(ValueError, match="No PDF URL available"):
-        _download_arxiv_pdf_to_path(paper, dest)
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.iter_bytes.return_value = [b"pdf"]
+    response_context = MagicMock()
+    response_context.__enter__.return_value = response
+    response_context.__exit__.return_value = False
+    client = MagicMock()
+    client.stream.return_value = response_context
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    mocker.patch.object(api.httpx, "Client", return_value=client)
+
+    class LegacyResult:
+        def get_short_id(self):
+            return "hep-th/9901001v3"
+
+    _download_arxiv_pdf_to_path(LegacyResult(), temp_storage_path / "legacy.pdf")
+
+    client.stream.assert_called_once_with(
+        "GET", "https://arxiv.org/pdf/hep-th/9901001v3.pdf"
+    )
 
 
 # ---------------------------------------------------------------------------

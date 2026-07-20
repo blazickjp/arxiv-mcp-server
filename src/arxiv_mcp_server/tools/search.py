@@ -13,6 +13,7 @@ from dateutil import parser
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
+from ..arxiv_api import canonical_pdf_url
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -426,7 +427,7 @@ def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
         "abstract": "[EXTERNAL CONTENT] " + paper.summary,
         "categories": paper.categories,
         "published": paper.published.isoformat(),
-        "url": paper.pdf_url,
+        "url": canonical_pdf_url(paper),
         "resource_uri": f"arxiv://{paper.get_short_id()}",
     }
 
