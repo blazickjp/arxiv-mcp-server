@@ -1,9 +1,63 @@
 """Shared compatibility helpers for the upstream arxiv package."""
 
+import asyncio
 from pathlib import Path
-from typing import Protocol
+import threading
+import time
+from typing import Awaitable, Callable, Protocol, TypeVar
 
 import httpx
+
+T = TypeVar("T")
+
+
+class ArxivRateLimiter:
+    """Serialize and space arXiv API requests across sync and async callers."""
+
+    def __init__(
+        self,
+        min_interval: float = 3.0,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sync_sleep: Callable[[float], None] = time.sleep,
+        async_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self.min_interval = min_interval
+        self._clock = clock
+        self._sync_sleep = sync_sleep
+        self._async_sleep = async_sleep
+        self._lock = threading.Lock()
+        self._last_started: float | None = None
+
+    def _remaining_delay(self) -> float:
+        if self._last_started is None:
+            return 0.0
+        return max(0.0, self.min_interval - (self._clock() - self._last_started))
+
+    def run_sync(self, operation: Callable[[], T]) -> T:
+        """Run a blocking operation inside the shared request gate."""
+        with self._lock:
+            delay = self._remaining_delay()
+            if delay:
+                self._sync_sleep(delay)
+            self._last_started = self._clock()
+            return operation()
+
+    async def run_async(self, operation: Callable[[], Awaitable[T]]) -> T:
+        """Run an async operation inside the same gate used by sync callers."""
+        while not self._lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
+            delay = self._remaining_delay()
+            if delay:
+                await self._async_sleep(delay)
+            self._last_started = self._clock()
+            return await operation()
+        finally:
+            self._lock.release()
+
+
+ARXIV_RATE_LIMITER = ArxivRateLimiter()
 
 
 class ArxivResult(Protocol):

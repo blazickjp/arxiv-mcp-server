@@ -4,11 +4,22 @@ import pytest
 import json
 from unittest.mock import patch, MagicMock, AsyncMock
 from arxiv_mcp_server.tools import handle_search
+from arxiv_mcp_server.tools import search as search_module
 from arxiv_mcp_server.tools.search import (
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
 )
+
+
+@pytest.fixture(autouse=True)
+def disable_request_spacing_for_search_unit_tests(monkeypatch):
+    """Keep search tests fast and isolate the process-wide client."""
+    from arxiv_mcp_server import config
+
+    monkeypatch.setattr(search_module.ARXIV_RATE_LIMITER, "min_interval", 0.0)
+    monkeypatch.setattr(search_module.ARXIV_RATE_LIMITER, "_last_started", 0.0)
+    monkeypatch.setattr(config, "_arxiv_client", None)
 
 
 @pytest.mark.asyncio
@@ -24,6 +35,21 @@ async def test_basic_search(mock_client):
         assert paper["id"] == "2103.12345"
         assert paper["title"] == "Test Paper"
         assert "resource_uri" in paper
+
+
+@pytest.mark.asyncio
+async def test_package_search_uses_process_wide_rate_limiter(mock_client, mocker):
+    """The arxiv package path must share the same gate as raw API requests."""
+    mocker.patch.object(search_module, "get_arxiv_client", return_value=mock_client)
+    run_sync = mocker.patch.object(
+        search_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda operation: operation(),
+    )
+
+    await handle_search({"query": "test query", "max_results": 1})
+
+    run_sync.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -223,18 +249,27 @@ async def test_search_max_results_limiting(mock_client):
 
 
 @pytest.mark.asyncio
-async def test_search_client_page_size_matches_requested_max_results(
-    mock_client, monkeypatch
+async def test_search_reuses_client_and_updates_page_size_inside_gate(
+    mock_client, mock_paper, monkeypatch
 ):
-    """Use the requested max_results as the arxiv client page size."""
+    """Varying result limits must reuse one client without stale page sizes."""
     from arxiv_mcp_server import config
 
     monkeypatch.setattr(config, "_arxiv_client", None)
+    observed_page_sizes = []
 
+    def results(_search):
+        observed_page_sizes.append(mock_client.page_size)
+        return [mock_paper]
+
+    mock_client.page_size = 100
+    mock_client.results.side_effect = results
     with patch("arxiv.Client", return_value=mock_client) as mock_client_class:
-        await handle_search({"query": "test", "max_results": 5})
+        await handle_search({"query": "first", "max_results": 5})
+        await handle_search({"query": "second", "max_results": 7})
 
-    mock_client_class.assert_called_once_with(page_size=5)
+    mock_client_class.assert_called_once_with()
+    assert observed_page_sizes == [5, 7]
 
 
 @pytest.mark.asyncio

@@ -2,19 +2,12 @@
 
 import json
 import logging
-import time
 from typing import Any, Dict, List
 
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from .search import (
-    _rate_limited_get,
-    ARXIV_HEADERS,
-    ARXIV_API_URL,
-    _MIN_REQUEST_INTERVAL,
-    _last_request_time,
-)
+from .search import _rate_limited_get, ARXIV_API_URL
 import httpx
 import xml.etree.ElementTree as ET
 

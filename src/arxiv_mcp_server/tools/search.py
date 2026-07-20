@@ -5,7 +5,6 @@ import json
 import logging
 import httpx
 import asyncio
-import time
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -13,58 +12,45 @@ from dateutil import parser
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
-from ..arxiv_api import canonical_pdf_url
+from ..arxiv_api import ARXIV_RATE_LIMITER, canonical_pdf_url
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
 
-# Module-level rate limiter: arXiv asks for >= 3s between requests
-_last_request_time: float = 0.0
-_request_lock = asyncio.Lock()
-_MIN_REQUEST_INTERVAL = 3.0  # seconds
-
 ARXIV_HEADERS = {
-    "User-Agent": "arxiv-mcp-server/0.4.1 (https://github.com/blazickjp/arxiv-mcp-server; research tool)"
+    "User-Agent": (
+        f"{settings.APP_NAME}/{settings.APP_VERSION} "
+        "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
+    )
 }
 
 
 async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """Make a GET request respecting arXiv's rate limit policy.
+    """Make an HTTP request through the process-wide arXiv request gate."""
 
-    Enforces a minimum 3s gap between requests (arXiv's documented guideline).
-    Fails fast on 429/503 — retrying while rate-limited only extends the ban.
-    One retry on timeout only.
-    """
-    global _last_request_time
+    async def request() -> httpx.Response:
+        for attempt in range(2):  # one retry on timeout only
+            try:
+                response = await client.get(url, headers=ARXIV_HEADERS)
+                if response.status_code in (429, 503):
+                    logger.warning(
+                        "arXiv rate limited (%s); not retrying", response.status_code
+                    )
+                    raise RuntimeError(
+                        f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
+                        "Please wait 60 seconds before retrying."
+                    )
+                response.raise_for_status()
+                return response
+            except httpx.TimeoutException:
+                if attempt == 0:
+                    logger.warning("arXiv request timed out, retrying once")
+                    await asyncio.sleep(5.0)
+                else:
+                    raise
+        raise RuntimeError("arXiv request timed out after retry")
 
-    # Enforce minimum interval before sending
-    async with _request_lock:
-        elapsed = time.monotonic() - _last_request_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-        _last_request_time = time.monotonic()
-
-    for attempt in range(2):  # one retry on timeout only
-        try:
-            response = await client.get(url, headers=ARXIV_HEADERS)
-            if response.status_code in (429, 503):
-                logger.warning(
-                    f"arXiv rate limited ({response.status_code}) — backing off, not retrying"
-                )
-                raise RuntimeError(
-                    f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-                    "Please wait 60 seconds before retrying."
-                )
-            response.raise_for_status()
-            return response
-        except httpx.TimeoutException:
-            if attempt == 0:
-                logger.warning("arXiv request timed out, retrying once")
-                await asyncio.sleep(5.0)
-            else:
-                raise
-
-    raise RuntimeError("arXiv request timed out after retry")
+    return await ARXIV_RATE_LIMITER.run_async(request)
 
 
 # arXiv API endpoint for raw queries (bypasses arxiv package URL encoding issues)
@@ -502,7 +488,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
         # For non-date queries, use the shared arxiv client (lazy, avoids eager import overhead)
-        client = get_arxiv_client(page_size=max_results)
+        client = get_arxiv_client()
 
         # Build query components
         query_parts = []
@@ -546,18 +532,19 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             sort_by=sort_criterion,
         )
 
-        # Respect rate limit before request
-        elapsed = time.monotonic() - _last_request_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-
-        # Process results — fail fast on rate limit, don't hammer the API
-        results = []
-        try:
+        def fetch_results() -> List[Dict[str, Any]]:
+            client.page_size = max_results
+            results = []
             for paper in client.results(search):
                 if len(results) >= max_results:
                     break
                 results.append(_process_paper(paper))
+            return results
+
+        try:
+            results = await asyncio.to_thread(
+                ARXIV_RATE_LIMITER.run_sync, fetch_results
+            )
         except arxiv.ArxivError as e:
             if "429" in str(e) or "rate" in str(e).lower() or "503" in str(e):
                 logger.warning(f"arXiv rate limited — not retrying: {e}")
