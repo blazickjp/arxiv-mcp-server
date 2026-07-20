@@ -27,8 +27,11 @@ jobs:
       - name: Build package
         run: python -m build
 
-      - name: Publish to PyPI with trusted publishing
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Install MCP Registry publisher
         run: |
