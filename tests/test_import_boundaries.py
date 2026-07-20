@@ -4,7 +4,6 @@ import json
 import subprocess
 import sys
 
-
 HEAVY_MODULES = {"fitz", "pymupdf4llm", "numpy", "sentence_transformers", "torch"}
 
 

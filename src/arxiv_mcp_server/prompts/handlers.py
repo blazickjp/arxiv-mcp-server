@@ -8,7 +8,6 @@ from .summarize_paper_prompt import SUMMARIZE_PAPER_PROMPT
 from .compare_papers_prompt import COMPARE_PAPERS_PROMPT
 from .literature_review_prompt import LITERATURE_REVIEW_PROMPT
 
-
 # Output structure for deep paper analysis
 OUTPUT_STRUCTURE = """
 Present your analysis with the following structure:
