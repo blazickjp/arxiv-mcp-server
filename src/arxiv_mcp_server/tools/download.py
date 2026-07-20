@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
-from ..arxiv_api import stream_pdf_to_path
+from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
 import logging
 
@@ -240,7 +240,9 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
 
     client = get_arxiv_client()
     try:
-        paper = next(client.results(arxiv.Search(id_list=[paper_id])))
+        paper = ARXIV_RATE_LIMITER.run_sync(
+            lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
+        )
     except StopIteration:
         raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
 

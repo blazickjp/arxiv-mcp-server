@@ -14,7 +14,8 @@ import arxiv
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from ..config import Settings
+from ..config import Settings, get_arxiv_client
+from ..arxiv_api import ARXIV_RATE_LIMITER
 from .list_papers import is_valid_arxiv_id
 
 try:
@@ -122,7 +123,8 @@ def _connect() -> sqlite3.Connection:
     """Open SQLite connection and ensure schema exists."""
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS semantic_index (
             paper_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -134,7 +136,8 @@ def _connect() -> sqlite3.Connection:
             embedding_dim INTEGER NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """)
+        """
+    )
     conn.commit()
     return conn
 
@@ -208,8 +211,10 @@ def _upsert_index_record(
 def index_paper_by_id(paper_id: str) -> bool:
     """Fetch arXiv metadata by ID and add/update it in the semantic index."""
     try:
-        client = arxiv.Client()
-        paper = next(client.results(arxiv.Search(id_list=[paper_id])))
+        client = get_arxiv_client()
+        paper = ARXIV_RATE_LIMITER.run_sync(
+            lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
+        )
     except StopIteration:
         logger.warning("Could not index paper %s: not found on arXiv", paper_id)
         return False
