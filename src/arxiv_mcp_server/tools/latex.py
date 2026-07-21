@@ -31,13 +31,15 @@ settings = Settings()
 
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 2_000
+MAX_ARCHIVE_PATH_BYTES = 512
+MAX_ARCHIVE_PATH_DEPTH = 20
 MAX_MEMBER_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_TEX_FILES = 500
 MAX_TOTAL_TEX_BYTES = 50 * 1024 * 1024
 MAX_INCLUDE_DEPTH = 20
 DEFAULT_MAX_CHARS = 12_000
-MAX_RETURN_CHARS = 100_000
+MAX_RETURN_CHARS = 50_000
 
 _CONTENT_WARNING = (
     "[UNTRUSTED EXTERNAL CONTENT — arXiv LaTeX source. "
@@ -151,10 +153,26 @@ def _download_source_archive(paper_id: str) -> bytes:
 
 def _safe_member_name(name: str) -> str:
     normalized = name.replace("\\", "/")
+    if "\x00" in normalized:
+        raise UnsafeSourceArchiveError(f"NUL byte in source archive path: {name!r}")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if len(normalized.encode("utf-8")) > MAX_ARCHIVE_PATH_BYTES:
+        raise SourceArchiveLimitError(
+            f"source archive path length exceeds limit: {name}"
+        )
+    raw_parts = normalized.split("/")
+    if len(raw_parts) > MAX_ARCHIVE_PATH_DEPTH:
+        raise SourceArchiveLimitError(
+            f"source archive path depth exceeds limit: {name}"
+        )
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise UnsafeSourceArchiveError(f"unsafe path in source archive: {name}")
     path = PurePosixPath(normalized)
     if path.is_absolute() or ".." in path.parts or not path.name:
         raise UnsafeSourceArchiveError(f"unsafe path in source archive: {name}")
-    return posixpath.normpath(normalized).lstrip("./")
+    return posixpath.normpath(normalized)
 
 
 def _read_plain_gzip(data: bytes) -> dict[str, str]:
@@ -183,6 +201,7 @@ def _extract_tex_files(data: bytes) -> dict[str, str]:
         return _read_plain_gzip(data)
 
     files: dict[str, str] = {}
+    normalized_members: set[str] = set()
     total_uncompressed = 0
     total_tex = 0
     with archive:
@@ -199,7 +218,16 @@ def _extract_tex_files(data: bytes) -> dict[str, str]:
                 # Real arXiv archives may contain an explicit root directory entry.
                 continue
             safe_name = _safe_member_name(member.name)
-            if not member.isfile():
+            if safe_name in normalized_members:
+                raise UnsafeSourceArchiveError(
+                    f"duplicate normalized path in source archive: {safe_name}"
+                )
+            normalized_members.add(safe_name)
+            if not member.isfile() and not member.isdir():
+                raise UnsafeSourceArchiveError(
+                    f"unsupported member type in source archive: {member.name}"
+                )
+            if member.isdir():
                 continue
             if member.size < 0 or member.size > MAX_TOTAL_UNCOMPRESSED_BYTES:
                 raise SourceArchiveLimitError(
