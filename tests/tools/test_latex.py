@@ -120,6 +120,51 @@ def test_extract_tex_files_supports_plain_gzip():
     assert files == {"main.tex": source.decode()}
 
 
+def test_load_cached_source_rejects_stale_format_and_oversized_content(
+    monkeypatch, tmp_path
+):
+    cache = tmp_path / "paper.json"
+    monkeypatch.setattr(latex, "_cache_path", lambda _paper_id: cache)
+    monkeypatch.setattr(latex, "MAX_FLATTENED_CHARS", 10)
+
+    cache.write_text(
+        json.dumps(
+            {
+                "cache_format": latex.CACHE_FORMAT_VERSION - 1,
+                "content": "safe",
+                "main_file": "main.tex",
+                "source_files": 1,
+            }
+        )
+    )
+    assert latex._load_cached_source("2401.00001") is None
+    assert not cache.exists()
+
+    cache.write_text(
+        json.dumps(
+            {
+                "cache_format": latex.CACHE_FORMAT_VERSION,
+                "content": "x" * (latex.MAX_FLATTENED_CHARS + 1),
+                "main_file": "main.tex",
+                "source_files": 1,
+            }
+        )
+    )
+    assert latex._load_cached_source("2401.00001") is None
+    assert not cache.exists()
+
+
+def test_write_cached_source_records_format_version(monkeypatch, tmp_path):
+    cache = tmp_path / "paper.json"
+    monkeypatch.setattr(latex, "_cache_path", lambda _paper_id: cache)
+
+    latex._write_cached_source(
+        "2401.00001", latex.LatexSource("content", "main.tex", 1)
+    )
+
+    assert json.loads(cache.read_text())["cache_format"] == latex.CACHE_FORMAT_VERSION
+
+
 def test_flatten_source_selects_main_document_and_resolves_inputs():
     files = {
         "notes.tex": "scratch",
@@ -182,6 +227,50 @@ Numbers.
     assert "\\section{Results}" not in latex._extract_section(source, sections, "1")
 
 
+def test_extract_tex_files_streams_members_without_getmembers(monkeypatch):
+    archive = _tar_bytes({"main.tex": b"\\documentclass{article}"})
+
+    def forbidden(_self):
+        raise AssertionError("getmembers must not scan the complete archive")
+
+    monkeypatch.setattr(tarfile.TarFile, "getmembers", forbidden)
+
+    assert latex._extract_tex_files(archive)["main.tex"] == "\\documentclass{article}"
+
+
+def test_extract_tex_files_enforces_member_count_during_iteration(monkeypatch):
+    monkeypatch.setattr(latex, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = _tar_bytes(
+        {
+            "one.txt": b"1",
+            "two.txt": b"2",
+            "main.tex": b"\\documentclass{article}",
+        }
+    )
+
+    with pytest.raises(latex.SourceArchiveLimitError, match="too many members"):
+        latex._extract_tex_files(archive)
+
+
+def test_flatten_source_enforces_aggregate_output_budget(monkeypatch):
+    monkeypatch.setattr(latex, "MAX_FLATTENED_CHARS", 40)
+    files = {
+        "main.tex": "\\documentclass{article}\n" + "\\input{child}\n" * 10,
+        "child.tex": "0123456789",
+    }
+
+    with pytest.raises(latex.SourceArchiveLimitError, match="flattened"):
+        latex._flatten_source(files)
+
+
+def test_parse_sections_ignores_commented_headings():
+    source = "% \\section{Fake}\n\\section{Real}\nText"
+
+    sections = latex._parse_sections(source)
+
+    assert [(item.section_id, item.title) for item in sections] == [("1", "Real")]
+
+
 def test_download_archive_aborts_when_stream_exceeds_limit(monkeypatch):
     monkeypatch.setattr(latex, "MAX_ARCHIVE_BYTES", 5)
     response = MagicMock()
@@ -222,6 +311,19 @@ async def test_get_latex_rejects_invalid_id_before_loading(monkeypatch):
 
     assert payload["status"] == "error"
     assert "invalid arXiv ID" in payload["message"]
+    load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_latex_rejects_overlong_legacy_id_before_loading(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(latex, "_load_source", load)
+    paper_id = f"{'a' * 100}/9901001"
+
+    payload = _payload(await latex.handle_get_paper_latex({"paper_id": paper_id}))
+
+    assert payload["status"] == "error"
+    assert payload["message"] == "invalid arXiv ID"
     load.assert_not_called()
 
 
@@ -289,6 +391,29 @@ async def test_list_latex_sections_is_compact(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_latex_sections_is_paginated_and_bounded(monkeypatch):
+    source = "\n".join(f"\\section{{Section {index}}}\nText" for index in range(6))
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(source, "main.tex", 1),
+    )
+
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections(
+            {"paper_id": "2401.00001", "start": 1, "max_sections": 2}
+        )
+    )
+
+    assert payload["total_sections"] == 6
+    assert payload["start"] == 1
+    assert payload["returned_sections"] == 2
+    assert payload["next_start"] == 3
+    assert payload["is_truncated"] is True
+    assert [item["id"] for item in payload["sections"]] == ["2", "3"]
+
+
+@pytest.mark.asyncio
 async def test_get_latex_section_supports_bounded_continuation(monkeypatch):
     source = "\\section{Intro}\nabcdefghij\n\\section{Next}\nnope"
     monkeypatch.setattr(
@@ -316,6 +441,24 @@ async def test_get_latex_section_supports_bounded_continuation(monkeypatch):
     assert first["is_truncated"] is True
     assert second["is_truncated"] is False
     assert "Next" not in first["content"] + second["content"]
+
+
+@pytest.mark.asyncio
+async def test_get_latex_section_rejects_overlong_identifier_without_echo(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(latex, "_load_source", load)
+    section_id = "x" * 1_000_000
+
+    payload = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": "2401.00001", "section_id": section_id}
+        )
+    )
+
+    assert payload["status"] == "error"
+    assert payload["message"] == "section_id exceeds 200 characters"
+    assert len(json.dumps(payload)) < 500
+    load.assert_not_called()
 
 
 @pytest.mark.asyncio

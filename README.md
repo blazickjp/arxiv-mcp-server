@@ -321,9 +321,11 @@ result = await call_tool("get_paper_latex", {
     "paper_id": "2401.12345"
 })
 
-# Inspect the compact section outline
+# Inspect a bounded page of the compact section outline
 outline = await call_tool("list_paper_latex_sections", {
-    "paper_id": "2401.12345"
+    "paper_id": "2401.12345",
+    "start": 0,
+    "max_sections": 100
 })
 
 # Read one section by returned ID or exact title
@@ -334,7 +336,7 @@ section = await call_tool("get_paper_latex_section", {
 })
 ```
 
-The source processor validates arXiv IDs, rejects archive traversal and link entries, enforces compressed/expanded/file-count limits, resolves local `\\input`/`\\include` directives with bounded recursion, and caches the flattened result atomically. Some papers do not publish TeX source; those calls return a structured availability error.
+The source processor validates arXiv IDs, streams archive headers while enforcing member and expanded-size limits, rejects traversal, links, duplicate paths, and special-file entries, and caps aggregate include expansion. It ignores commented headings/includes, paginates outlines, bounds section titles and identifiers, and caches versioned validated results atomically. Some papers do not publish TeX source; those calls return a structured availability error.
 
 
 ## 📝 Research Prompts
