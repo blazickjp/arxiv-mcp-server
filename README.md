@@ -311,6 +311,30 @@ result = await call_tool("read_paper", {
 })
 ```
 
+### 5. Original LaTeX Source
+
+Retrieve author-submitted LaTeX when available. This preserves equations and document structure more faithfully than PDF conversion. Source responses default to 12,000 characters and expose the same continuation metadata used by paper reads.
+
+```python
+# Download/cache bounded flattened source
+result = await call_tool("get_paper_latex", {
+    "paper_id": "2401.12345"
+})
+
+# Inspect the compact section outline
+outline = await call_tool("list_paper_latex_sections", {
+    "paper_id": "2401.12345"
+})
+
+# Read one section by returned ID or exact title
+section = await call_tool("get_paper_latex_section", {
+    "paper_id": "2401.12345",
+    "section_id": "2.1",
+    "max_chars": 12000
+})
+```
+
+The source processor validates arXiv IDs, rejects archive traversal and link entries, enforces compressed/expanded/file-count limits, resolves local `\\input`/`\\include` directives with bounded recursion, and caches the flattened result atomically. Some papers do not publish TeX source; those calls return a structured availability error.
 
 
 ## 📝 Research Prompts
