@@ -40,6 +40,43 @@ def test_extract_tex_files_rejects_path_traversal():
         latex._extract_tex_files(archive)
 
 
+def test_safe_member_name_rejects_nul_long_and_deep_paths():
+    with pytest.raises(latex.UnsafeSourceArchiveError, match="NUL"):
+        latex._safe_member_name("bad\x00name.tex")
+    with pytest.raises(latex.SourceArchiveLimitError, match="path length"):
+        latex._safe_member_name("a" * (latex.MAX_ARCHIVE_PATH_BYTES + 1) + ".tex")
+    deep = "/".join(["d"] * (latex.MAX_ARCHIVE_PATH_DEPTH + 1)) + "/main.tex"
+    with pytest.raises(latex.SourceArchiveLimitError, match="path depth"):
+        latex._safe_member_name(deep)
+
+
+def test_extract_tex_files_rejects_duplicate_normalized_paths():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, content in (("main.tex", b"first"), ("./main.tex", b"second")):
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+
+    with pytest.raises(latex.UnsafeSourceArchiveError, match="duplicate"):
+        latex._extract_tex_files(buffer.getvalue())
+
+
+def test_extract_tex_files_rejects_unsupported_special_members():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        fifo = tarfile.TarInfo("pipe")
+        fifo.type = tarfile.FIFOTYPE
+        archive.addfile(fifo)
+        content = b"\\documentclass{article}"
+        member = tarfile.TarInfo("main.tex")
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
+
+    with pytest.raises(latex.UnsafeSourceArchiveError, match="unsupported"):
+        latex._extract_tex_files(buffer.getvalue())
+
+
 def test_extract_tex_files_rejects_links():
     archive = _tar_bytes(
         {"main.tex": b"\\documentclass{article}"},
