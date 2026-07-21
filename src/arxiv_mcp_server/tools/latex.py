@@ -190,11 +190,15 @@ def _extract_tex_files(data: bytes) -> dict[str, str]:
         if len(members) > MAX_ARCHIVE_MEMBERS:
             raise SourceArchiveLimitError("source archive contains too many members")
         for member in members:
-            safe_name = _safe_member_name(member.name)
             if member.issym() or member.islnk():
                 raise UnsafeSourceArchiveError(
                     f"link entry is not allowed in source archive: {member.name}"
                 )
+            normalized_name = member.name.replace("\\", "/")
+            if member.isdir() and posixpath.normpath(normalized_name) == ".":
+                # Real arXiv archives may contain an explicit root directory entry.
+                continue
+            safe_name = _safe_member_name(member.name)
             if not member.isfile():
                 continue
             if member.size < 0 or member.size > MAX_TOTAL_UNCOMPRESSED_BYTES:

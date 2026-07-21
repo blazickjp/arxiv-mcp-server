@@ -50,6 +50,22 @@ def test_extract_tex_files_rejects_links():
         latex._extract_tex_files(archive)
 
 
+def test_extract_tex_files_allows_archive_root_directory_entry():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        content = b"\\documentclass{article}"
+        member = tarfile.TarInfo("./main.tex")
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
+
+    assert latex._extract_tex_files(buffer.getvalue()) == {
+        "main.tex": "\\documentclass{article}"
+    }
+
+
 def test_extract_tex_files_rejects_oversized_member(monkeypatch):
     monkeypatch.setattr(latex, "MAX_MEMBER_BYTES", 8)
     archive = _tar_bytes({"main.tex": b"0123456789"})
