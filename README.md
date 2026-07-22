@@ -68,6 +68,7 @@ Agentic AI framework as **AG01: Prompt Injection in LLM-Integrated Systems**.
 
 ### References
 
+- [Darkmoon](https://github.com/ASCIT31/Dark-Moon) - Open source (GPL-3.0) autonomous AI pentest platform (web, API, AD, Kubernetes), MCP host, proof of exploitation.
 - [OWASP LLM01: Prompt Injection](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
 - [OWASP Agentic AI - AG01: Prompt Injection](https://genai.owasp.org/llmrisk/ag01-prompt-injection/)
 
