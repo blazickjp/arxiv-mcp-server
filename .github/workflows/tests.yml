@@ -2,60 +2,50 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main]
   pull_request:
-    branches: [ main, master ]
-    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
-    
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Install uv (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-        
-    - name: Install uv (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        # Install uv
-        iwr -useb https://astral.sh/uv/install.ps1 | iex
-        # Add uv to PATH
-        echo "$HOME\.uv\bin" >> $GITHUB_PATH
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.30"
+          enable-cache: true
 
-    - name: Install dependencies
-      run: |
-        uv pip install --system pytest pytest-cov pytest-asyncio
-        uv pip install --system -e ".[test]"
-        # If you don't have a [test] extra, use:
-        # uv pip install --system -r requirements-test.txt
-        # or just:
-        # uv pip install --system -e .
+      - name: Install locked test environment
+        run: uv sync --locked --extra test
 
-    # Run tests differently based on platform
-    - name: Run tests on Linux/macOS
-      if: runner.os != 'Windows'
-      run: |
-        pytest --cov=./ --cov-report=xml -v
-        
-    - name: Run tests on Windows
-      if: runner.os == 'Windows' 
-      run: |
-        pytest --cov=./ --cov-report=xml -v
+      - name: Run tests
+        run: uv run pytest --cov-report=xml
 
-        
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag arxiv-mcp-server:ci .
+
+      - name: Verify installed package
+        run: |
+          docker run --rm --entrypoint python arxiv-mcp-server:ci -c \
+            "import importlib.metadata; print(importlib.metadata.version('arxiv-mcp-server'))"

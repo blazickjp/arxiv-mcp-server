@@ -153,7 +153,7 @@ def _get_model() -> Any:
     global _model
     if _model is None:
         logger.info("Loading semantic embedding model %s", EMBEDDING_MODEL_NAME)
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME, silent=True)
+        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 
 

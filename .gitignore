@@ -25,9 +25,16 @@ mcpb-build/
 *.DS_Store
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/
+
+# Test and analysis caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
 
 # IDE
 .idea/

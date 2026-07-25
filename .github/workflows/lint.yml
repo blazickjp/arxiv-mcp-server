@@ -2,37 +2,30 @@ name: Lint
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main]
   pull_request:
-    branches: [ main, master ]
-    types: [opened, synchronize, reopened]
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  lint:
+  black:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.head_ref || github.ref_name }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v7
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
 
-    - name: Install Black
-      run: pip install black
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.30"
+          enable-cache: true
 
-    - name: Run Black (auto-format)
-      run: black .
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
 
-    - name: Commit and push formatting fixes (push events only)
-      if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
-      run: |
-        git config --local user.name "github-actions[bot]"
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git diff --quiet || (git add -A && git commit -m "style: auto-format with Black" && git push)
+      - name: Check formatting
+        run: uv run black --check .

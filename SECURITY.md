@@ -1,45 +1,43 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-Only the current release is actively supported with security updates.
+Security fixes are provided for the latest published release. Users should upgrade to the newest version before reporting an issue that may already be fixed.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.3.2   | :white_check_mark: |
-| < 0.3.2 | :x:                |
+## Report a vulnerability
 
-## Reporting a Vulnerability
+Do not open a public GitHub issue for suspected vulnerabilities.
 
-If you discover a security vulnerability in arxiv-mcp-server, please report it by
-sending an email to:
+Email `joe.blazick@yahoo.com` with the subject `SECURITY: arxiv-mcp-server`. Include:
 
-  joe.blazick@yahoo.com
+- affected version and installation method
+- impact and attack scenario
+- minimal reproduction steps or proof of concept
+- suggested mitigation, if known
 
-Subject line: SECURITY: arxiv-mcp-server
+Reports are handled on a best-effort basis. This is an open-source project maintained in spare time and has no guaranteed response SLA.
 
-Please include a description of the issue, steps to reproduce, and any relevant
-details about your environment. Do not open a public GitHub issue for security
-vulnerabilities.
+## Threat model
 
-Expected response time: best effort. This is a free open source project maintained
-in spare time, so there is no guaranteed SLA, but reports will be taken seriously
-and addressed as quickly as possible.
+### Untrusted paper content
 
-## Known Risks
+Paper text, abstracts, metadata, and LaTeX source are external input. They can contain prompt-injection text intended to manipulate an MCP client or model into ignoring its instructions or calling unrelated tools.
 
-### Prompt Injection via Paper Content
+The server marks and bounds content where practical, but it cannot prevent a client model from following malicious text. Clients should:
 
-arXiv papers are user-generated, untrusted content. A maliciously crafted paper
-could contain text designed to manipulate an AI assistant's behavior (prompt
-injection). When this server returns paper content to an AI model, that content
-should be treated as untrusted input.
+- keep approval controls enabled for shell, filesystem, browser, messaging, and other sensitive tools
+- treat instructions found inside papers as data, not commands
+- review model output before external actions
+- sandbox automated pipelines that combine paper content with privileged tools
 
-Mitigations to consider:
-- Run the MCP server in a sandboxed environment in production deployments.
-- Be cautious when feeding paper content directly into agentic workflows with
-  access to sensitive tools or data.
-- Review paper content before using it in high-stakes automated pipelines.
+### LaTeX source archives
 
-This risk is inherent to any system that feeds external, user-generated text to
-an AI model and cannot be fully eliminated by this server alone.
+Source archives are treated as hostile. The server validates archive paths and member types, rejects links and duplicate normalized paths, enforces compressed and expanded-size limits, caps include recursion and aggregate output, and writes cache records atomically. These controls reduce archive traversal and decompression risks but do not make source content trustworthy.
+
+### Streamable HTTP
+
+Streamable HTTP binds to loopback by default and enables DNS-rebinding protection. If the server is exposed through a reverse proxy, provide authentication and network controls upstream, keep the process on a private interface, and configure `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` for forwarded values.
+
+## Secrets and private data
+
+The server does not require an arXiv API key. Do not include credentials, private paper collections, local indexes, or sensitive filesystem paths in issues, logs, or pull requests.
