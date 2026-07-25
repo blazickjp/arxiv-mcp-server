@@ -88,11 +88,53 @@ uv export \
   --no-emit-project \
   --format requirements-txt \
   --output-file "$REQUIREMENTS_FILE"
-"$PYTHON_BIN" -m pip install \
-  --target "$BUILD_DIR/server/vendor" \
-  --no-user \
-  --quiet \
-  --requirement "$REQUIREMENTS_FILE"
+
+PIP_ARGS=(
+  --target "$BUILD_DIR/server/vendor"
+  --no-user
+  --quiet
+)
+
+if [[ "$(uname -m)" == "x86_64" ]]; then
+  # onnxruntime 1.24.x no longer publishes Intel macOS wheels. Keep the bundle
+  # on the last CPython 3.11 Intel build while installing the remaining locked
+  # dependency closure without re-resolving transitive requirements.
+  "$PYTHON_BIN" - "$REQUIREMENTS_FILE" <<'PYEOF'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+out = []
+skipping = False
+found = False
+for line in lines:
+    if not skipping and line.startswith("onnxruntime=="):
+        skipping = True
+        found = True
+    if skipping:
+        if not line.rstrip().endswith("\\"):
+            skipping = False
+        continue
+    out.append(line)
+if not found:
+    raise SystemExit("Could not find locked onnxruntime requirement")
+path.write_text("".join(out))
+PYEOF
+  ONNXRUNTIME_REQUIREMENT="$BUILD_DIR/onnxruntime-intel.txt"
+  printf '%s\n' \
+    'onnxruntime==1.23.2 --hash=sha256:87d8b6eaf0fbeb6835a60a4265fde7a3b60157cf1b2764773ac47237b4d48612' \
+    > "$ONNXRUNTIME_REQUIREMENT"
+  "$PYTHON_BIN" -m pip install "${PIP_ARGS[@]}" \
+    --requirement "$ONNXRUNTIME_REQUIREMENT"
+  "$PYTHON_BIN" -m pip install "${PIP_ARGS[@]}" \
+    --no-deps \
+    --requirement "$REQUIREMENTS_FILE"
+  rm -f "$ONNXRUNTIME_REQUIREMENT"
+else
+  "$PYTHON_BIN" -m pip install "${PIP_ARGS[@]}" \
+    --requirement "$REQUIREMENTS_FILE"
+fi
 rm -f "$REQUIREMENTS_FILE"
 echo "Dependencies vendored"
 
