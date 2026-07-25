@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing GitHub release tag to upload bundles to (optional)"
+        required: false
+        type: string
 
 jobs:
   build-mcpb:
@@ -39,13 +44,15 @@ jobs:
         run: bash scripts/build-mcpb.sh
 
       - name: Upload MCPB to release
-        if: github.event_name == 'release'
-        run: gh release upload "${{ github.event.release.tag_name }}" mcpb-build/*.mcpb --clobber
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.release_tag }}"
+          gh release upload "$TAG" mcpb-build/*.mcpb --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload MCPB artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag == ''
         uses: actions/upload-artifact@v7
         with:
           name: arxiv-mcp-server-mcpb-${{ matrix.os }}
