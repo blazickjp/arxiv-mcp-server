@@ -124,8 +124,11 @@ PYEOF
   ONNXRUNTIME_REQUIREMENT="$BUILD_DIR/onnxruntime-intel.txt"
   printf '%s\n' \
     'onnxruntime==1.23.2 --hash=sha256:87d8b6eaf0fbeb6835a60a4265fde7a3b60157cf1b2764773ac47237b4d48612' \
+    'coloredlogs==15.0.1 --hash=sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934' \
+    'humanfriendly==10.0 --hash=sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477' \
     > "$ONNXRUNTIME_REQUIREMENT"
   "$PYTHON_BIN" -m pip install "${PIP_ARGS[@]}" \
+    --no-deps \
     --requirement "$ONNXRUNTIME_REQUIREMENT"
   "$PYTHON_BIN" -m pip install "${PIP_ARGS[@]}" \
     --no-deps \
