@@ -1,464 +1,304 @@
-[![PyPI Version](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
-[![GitHub Stars](https://img.shields.io/github/stars/blazickjp/arxiv-mcp-server?style=flat)](https://github.com/blazickjp/arxiv-mcp-server/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/blazickjp/arxiv-mcp-server?style=flat)](https://github.com/blazickjp/arxiv-mcp-server/forks)
-[![Tests](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml/badge.svg)](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml)
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![smithery badge](https://smithery.ai/badge/arxiv-mcp-server)](https://smithery.ai/server/arxiv-mcp-server)
-[![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
-[![Install in VS Code Insiders](https://img.shields.io/badge/Install_in-VS_Code_Insiders-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D&quality=insiders)
-[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
-[![Codex Plugin](https://img.shields.io/badge/Codex-Plugin-412991?style=flat-square)](./.codex-plugin/plugin.json)
-
-# ArXiv MCP Server
+# arxiv-mcp-server
 
 <!-- mcp-name: io.github.blazickjp/arxiv-mcp-server -->
 
-> 🔍 Enable AI assistants to search and access arXiv papers through a simple MCP interface.
+[![PyPI](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
+[![Tests](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml/badge.svg)](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/pypi/pyversions/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
 
-The ArXiv MCP Server provides a bridge between AI assistants and arXiv's research repository through the Model Context Protocol (MCP). It allows AI models to search for papers and access their content in a programmatic way.
+An MCP server for searching arXiv, downloading papers, reading full text, retrieving original LaTeX, following citation graphs, and maintaining research alerts.
 
-<div align="center">
-  
-🤝 **[Contribute](https://github.com/blazickjp/arxiv-mcp-server/blob/main/CONTRIBUTING.md)** • 
-📝 **[Report Bug](https://github.com/blazickjp/arxiv-mcp-server/issues)**
+It runs locally over stdio by default. Papers and indexes stay on your machine; search, source retrieval, citation graphs, and downloads call their respective external services.
 
-<a href="https://www.pulsemcp.com/servers/blazickjp-arxiv-mcp-server"><img src="https://www.pulsemcp.com/badge/top-pick/blazickjp-arxiv-mcp-server" width="400" alt="Pulse MCP Badge"></a>
-</div>
+## Install
 
-## ✨ Core Features
+### Use `uvx` from any MCP client
 
-- 🔎 **Paper Search**: Query arXiv papers with filters for date ranges and categories
-- 📄 **Paper Access**: Download and read paper content
-- 📋 **Paper Listing**: View all downloaded papers
-- 🗃️ **Local Storage**: Papers are saved locally for faster access
-- 📝 **Prompts**: A set of research prompts for paper analysis
-
-
-
-## 🔒 Security
-
-### Prompt Injection Risk
-
-**Paper content retrieved from arXiv is untrusted external input.**
-
-When an AI assistant downloads or reads a paper through this server, the paper's
-text is passed directly into the model's context. A maliciously crafted paper
-could embed adversarial instructions designed to hijack the AI's behavior — for
-example, instructing it to exfiltrate data, invoke other tools with unintended
-arguments, or override system-level instructions. This is a known class of
-attack described by OWASP as **LLM01: Prompt Injection** and by the OWASP
-Agentic AI framework as **AG01: Prompt Injection in LLM-Integrated Systems**.
-
-### Recommended Mitigations
-
-1. **Use read-only MCP configurations** — where possible, configure the MCP
-   client so that the arxiv-mcp-server cannot trigger write operations or invoke
-   other tools on your behalf.
-2. **Review paper content before acting on AI summaries** — if an AI summary
-   asks you to run commands or visit external URLs that were not part of your
-   original request, treat that as a red flag.
-3. **Be cautious in multi-tool setups** — agentic pipelines that combine this
-   server with filesystem, shell, or browser tools are higher risk; a prompt
-   injection in a paper could chain tool calls unexpectedly.
-4. **Treat AI-generated summaries as data, not instructions** — always apply
-   human judgment before executing any action the AI recommends after reading a
-   paper.
-
-### References
-
-- [OWASP LLM01: Prompt Injection](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
-- [OWASP Agentic AI - AG01: Prompt Injection](https://genai.owasp.org/llmrisk/ag01-prompt-injection/)
-
----
-
-## 🚀 Quick Start
-
-### Installing via Smithery
-
-To install ArXiv Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/arxiv-mcp-server):
-
-```bash
-npx -y @smithery/cli install arxiv-mcp-server --client claude
-```
-
-### Installing via Claude Desktop (.mcpb)
-
-The `.mcpb` bundle is the one-click install path for Claude Desktop on macOS. It bundles the server code and Python package dependencies, so users do not need `uv`, `pip`, or manual MCP JSON configuration. Python 3.11+ must still be available on the user's machine.
-
-1. Download the artifact matching your Mac from the [latest release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
-   - Apple Silicon: `arxiv-mcp-server-darwin-arm64-<version>.mcpb`
-   - Intel: `arxiv-mcp-server-darwin-x86_64-<version>.mcpb`
-2. In Claude Desktop open **Settings → Extensions** (or drag-and-drop the file onto the Claude Desktop window).
-3. Click **Install** and, when prompted, set your preferred paper storage directory (defaults to `~/.arxiv-mcp-server/papers`).
-
-Claude Desktop launches the bundled server over stdio — no configuration file edits needed.
-
-### Installing Manually
-
-> **Important — use `uv tool install`, not npm/pnpm or `uv pip install`**
->
-> This project publishes the supported server as a Python package on PyPI.
-> Do **not** install `arxiv-mcp-server` with `npm install`, `pnpm add`, or
-> `npx arxiv-mcp-server`: the npm package with this name is an unrelated
-> third-party package and has its own Python-detection wrapper.
->
-> Running `uv pip install arxiv-mcp-server` installs the package into the
-> current virtual environment but does **not** place the `arxiv-mcp-server`
-> executable on your `PATH`.  You must use `uv tool install` so that uv
-> creates an isolated environment and exposes the executable globally:
-
-```bash
-uv tool install arxiv-mcp-server
-```
-
-After this, the `arxiv-mcp-server` command will be available on your `PATH`.
-
-> **PDF fallback (older papers):** Most arXiv papers have an HTML version which
-> the base install handles automatically. For older papers that only have a PDF,
-> the server needs the `[pdf]` extra (pymupdf4llm). Install it with:
->
-> ```bash
-> uv tool install 'arxiv-mcp-server[pdf]'
-> ```
-You can verify it with:
-
-```bash
-arxiv-mcp-server --help
-```
-
-If you previously ran `uv pip install arxiv-mcp-server` and the command is
-missing, uninstall it and re-install with `uv tool install` as shown above.
-
-For development:
-
-```bash
-# Clone and set up development environment
-git clone https://github.com/blazickjp/arxiv-mcp-server.git
-cd arxiv-mcp-server
-
-# Create and activate virtual environment
-uv venv
-source .venv/bin/activate
-
-# Install with test dependencies (development only — no global executable)
-uv pip install -e ".[test]"
-```
-
-### 🤖 Codex Plugin Integration
-
-This repository now includes a Codex plugin manifest at `.codex-plugin/plugin.json`
-and a portable MCP config at `.mcp.json` so Codex-oriented tooling can discover
-the server without inventing its own install recipe.
-
-The Codex integration uses the same stdio launch path documented elsewhere in
-this README:
+Install [uv](https://docs.astral.sh/uv/) and add this server to your client's MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "arxiv": {
       "command": "uvx",
-      "args": ["arxiv-mcp-server"]
+      "args": [
+        "arxiv-mcp-server",
+        "--storage-path",
+        "/absolute/path/to/papers"
+      ]
     }
   }
 }
 ```
 
-If your Codex client supports plugin manifests, point it at
-`./.codex-plugin/plugin.json`. If it only supports raw MCP configuration, use
-`./.mcp.json` directly.
+Omit `--storage-path` to use `~/.arxiv-mcp-server/papers`.
 
-### 🔌 MCP Integration
-
-Add this configuration to your MCP client config file:
+For older papers that require PDF conversion, run the package with its PDF extra:
 
 ```json
 {
-    "mcpServers": {
-        "arxiv-mcp-server": {
-            "command": "uv",
-            "args": [
-                "tool",
-                "run",
-                "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
-            ]
-        }
+  "mcpServers": {
+    "arxiv": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "arxiv-mcp-server[pdf]",
+        "arxiv-mcp-server"
+      ]
     }
+  }
 }
 ```
 
-For Development:
+The PyPI package named `arxiv-mcp-server` is the supported distribution. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
+
+### Install the command persistently
+
+```bash
+uv tool install arxiv-mcp-server
+```
+
+With PDF fallback support:
+
+```bash
+uv tool install 'arxiv-mcp-server[pdf]'
+```
+
+After installation, use `arxiv-mcp-server` instead of `uvx arxiv-mcp-server` in the client configuration.
+
+### Claude Desktop bundle
+
+macOS users can install a self-contained `.mcpb` bundle from the [latest GitHub release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
+
+- Apple Silicon: `arxiv-mcp-server-darwin-arm64-<version>.mcpb`
+- Intel: `arxiv-mcp-server-darwin-x86_64-<version>.mcpb`
+
+Open Claude Desktop, go to **Settings → Extensions**, and install the downloaded file. The bundle includes its Python dependencies but requires CPython 3.11.x; its native dependencies are built for that interpreter version.
+
+### Codex and repository-local clients
+
+This repository includes:
+
+- `.mcp.json` for clients that discover project-local MCP configuration
+- `.codex-plugin/plugin.json` for Codex-compatible plugin discovery
+
+Both use the same `uvx arxiv-mcp-server` stdio launch path.
+
+## Tools
+
+The server currently exposes 13 tools.
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `search_papers` | Search arXiv by query, category, date, and sort order | Remote arXiv API |
+| `get_abstract` | Fetch metadata and an abstract by arXiv ID | Does not download the paper |
+| `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]` |
+| `list_papers` | List papers stored locally | Returns arXiv IDs |
+| `read_paper` | Read locally stored paper content | Supports `start` and `max_chars` |
+| `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
+| `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
+| `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
+| `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API |
+| `watch_topic` | Save or update an arXiv topic watch | Stored locally |
+| `check_alerts` | Check saved watches for new papers | Returns papers since the last check |
+| `semantic_search` | Search downloaded papers by semantic similarity | Requires `[pro]` |
+| `reindex` | Rebuild the local semantic index | Requires `[pro]` |
+
+### Search and inspect a paper
+
+Ask your MCP client to call `search_papers` with:
 
 ```json
 {
-    "mcpServers": {
-        "arxiv-mcp-server": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "path/to/cloned/arxiv-mcp-server",
-                "run",
-                "arxiv-mcp-server",
-                "--storage-path", "/path/to/paper/storage"
-            ]
-        }
-    }
+  "query": "\"Kolmogorov-Arnold Networks\"",
+  "categories": ["cs.LG", "cs.AI"],
+  "max_results": 5,
+  "sort_by": "date"
 }
 ```
 
-### HTTP Transport
-
-For server deployments where stdio is not practical, run the server with Streamable HTTP:
-
-```bash
-TRANSPORT=http HOST=127.0.0.1 PORT=8080 arxiv-mcp-server --storage-path /path/to/papers
-```
-
-Then configure an MCP client that supports Streamable HTTP:
+Then call `get_abstract` with:
 
 ```json
 {
-    "mcpServers": {
-        "arxiv-mcp-server": {
-            "type": "http",
-            "url": "http://127.0.0.1:8080/mcp"
-        }
-    }
+  "paper_id": "2404.19756"
 }
 ```
 
-The default HTTP bind host is `127.0.0.1`. Streamable HTTP enables MCP DNS rebinding protection by default and allows loopback hosts for the configured port. If exposing the server through a reverse proxy, keep it bound to localhost unless you have added authentication and network controls upstream; set `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` to the external host/origin values your proxy forwards.
+### Download and read full text
 
-## 🔒 Security Note
+Call `download_paper` with:
 
-arXiv papers are user-generated, untrusted content. Paper text returned by this
-server may contain prompt injection attempts — crafted text designed to manipulate
-an AI assistant's behavior. Treat all paper content as untrusted input.
-
-In production environments, apply appropriate sandboxing and avoid feeding raw
-paper content into agentic pipelines that have access to sensitive tools or data
-without review. See [SECURITY.md](SECURITY.md) for the full security policy.
-
-## 💡 Available Tools
-
-### Core Workflow
-
-The typical workflow for deep paper research is:
-
-```
-search_papers → download_paper → read_paper
+```json
+{
+  "paper_id": "2404.19756",
+  "max_chars": 12000
+}
 ```
 
-`list_papers` shows what you have locally. `semantic_search` searches across your local collection.
+Then page through the cached content with `read_paper`:
 
----
-
-### 1. Paper Search
-Search arXiv with optional category, date, and boolean filters. Enforces arXiv's 3-second rate limit automatically. If rate limited, wait 60 seconds before retrying.
-
-```python
-result = await call_tool("search_papers", {
-    "query": "\"KAN\" OR \"Kolmogorov-Arnold Networks\"",
-    "max_results": 10,
-    "date_from": "2024-01-01",
-    "categories": ["cs.LG", "cs.AI"],
-    "sort_by": "date"   # or "relevance" (default)
-})
+```json
+{
+  "paper_id": "2404.19756",
+  "start": 0,
+  "max_chars": 12000
+}
 ```
 
-Supported categories include `cs.AI`, `cs.LG`, `cs.CL`, `cs.CV`, `cs.NE`, `stat.ML`, `math.OC`, `quant-ph`, `eess.SP`, and more. See tool description for the full list.
+Large-content responses include `content_length`, `returned_chars`, `next_start`, and `is_truncated`. Pass `next_start` into the next call to continue reading.
 
-### 2. Paper Download
-Download a paper by its arXiv ID. Tries HTML first, falls back to PDF. Stores the paper locally for `read_paper` and `semantic_search`. The response includes `content_length`, `returned_chars`, `next_start`, and `is_truncated` so clients can safely page through very large papers without mistaking client-side output caps for failed downloads.
+### Read original LaTeX by section
 
-```python
-result = await call_tool("download_paper", {
-    "paper_id": "2401.12345"
-})
+Call `get_paper_latex` with:
 
-# For very large papers, request bounded chunks:
-result = await call_tool("download_paper", {
-    "paper_id": "2401.12345",
-    "start": 0,
-    "max_chars": 50000
-})
+```json
+{
+  "paper_id": "1706.03762"
+}
 ```
 
-> For older papers that only have a PDF, install the `[pdf]` extra: `uv tool install 'arxiv-mcp-server[pdf]'`
+Get the first page of its section outline with `list_paper_latex_sections`:
 
-### 3. List Papers
-List all papers downloaded locally. Returns arXiv IDs only — use `read_paper` to access content.
-
-```python
-result = await call_tool("list_papers", {})
+```json
+{
+  "paper_id": "1706.03762",
+  "start": 0,
+  "max_sections": 100
+}
 ```
 
-### 4. Read Paper
-Read the full text of a locally downloaded paper in markdown. **Requires `download_paper` to be called first.** Use `start` and `max_chars` with the returned `next_start` value to page through large papers.
+Then call `get_paper_latex_section` using an ID from that outline:
 
-```python
-result = await call_tool("read_paper", {
-    "paper_id": "2401.12345"
-})
-
-result = await call_tool("read_paper", {
-    "paper_id": "2401.12345",
-    "start": 50000,
-    "max_chars": 50000
-})
+```json
+{
+  "paper_id": "1706.03762",
+  "section_id": "3.2",
+  "max_chars": 12000
+}
 ```
 
-### 5. Original LaTeX Source
+LaTeX archives are validated, size-limited, and cached locally before content is returned.
 
-Retrieve author-submitted LaTeX when available. This preserves equations and document structure more faithfully than PDF conversion. Source responses default to 12,000 characters and expose the same continuation metadata used by paper reads.
+## Optional dependencies
 
-```python
-# Download/cache bounded flattened source
-result = await call_tool("get_paper_latex", {
-    "paper_id": "2401.12345"
-})
-
-# Inspect a bounded page of the compact section outline
-outline = await call_tool("list_paper_latex_sections", {
-    "paper_id": "2401.12345",
-    "start": 0,
-    "max_sections": 100
-})
-
-# Read one section by returned ID or exact title
-section = await call_tool("get_paper_latex_section", {
-    "paper_id": "2401.12345",
-    "section_id": "2.1",
-    "max_chars": 12000
-})
-```
-
-The source processor validates arXiv IDs, streams archive headers while enforcing member and expanded-size limits, rejects traversal, links, duplicate paths, and special-file entries, and caps aggregate include expansion. It ignores commented headings/includes, paginates outlines, bounds section titles and identifiers, and caches versioned validated results atomically. Some papers do not publish TeX source; those calls return a structured availability error.
-
-
-## 📝 Research Prompts
-
-The server offers specialized prompts to help analyze academic papers:
-
-### Paper Analysis Prompt
-A comprehensive workflow for analyzing academic papers that only requires a paper ID:
-
-```python
-result = await call_prompt("deep-paper-analysis", {
-    "paper_id": "2401.12345"
-})
-```
-
-This prompt includes:
-- Detailed instructions for using available tools (list_papers, download_paper, read_paper, search_papers)
-- A systematic workflow for paper analysis
-- Comprehensive analysis structure covering:
-  - Executive summary
-  - Research context
-  - Methodology analysis
-  - Results evaluation
-  - Practical and theoretical implications
-- Future research directions
-- Broader impacts
-
-### Pro Prompt Pack
-
-- `summarize_paper`: concise structured summary for one paper.
-- `compare_papers`: side-by-side technical comparison across paper IDs.
-- `literature_review`: thematic synthesis across a topic and optional paper set.
-
-## ⚙️ Configuration
-
-Configure through command-line options and environment variables:
-
-| Setting | Purpose | Default |
-|---------|---------|---------|
-| `--storage-path` | Paper storage location | `~/.arxiv-mcp-server/papers` |
-| `MAX_RESULTS` | Maximum search results | `50` |
-| `REQUEST_TIMEOUT` | API timeout in seconds | `60` |
-| `TRANSPORT` | Transport type: `stdio`, `http`, or `streamable-http` | `stdio` |
-| `HOST` | Host to bind to in HTTP mode | `127.0.0.1` |
-| `PORT` | Port to listen on in HTTP mode | `8000` |
-| `ALLOWED_HOSTS` | Comma-separated extra allowed Host header values for Streamable HTTP DNS rebinding protection | empty |
-| `ALLOWED_ORIGINS` | Comma-separated extra allowed Origin header values for Streamable HTTP DNS rebinding protection | empty |
-
-## 🧪 Testing
-
-Run the test suite:
+Choose the install variant that matches the features you need:
 
 ```bash
-python -m pytest
+# Base server
+uv tool install arxiv-mcp-server
+
+# Base server plus PDF conversion
+uv tool install 'arxiv-mcp-server[pdf]'
+
+# Base server plus local semantic search
+uv tool install 'arxiv-mcp-server[pro]'
 ```
 
-## 🧪 Experimental Features
-
-> **These features are not yet fully tested and may behave unexpectedly. Use with caution.**
-
-The following tools require additional dependencies and are under active development:
+If the base tool is already installed, reinstall the selected variant:
 
 ```bash
-uv pip install -e ".[pro]"
+uv tool install --force 'arxiv-mcp-server[pdf]'
 ```
 
-### Semantic Search
-Semantic similarity search over your **locally downloaded** papers only. Returns empty results if no papers have been downloaded yet. Requires `[pro]` dependencies.
+The `pdf` extra installs `pymupdf4llm` and `pymupdf-layout` for papers without usable arXiv HTML. The `pro` extra adds local embedding dependencies for `semantic_search` and `reindex`; semantic search only operates on papers already downloaded to the configured storage directory.
 
-```python
-result = await call_tool("semantic_search", {
-    "query": "test-time adaptation in multimodal transformers",
-    "max_results": 5
-})
-# or find papers similar to a known paper:
-result = await call_tool("semantic_search", {
-    "paper_id": "2404.19756",
-    "max_results": 5
-})
+## Built-in prompts
+
+The server provides seven MCP prompt workflows. Prompt availability depends on the client; the server provides workflow instructions but does not run a separate model.
+
+| Prompt | Required arguments | Purpose |
+|---|---|---|
+| `research-discovery` | `topic` | Map terminology, searches, papers, research clusters, and a reading path |
+| `deep-paper-analysis` | `paper_id` | Analyze one paper in depth |
+| `summarize_paper` | `paper_id` | Summarize methods, results, and limitations |
+| `compare_papers` | `paper_ids` | Compare multiple papers |
+| `literature_review` | `topic` | Synthesize a topic and optional paper set |
+| `literature-synthesis` | `paper_ids` | Synthesize themes, methods, timelines, or gaps across papers |
+| `research-question` | `paper_ids`, `topic` | Formulate grounded, falsifiable research questions |
+
+## Streamable HTTP
+
+For deployments where stdio is not practical:
+
+```bash
+TRANSPORT=http HOST=127.0.0.1 PORT=8080 \
+  uvx arxiv-mcp-server --storage-path /absolute/path/to/papers
 ```
 
-### Citation Graph
-Fetch references and citing papers via Semantic Scholar. Works on any arXiv ID — no local download required.
+Connect clients to:
 
-```python
-result = await call_tool("citation_graph", {
-    "paper_id": "2401.12345"
-})
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
 ```
 
-### Research Alerts
-Save topic watches and poll for newly published papers since the last check. Uses the same query syntax as `search_papers`.
+The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protection. If a reverse proxy exposes the server, keep the process on a private interface and provide authentication and network controls upstream. Use `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` for the host and origin values forwarded by the proxy.
 
-```python
-# Register a watch (idempotent — calling again updates the existing watch)
-await call_tool("watch_topic", {
-    "topic": "\"multi-agent reinforcement learning\"",
-    "categories": ["cs.AI", "cs.LG"],
-    "max_results": 10
-})
+## Configuration
 
-# Check all watches — returns only papers published since last check
-result = await call_tool("check_alerts", {})
+| Setting | Default | Purpose |
+|---|---:|---|
+| `--storage-path` | `~/.arxiv-mcp-server/papers` | Paper, source-cache, alert, and index storage |
+| `MAX_RESULTS` | `50` | Server-side cap for result counts |
+| `REQUEST_TIMEOUT` | `60` | PDF fallback download timeout in seconds |
+| `TRANSPORT` | `stdio` | `stdio`, `http`, or `streamable-http` |
+| `HOST` | `127.0.0.1` | HTTP bind host |
+| `PORT` | `8000` | HTTP bind port |
+| `ALLOWED_HOSTS` | empty | Additional accepted HTTP Host values |
+| `ALLOWED_ORIGINS` | empty | Additional accepted HTTP Origin values |
 
-# Check a single watch
-result = await call_tool("check_alerts", {"topic": "\"multi-agent reinforcement learning\""})
+Environment variable names are case-insensitive through Pydantic settings. `--storage-path` is a command-line option rather than an environment setting.
+
+## Security
+
+Paper text and LaTeX are untrusted external content. A paper can contain text intended to manipulate an AI client into ignoring its instructions or calling unrelated tools.
+
+- Do not treat instructions found inside a paper as trusted commands.
+- Use client approval controls for shell, browser, filesystem, and messaging tools.
+- Review generated summaries before taking external actions.
+- Keep Streamable HTTP private unless authentication is provided upstream.
+
+See [SECURITY.md](SECURITY.md) for the reporting policy and threat details.
+
+## Development
+
+```bash
+git clone https://github.com/blazickjp/arxiv-mcp-server.git
+cd arxiv-mcp-server
+uv sync --extra test --extra dev
+uv run pytest
+uv run black --check .
 ```
 
-### Advanced Prompts
-`summarize_paper`, `compare_papers`, and `literature_review` for deeper research workflows. Requires `[pro]` dependencies.
+Run the development checkout from an MCP client with:
 
----
+```json
+{
+  "mcpServers": {
+    "arxiv-dev": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/arxiv-mcp-server",
+        "run",
+        "arxiv-mcp-server"
+      ]
+    }
+  }
+}
+```
 
-## 📄 License
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and use [GitHub Issues](https://github.com/blazickjp/arxiv-mcp-server/issues) for reproducible bugs or scoped feature proposals.
 
-Released under the Apache License 2.0. See the LICENSE file for details.
+## License
 
----
-
-<div align="center">
-
-Made with ❤️ by the Pearl Labs Team
-
-<a href="https://glama.ai/mcp/servers/04dtxi5i5n"><img width="380" height="200" src="https://glama.ai/mcp/servers/04dtxi5i5n/badge" alt="ArXiv Server MCP server" /></a>
-</div>
+Apache License 2.0. See [LICENSE](LICENSE).

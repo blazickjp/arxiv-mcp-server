@@ -8,7 +8,7 @@ from arxiv_mcp_server.prompts.handlers import list_prompts, get_prompt
 async def test_server_list_prompts():
     """Test server list_prompts endpoint."""
     prompts = await list_prompts()
-    assert len(prompts) >= 4
+    assert len(prompts) == 7
 
     # Check that all prompts have required fields
     for prompt in prompts:

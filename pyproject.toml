@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arxiv-mcp-server"
-version = "0.5.1"
+version = "0.6.0"
 description = "A flexible arXiv search and analysis service with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = ["mcp", "arxiv", "model-context-protocol", "llm", "research", "papers", "semantic-search", "ai", "academic"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -24,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 authors = [
-    { name = "Joseph Blazick", email = "blazickjp@amazon.com" }
+    { name = "Joseph Blazick", email = "joe.blazick@yahoo.com" }
 ]
 dependencies = [
     "arxiv>=2.1.0",

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "arxiv-mcp-server",
   "display_name": "ArXiv MCP Server",
-  "version": "0.4.12",
+  "version": "0.6.0",
   "description": "Search, download, and analyze arXiv papers via MCP.",
   "author": {
     "name": "Joseph Blazick",
@@ -20,7 +20,7 @@
     "type": "python",
     "entry_point": "server/arxiv_mcp_server/__main__.py",
     "mcp_config": {
-      "command": "python3",
+      "command": "python3.11",
       "args": [
         "-m",
         "arxiv_mcp_server",
@@ -45,7 +45,7 @@
     "claude_desktop": ">=1.0.0",
     "platforms": ["darwin"],
     "runtimes": {
-      "python": ">=3.11"
+      "python": ">=3.11,<3.12"
     }
   },
   "user_config": {

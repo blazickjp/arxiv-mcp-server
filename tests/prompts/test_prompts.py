@@ -10,16 +10,19 @@ from mcp.types import GetPromptResult, PromptMessage, TextContent
 async def test_list_prompts():
     """Test listing available prompts."""
     prompts = await list_prompts()
-    assert len(prompts) >= 4
+    assert len(prompts) == 7
 
     prompt_names = {p.name for p in prompts}
     expected_names = {
+        "research-discovery",
         "deep-paper-analysis",
         "summarize_paper",
         "compare_papers",
         "literature_review",
+        "literature-synthesis",
+        "research-question",
     }
-    assert expected_names.issubset(prompt_names)
+    assert expected_names == prompt_names
 
 
 @pytest.mark.asyncio
@@ -88,3 +91,59 @@ async def test_get_literature_review_prompt():
     """Test getting literature review prompt."""
     result = await get_prompt("literature_review", {"topic": "agentic systems"})
     assert "topic: agentic systems" in result.messages[0].content.text
+
+
+@pytest.mark.asyncio
+async def test_get_research_discovery_prompt_uses_all_arguments():
+    result = await get_prompt(
+        "research-discovery",
+        {
+            "topic": "mechanistic interpretability",
+            "expertise_level": "expert",
+            "time_period": "2024-present",
+            "domain": "computer_science",
+        },
+    )
+
+    text = result.messages[0].content.text
+    assert "mechanistic interpretability" in text
+    assert "expert" in text
+    assert "2024-present" in text
+    assert "computer_science" in text
+    assert "research discovery plan" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_literature_synthesis_prompt_uses_all_arguments():
+    result = await get_prompt(
+        "literature-synthesis",
+        {
+            "paper_ids": "2401.00123,2401.00999",
+            "synthesis_type": "gaps",
+            "domain": "computer_science",
+        },
+    )
+
+    text = result.messages[0].content.text
+    assert "2401.00123,2401.00999" in text
+    assert "gaps" in text
+    assert "computer_science" in text
+    assert "synthesize" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_research_question_prompt_uses_all_arguments():
+    result = await get_prompt(
+        "research-question",
+        {
+            "paper_ids": "2401.00123,2401.00999",
+            "topic": "agentic systems",
+            "domain": "computer_science",
+        },
+    )
+
+    text = result.messages[0].content.text
+    assert "2401.00123,2401.00999" in text
+    assert "agentic systems" in text
+    assert "computer_science" in text
+    assert "research questions" in text.lower()

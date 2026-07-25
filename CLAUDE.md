@@ -1,72 +1,94 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for coding agents working in this repository.
 
-## Development Commands
+## Project
 
-### Environment Setup
+`arxiv-mcp-server` is a Python 3.11+ Model Context Protocol server. It exposes arXiv search, metadata, paper download/read, original LaTeX retrieval, citation graphs, topic alerts, and optional local semantic search over stdio or Streamable HTTP.
+
+## Setup and validation
+
+Use the locked uv environment:
+
 ```bash
-# Create and activate virtual environment
-uv venv
-source .venv/bin/activate
-
-# Install with test dependencies
-uv pip install -e ".[test]"
+uv sync --extra test --extra dev
+uv run black --check .
+uv run pytest
 ```
 
-### Testing
+Apply formatting with:
+
 ```bash
-# Run all tests with coverage
-python -m pytest
-
-# Run specific test file
-python -m pytest tests/tools/test_search.py
-
-# Run tests with verbose output
-python -m pytest -v
+uv run black .
 ```
 
-### Running the Server
-```bash
-# Run as module
-python -m arxiv_mcp_server
+Run a targeted test with:
 
-# Or via entry point
-arxiv-mcp-server
+```bash
+uv run pytest tests/tools/test_search.py -q
 ```
 
-## Architecture Overview
+Run the stdio server from the checkout with:
 
-This is an **MCP (Message Control Protocol) server** that provides AI models access to arXiv research papers. The codebase follows a modular architecture with four main layers:
+```bash
+uv run arxiv-mcp-server --storage-path /tmp/arxiv-mcp-papers
+```
 
-### Core Components
+The process waits for MCP messages on stdin. It is not an interactive CLI.
 
-1. **Server Layer** (`server.py`): Main MCP server implementation that handles tool registration and request routing
-2. **Tools Layer** (`tools/`): Individual MCP tools for paper operations:
-   - `search.py`: Advanced arXiv paper search with filtering
-   - `download.py`: Paper download and storage management  
-   - `list_papers.py`: List locally stored papers
-   - `read_paper.py`: Read paper content from storage
-3. **Resource Management** (`resources/papers.py`): `PaperManager` class handles paper storage, PDF-to-markdown conversion using pymupdf4llm, and local caching
-4. **Configuration** (`config.py`): Pydantic-based settings with environment variable support
+## Architecture
 
-### Key Design Patterns
+- `src/arxiv_mcp_server/server.py`: MCP tool/prompt registration, dispatch, stdio transport, and Streamable HTTP transport.
+- `src/arxiv_mcp_server/config.py`: Pydantic settings and shared arXiv client lifecycle.
+- `src/arxiv_mcp_server/arxiv_api.py`: shared arXiv request coordination.
+- `src/arxiv_mcp_server/tools/`: tool schemas and handlers.
+- `src/arxiv_mcp_server/prompts/`: registered MCP prompt definitions and routing.
+- `src/arxiv_mcp_server/resources/`: legacy/local paper management paths retained for compatibility.
+- `tests/`: unit and protocol-level tests.
+- `server.json`: official MCP Registry metadata.
+- `manifest.json` and `scripts/build-mcpb.sh`: Claude Desktop MCPB packaging.
 
-- **MCP Protocol Compliance**: All tools follow MCP specification with proper type definitions
-- **Async-First**: Built on asyncio with aiofiles for non-blocking I/O operations
-- **Storage Strategy**: Papers downloaded as PDFs, converted to markdown, stored locally with PDF cleanup
-- **Error Handling**: Comprehensive error handling with user-friendly messages throughout tool chain
+## Tool groups
 
-### Configuration
+The server registers 13 tools:
 
-Environment variables (all optional with sensible defaults):
-- `ARXIV_STORAGE_PATH`: Paper storage location (default: `~/.arxiv-mcp-server/papers`)
-- `ARXIV_MAX_RESULTS`: Search results limit (default: 50)
-- `ARXIV_REQUEST_TIMEOUT`: API timeout in seconds (default: 60)
+- Discovery: `search_papers`, `get_abstract`
+- Full text: `download_paper`, `list_papers`, `read_paper`
+- Original source: `get_paper_latex`, `list_paper_latex_sections`, `get_paper_latex_section`
+- Graphs and monitoring: `citation_graph`, `watch_topic`, `check_alerts`
+- Optional local embeddings: `semantic_search`, `reindex`
 
-### Testing Strategy
+Keep tool schemas, package exports, server registration, dispatch, tests, and README documentation synchronized when changing the tool surface.
 
-Tests use pytest with async support and comprehensive mocking:
-- `conftest.py` provides shared fixtures for mock arXiv papers and HTTP responses
-- Tests cover both unit-level tool functionality and integration scenarios
-- Mock-based approach avoids external API calls during testing
+## Constraints
+
+- Treat abstracts, paper text, LaTeX, archive metadata, and remote API errors as untrusted input.
+- Preserve response bounds and continuation metadata for content-returning tools.
+- Enforce archive limits while consuming input, not after loading an unbounded manifest or expansion.
+- Use the shared arXiv request gate rather than creating an independent request path.
+- Keep stdio free of ordinary stdout logging; protocol messages use stdout.
+- Keep Streamable HTTP bound to loopback by default and preserve DNS-rebinding protection.
+- Do not introduce process-global user/session state.
+- Avoid blocking network or filesystem work on the event loop.
+
+## Configuration
+
+`Settings` reads unprefixed environment variables such as:
+
+- `MAX_RESULTS`
+- `REQUEST_TIMEOUT`
+- `TRANSPORT`
+- `HOST`
+- `PORT`
+- `ALLOWED_HOSTS`
+- `ALLOWED_ORIGINS`
+
+Paper storage is selected with the `--storage-path` command-line option and defaults to `~/.arxiv-mcp-server/papers`.
+
+## Changes
+
+- Add a failing regression test before fixing a bug.
+- Run targeted tests during development, then the complete suite before proposing a merge.
+- Update user documentation for installation, configuration, tool-schema, or behavior changes.
+- Keep versions synchronized across `pyproject.toml`, `uv.lock`, `server.json`, `manifest.json`, and `.codex-plugin/plugin.json`.
+- Never include downloaded papers, local indexes, credentials, or private paths in commits or fixtures.

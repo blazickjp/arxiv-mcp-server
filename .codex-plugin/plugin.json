@@ -1,6 +1,6 @@
 {
   "name": "arxiv-mcp-server",
-  "version": "0.4.11",
+  "version": "0.6.0",
   "description": "Search arXiv papers, download full text, semantic search, citation graphs, and alerts via MCP.",
   "author": {
     "name": "Joseph Blazick",
