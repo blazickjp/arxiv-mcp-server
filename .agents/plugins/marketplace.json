@@ -1,0 +1,16 @@
+{
+  "name": "arxiv-mcp",
+  "interface": {
+    "displayName": "arXiv MCP"
+  },
+  "plugins": [
+    {
+      "name": "arxiv-mcp-server",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "category": "Research"
+    }
+  ]
+}
