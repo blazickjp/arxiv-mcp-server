@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "arxiv-mcp",
+  "description": "Claude Code integration for searching and analyzing arXiv papers.",
+  "owner": {
+    "name": "Joseph Blazick"
+  },
+  "plugins": [
+    {
+      "name": "arxiv-mcp-server",
+      "source": "./",
+      "description": "Search, download, read, and analyze arXiv papers through MCP.",
+      "category": "research"
+    }
+  ]
+}

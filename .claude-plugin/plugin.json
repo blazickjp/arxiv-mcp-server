@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "arxiv-mcp-server",
+  "displayName": "arXiv MCP Server",
+  "version": "0.6.1",
+  "description": "Search, download, read, and analyze arXiv papers through MCP.",
+  "author": {
+    "name": "Joseph Blazick"
+  },
+  "homepage": "https://github.com/blazickjp/arxiv-mcp-server",
+  "repository": "https://github.com/blazickjp/arxiv-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": ["arxiv", "research", "papers", "latex", "mcp"]
+}

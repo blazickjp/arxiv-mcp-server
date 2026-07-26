@@ -1,21 +1,29 @@
 {
   "name": "arxiv-mcp-server",
-  "version": "0.6.0",
-  "description": "Search arXiv papers, download full text, semantic search, citation graphs, and alerts via MCP.",
+  "version": "0.6.1",
+  "description": "Search arXiv, read bounded full text and original LaTeX, follow citations, and monitor research topics through MCP.",
   "author": {
     "name": "Joseph Blazick",
     "url": "https://github.com/blazickjp"
   },
   "homepage": "https://github.com/blazickjp/arxiv-mcp-server",
   "repository": "https://github.com/blazickjp/arxiv-mcp-server",
-  "keywords": ["mcp", "codex", "arxiv", "research", "academic"],
-  "mcpServers": "../.mcp.json",
-  "skills": "../skills/",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "codex", "arxiv", "research", "academic", "latex"],
+  "mcpServers": "./.codex-mcp.json",
+  "skills": "./skills/",
   "interface": {
     "displayName": "arXiv MCP Server",
-    "shortDescription": "Search and analyze arXiv papers from Codex-compatible MCP clients.",
-    "longDescription": "Adds arXiv search, download, semantic search, citation graph, and alert workflows to Codex-compatible MCP clients using the published PyPI package.",
+    "shortDescription": "Research arXiv papers with bounded full-text and LaTeX retrieval.",
+    "longDescription": "Adds arXiv search, abstracts, bounded paper reading, original LaTeX section retrieval, citation graphs, local semantic search, and research alerts.",
+    "developerName": "Joseph Blazick",
     "category": "Research",
-    "websiteURL": "https://github.com/blazickjp/arxiv-mcp-server"
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/blazickjp/arxiv-mcp-server",
+    "defaultPrompt": [
+      "Find recent papers on a research topic and compare their methods.",
+      "Inspect the original LaTeX for an arXiv paper by section.",
+      "Trace the citations and references around an arXiv paper."
+    ]
   }
 }
