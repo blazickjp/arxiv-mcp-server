@@ -88,7 +88,7 @@ Both use the same `uvx arxiv-mcp-server` stdio launch path.
 
 ## Tools
 
-The server currently exposes 13 tools.
+The server currently exposes 14 tools.
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -101,6 +101,7 @@ The server currently exposes 13 tools.
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
 | `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API |
+| `export_citations` | Export BibTeX for one or more arXiv IDs | Authoritative arXiv metadata |
 | `watch_topic` | Save or update an arXiv topic watch | Stored locally |
 | `check_alerts` | Check saved watches for new papers | Returns papers since the last check |
 | `semantic_search` | Search downloaded papers by semantic similarity | Requires `[pro]` |

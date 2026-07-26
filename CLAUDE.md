@@ -50,12 +50,13 @@ The process waits for MCP messages on stdin. It is not an interactive CLI.
 
 ## Tool groups
 
-The server registers 13 tools:
+The server registers 14 tools:
 
 - Discovery: `search_papers`, `get_abstract`
 - Full text: `download_paper`, `list_papers`, `read_paper`
 - Original source: `get_paper_latex`, `list_paper_latex_sections`, `get_paper_latex_section`
 - Graphs and monitoring: `citation_graph`, `watch_topic`, `check_alerts`
+- Citation export: `export_citations`
 - Optional local embeddings: `semantic_search`, `reindex`
 
 Keep tool schemas, package exports, server registration, dispatch, tests, and README documentation synchronized when changing the tool surface.

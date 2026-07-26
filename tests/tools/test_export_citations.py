@@ -11,7 +11,9 @@ import pytest
 from arxiv_mcp_server.tools import export_citations as ec
 
 
-def _paper(pid, title, authors, published="2024-01-15T00:00:00Z", categories=("cs.AI",)):
+def _paper(
+    pid, title, authors, published="2024-01-15T00:00:00Z", categories=("cs.AI",)
+):
     return {
         "id": pid,
         "title": title,
@@ -49,11 +51,17 @@ async def _run(arguments):
 # Pure helpers                                                                 #
 # --------------------------------------------------------------------------- #
 
+
 def test_bibtex_escape_special_characters():
-    assert ec._bibtex_escape("Cost & Effect 50% #1 a_b") == r"Cost \& Effect 50\% \#1 a\_b"
+    assert (
+        ec._bibtex_escape("Cost & Effect 50% #1 a_b") == r"Cost \& Effect 50\% \#1 a\_b"
+    )
     assert ec._bibtex_escape("a{b}c") == r"a\{b\}c"
     assert ec._bibtex_escape(r"back\slash") == r"back\textbackslash{}slash"
-    assert ec._bibtex_escape("tilde~caret^") == r"tilde\textasciitilde{}caret\textasciicircum{}"
+    assert (
+        ec._bibtex_escape("tilde~caret^")
+        == r"tilde\textasciitilde{}caret\textasciicircum{}"
+    )
 
 
 def test_citation_key_is_deterministic():
@@ -68,6 +76,30 @@ def test_citation_key_folds_accents_and_falls_back():
     assert ec._citation_key([], "", "") == "arxiv"
 
 
+def test_alpha_suffix_stays_alphabetic_past_z():
+    """chr(ord('a') + n) would emit '{', '|', '}' past 26 — invalid in a key."""
+    assert ec._alpha_suffix(1) == "a"
+    assert ec._alpha_suffix(26) == "z"
+    assert ec._alpha_suffix(27) == "aa"
+    assert ec._alpha_suffix(52) == "az"
+    assert all(ec._alpha_suffix(i).isalpha() for i in range(1, 200))
+
+
+def test_unique_key_disambiguates_beyond_26_collisions():
+    used: set = set()
+    keys = []
+    for _ in range(30):
+        key = ec._unique_key("smith2024the", used)
+        used.add(key)
+        keys.append(key)
+    assert len(set(keys)) == 30
+    # keys[0] is the unsuffixed base, so 'a'..'z' occupy 1..26 and 'aa' starts at 27.
+    assert keys[26] == "smith2024thez"
+    assert keys[27:30] == ["smith2024theaa", "smith2024theab", "smith2024theac"]
+    # Every key must be a legal BibTeX citation key.
+    assert all(k.isalnum() for k in keys)
+
+
 def test_base_id_strips_version_only():
     assert ec._base_id("2401.12345v2") == "2401.12345"
     assert ec._base_id("2401.12345") == "2401.12345"
@@ -78,15 +110,22 @@ def test_base_id_strips_version_only():
 # Tool behaviour                                                              #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.asyncio
 async def test_multiple_authors_joined_with_and(monkeypatch):
     _stub_metadata(
         monkeypatch,
-        [_paper("2401.00001", "A Study", ["Ada Lovelace", "Alan Turing", "Grace Hopper"])],
+        [
+            _paper(
+                "2401.00001", "A Study", ["Ada Lovelace", "Alan Turing", "Grace Hopper"]
+            )
+        ],
     )
     payload = await _run({"paper_ids": ["2401.00001"]})
     assert payload["status"] == "success"
-    assert "author = {Ada Lovelace and Alan Turing and Grace Hopper}" in payload["bibtex"]
+    assert (
+        "author = {Ada Lovelace and Alan Turing and Grace Hopper}" in payload["bibtex"]
+    )
 
 
 @pytest.mark.asyncio
@@ -105,7 +144,11 @@ async def test_missing_optional_fields(monkeypatch):
     # No categories and no usable year -> those fields omitted, entry still valid.
     _stub_metadata(
         monkeypatch,
-        [_paper("2401.00003", "No Extras", ["Solo Author"], published="", categories=[])],
+        [
+            _paper(
+                "2401.00003", "No Extras", ["Solo Author"], published="", categories=[]
+            )
+        ],
     )
     payload = await _run({"paper_ids": ["2401.00003"]})
     entry = payload["results"][0]["bibtex"]
@@ -128,7 +171,14 @@ async def test_versioned_id_preserved_in_eprint_and_url(monkeypatch):
 async def test_legacy_id(monkeypatch):
     _stub_metadata(
         monkeypatch,
-        [_paper("hep-ph/9901234", "Legacy Paper", ["Old Author"], published="1999-01-01T00:00:00Z")],
+        [
+            _paper(
+                "hep-ph/9901234",
+                "Legacy Paper",
+                ["Old Author"],
+                published="1999-01-01T00:00:00Z",
+            )
+        ],
     )
     payload = await _run({"paper_ids": ["hep-ph/9901234"]})
     result = payload["results"][0]
@@ -140,7 +190,9 @@ async def test_legacy_id(monkeypatch):
 @pytest.mark.asyncio
 async def test_invalid_id_not_fetched(monkeypatch):
     requested = []
-    _stub_metadata(monkeypatch, [_paper("2401.00001", "Valid", ["A B"])], recorder=requested)
+    _stub_metadata(
+        monkeypatch, [_paper("2401.00001", "Valid", ["A B"])], recorder=requested
+    )
     payload = await _run({"paper_ids": ["not-an-id", "2401.00001"]})
     assert requested == ["2401.00001"]  # invalid ID never hit the network
     statuses = {r["paper_id"]: r["status"] for r in payload["results"]}
@@ -158,6 +210,34 @@ async def test_not_found_on_arxiv(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_all_failed_batch_is_mcp_error_but_keeps_diagnostics(monkeypatch):
+    """An all-failed batch surfaces as isError, per the not-found convention.
+
+    Guards the other half of that contract: the JSON body must survive into the
+    error content so a client can still read per-paper diagnostics. Exercised
+    at the protocol level, since calling the handler directly bypasses dispatch.
+    """
+    import mcp.types as types
+    from arxiv_mcp_server import server as server_module
+
+    _stub_metadata(monkeypatch, [])
+    handler = server_module.server.request_handlers[types.CallToolRequest]
+    result = await handler(
+        types.CallToolRequest(
+            params=types.CallToolRequestParams(
+                name="export_citations", arguments={"paper_ids": ["2401.99999"]}
+            )
+        )
+    )
+
+    assert result.root.isError is True
+    payload = json.loads(result.root.content[0].text)
+    assert payload["status"] == "error"
+    assert payload["count"] == {"requested": 1, "succeeded": 0, "failed": 1}
+    assert payload["results"][0]["error"] == "not found on arXiv"
+
+
+@pytest.mark.asyncio
 async def test_multiple_paper_output_mixed(monkeypatch):
     _stub_metadata(
         monkeypatch,
@@ -166,7 +246,9 @@ async def test_multiple_paper_output_mixed(monkeypatch):
             _paper("2401.00002", "Second", ["Bob Ng"]),
         ],
     )
-    payload = await _run({"paper_ids": ["2401.00001", "bad id", "2401.00002", "2401.77777"]})
+    payload = await _run(
+        {"paper_ids": ["2401.00001", "bad id", "2401.00002", "2401.77777"]}
+    )
     assert payload["count"] == {"requested": 4, "succeeded": 2, "failed": 2}
     assert payload["status"] == "partial"
     # Rendered BibTeX contains exactly the two successful entries.
@@ -206,13 +288,17 @@ async def test_empty_input_is_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_too_many_ids_rejected(monkeypatch):
     _stub_metadata(monkeypatch, [])
-    payload = await _run({"paper_ids": [f"2401.{i:05d}" for i in range(ec.MAX_IDS + 1)]})
+    payload = await _run(
+        {"paper_ids": [f"2401.{i:05d}" for i in range(ec.MAX_IDS + 1)]}
+    )
     assert payload["status"] == "error"
     assert "max" in payload["message"]
 
 
-def test_tool_registered_in_server():
-    from arxiv_mcp_server.tools import export_citations_tool, handle_export_citations
+async def test_tool_registered_in_server():
+    """Assert against the server's advertised tool list, not just the export."""
+    from arxiv_mcp_server.server import list_tools
 
-    assert export_citations_tool.name == "export_citations"
-    assert callable(handle_export_citations)
+    tools = {tool.name: tool for tool in await list_tools()}
+    assert "export_citations" in tools
+    assert tools["export_citations"].inputSchema["additionalProperties"] is False

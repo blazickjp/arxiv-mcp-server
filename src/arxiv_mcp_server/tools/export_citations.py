@@ -53,7 +53,9 @@ def _bibtex_escape(text: str) -> str:
 
 def _ascii_token(value: str) -> str:
     """Fold *value* to lowercase ASCII alphanumerics (deterministic, accent-safe)."""
-    folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    folded = (
+        unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    )
     return re.sub(r"[^a-z0-9]", "", folded.lower())
 
 
@@ -83,6 +85,29 @@ def _citation_key(authors: List[str], year: str, title: str) -> str:
             break
     key = f"{surname}{year}{title_word}"
     return key or "arxiv"
+
+
+def _alpha_suffix(index: int) -> str:
+    """Return a base-26 alphabetic suffix: 1 -> 'a', 26 -> 'z', 27 -> 'aa'.
+
+    Plain ``chr(ord('a') + n)`` walks past 'z' into '{', '|', '}', which are not
+    legal in a BibTeX citation key and break the entry structurally.
+    """
+    out = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        out = chr(ord("a") + remainder) + out
+    return out
+
+
+def _unique_key(base_key: str, used_keys: set) -> str:
+    """Return *base_key*, suffixed alphabetically until it is unused."""
+    key = base_key
+    index = 0
+    while key in used_keys:
+        index += 1
+        key = f"{base_key}{_alpha_suffix(index)}"
+    return key
 
 
 def _render_entry(key: str, paper: Dict[str, Any], requested_id: str) -> str:
@@ -122,7 +147,11 @@ async def _fetch_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 def _error(message: str) -> List[types.TextContent]:
-    return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": message}))]
+    return [
+        types.TextContent(
+            type="text", text=json.dumps({"status": "error", "message": message})
+        )
+    ]
 
 
 export_citations_tool = types.Tool(
@@ -179,13 +208,21 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
             candidate = pid.strip() if isinstance(pid, str) else ""
             if not candidate or not is_valid_arxiv_id(candidate):
                 results.append(
-                    {"paper_id": pid, "status": "error", "error": "invalid arXiv ID format"}
+                    {
+                        "paper_id": pid,
+                        "status": "error",
+                        "error": "invalid arXiv ID format",
+                    }
                 )
                 continue
             paper = metadata.get(_base_id(candidate))
             if not paper:
                 results.append(
-                    {"paper_id": candidate, "status": "error", "error": "not found on arXiv"}
+                    {
+                        "paper_id": candidate,
+                        "status": "error",
+                        "error": "not found on arXiv",
+                    }
                 )
                 continue
             base_key = _citation_key(
@@ -193,10 +230,7 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
                 _year_of(paper.get("published", "")),
                 paper.get("title", ""),
             )
-            key, suffix = base_key, 0
-            while key in used_keys:  # deterministic disambiguation within the batch
-                suffix += 1
-                key = f"{base_key}{chr(ord('a') + suffix - 1)}"
+            key = _unique_key(base_key, used_keys)
             used_keys.add(key)
             results.append(
                 {
@@ -209,6 +243,11 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
 
         succeeded = [r for r in results if r["status"] == "success"]
         failed = [r for r in results if r["status"] != "success"]
+        # "error" when nothing resolved is intentional: server.call_tool turns a
+        # top-level {"status": "error"} payload into an MCP isError result, which
+        # matches the not-found convention asserted in
+        # tests/test_mcp_tool_error_semantics.py. The JSON body — including
+        # per-paper diagnostics — is preserved in the error content.
         overall = "success" if not failed else ("partial" if succeeded else "error")
         payload = {
             "status": overall,
