@@ -93,6 +93,30 @@ def test_release_metadata_and_arxiv_dependency_are_synchronized():
     assert arxiv_requirement == "arxiv>=2.1.0"
 
 
+def test_mcp_dependency_excludes_incompatible_major_release():
+    """mcp 2.0.0 removed the low-level ``Server`` registration decorators.
+
+    ``server.py`` registers handlers with ``@server.list_prompts()`` and
+    friends, which raise ``AttributeError`` at import time under 2.x. The
+    requirement must stay below 2.0.0 until those call sites are migrated to
+    the ``add_request_handler`` API.
+    """
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+
+    mcp_requirement = next(
+        dependency
+        for dependency in pyproject["project"]["dependencies"]
+        if re.match(r"^mcp\b", dependency)
+    )
+    assert mcp_requirement == "mcp>=1.27.0,<2.0.0"
+
+    locked_mcp = next(
+        package for package in lock["package"] if package["name"] == "mcp"
+    )
+    assert tuple(int(part) for part in locked_mcp["version"].split(".")[:1]) < (2,)
+
+
 def test_readme_exposes_supported_install_paths():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 

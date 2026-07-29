@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arxiv-mcp-server"
-version = "0.6.1"
+version = "0.6.2"
 description = "A flexible arXiv search and analysis service with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,7 +32,7 @@ dependencies = [
     "httpx>=0.24.0",
     "python-dateutil>=2.8.2",
     "pydantic>=2.8.0",
-    "mcp>=1.27.0",
+    "mcp>=1.27.0,<2.0.0",
     "aiohttp>=3.9.1",
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.1.0",

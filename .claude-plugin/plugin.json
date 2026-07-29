@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "arxiv-mcp-server",
   "displayName": "arXiv MCP Server",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Search, download, read, and analyze arXiv papers through MCP.",
   "author": {
     "name": "Joseph Blazick"
