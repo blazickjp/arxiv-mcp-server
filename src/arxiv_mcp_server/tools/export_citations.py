@@ -1,9 +1,12 @@
 """Export BibTeX citations for arXiv papers using authoritative arXiv metadata.
 
-Scoped per maintainer request in issue #41: BibTeX only (RIS/CSL-JSON are follow-up
-work), one ``export_citations`` tool over one or more validated arXiv IDs, metadata
+Scoped per maintainer request in issue #41: one ``export_citations`` tool over one or
+more validated arXiv IDs, metadata
 taken from the arXiv API (never model-generated), version suffixes preserved where the
 caller supplies them, deterministic citation keys, and no heavy formatting dependency.
+
+BibTeX shipped first (#135); RIS and CSL-JSON follow here behind a ``format`` argument,
+sharing the same fetch, validation and per-paper status contract.
 """
 
 import json
@@ -23,6 +26,16 @@ logger = logging.getLogger("arxiv-mcp-server")
 
 # Bound the response so a single call cannot fan out without limit.
 MAX_IDS = 50
+
+# Rendering formats. "bibtex" stays the default so existing callers are unaffected.
+FORMATS = ("bibtex", "ris", "csl-json")
+DEFAULT_FORMAT = "bibtex"
+# Payload key that carries the rendered citations, per format.
+_PAYLOAD_KEY = {"bibtex": "bibtex", "ris": "ris", "csl-json": "csl"}
+
+# Every arXiv paper carries a DataCite DOI derived from its identifier; verified to
+# resolve for both new-style ("2401.12345") and legacy ("hep-ph/9901234") IDs.
+ARXIV_DOI_PREFIX = "10.48550/arXiv."
 
 _VERSION_SUFFIX = re.compile(r"v\d+$", re.IGNORECASE)
 
@@ -134,6 +147,110 @@ def _render_entry(key: str, paper: Dict[str, Any], requested_id: str) -> str:
     return f"@misc{{{key},\n{body}\n}}"
 
 
+def _arxiv_doi(requested_id: str) -> str:
+    """DataCite DOI for an arXiv paper, derived from the bare identifier."""
+    return f"{ARXIV_DOI_PREFIX}{_base_id(requested_id)}"
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace: RIS is a line-oriented format, tags cannot wrap."""
+    return " ".join(text.split())
+
+
+# Corporate authors must not be split into given/family — CSL carries them literally.
+_CORPORATE_MARKERS = ("collaboration", "collaborations", "consortium", "team")
+
+
+def _split_name(author: str) -> tuple:
+    """Split a display name into (family, given) for CSL.
+
+    arXiv gives names as free text in "Given Middle Family" order, so the last token is
+    the family name. Single-token names and corporate authors ("LIGO Scientific
+    Collaboration") return ("", "") — the caller then emits a CSL ``literal`` name,
+    which is how such authors are represented rather than as person names.
+    """
+    parts = author.split()
+    if len(parts) < 2:
+        return ("", "")
+    if any(part.lower().strip(".,") in _CORPORATE_MARKERS for part in parts):
+        return ("", "")
+    return (parts[-1], " ".join(parts[:-1]))
+
+
+def _render_ris(key: str, paper: Dict[str, Any], requested_id: str) -> str:
+    """Render one RIS record.
+
+    ``TY  - GEN`` (generic) is used rather than ``JOUR``: an arXiv entry is a preprint,
+    not a journal article, and RIS has no preprint type. Two spaces before the hyphen
+    are part of the format, not padding.
+    """
+    lines: List[str] = ["TY  - GEN"]
+    for author in paper.get("authors") or []:
+        lines.append(f"AU  - {_one_line(author)}")
+    title = paper.get("title", "")
+    if title:
+        lines.append(f"TI  - {_one_line(title)}")
+    year = _year_of(paper.get("published", ""))
+    if year:
+        lines.append(f"PY  - {year}")
+    published = paper.get("published", "")
+    if len(published) >= 10 and published[4] == "-" and published[7] == "-":
+        lines.append(f"DA  - {published[:4]}/{published[5:7]}/{published[8:10]}")
+    for category in paper.get("categories") or []:
+        lines.append(f"KW  - {category}")
+    lines.append("PB  - arXiv")
+    lines.append(f"DO  - {_arxiv_doi(requested_id)}")
+    lines.append(f"UR  - https://arxiv.org/abs/{requested_id}")
+    lines.append(f"ID  - {key}")
+    lines.append("ER  - ")
+    return "\n".join(lines)
+
+
+def _render_csl(key: str, paper: Dict[str, Any], requested_id: str) -> Dict[str, Any]:
+    """Render one CSL-JSON item.
+
+    CSL has no ``preprint`` item type — the schema's 45 types offer ``article``,
+    ``article-journal``, ``manuscript`` and ``report``. ``article`` plus
+    ``publisher: arXiv`` and ``genre: preprint`` is the closest faithful mapping.
+    """
+    item: Dict[str, Any] = {"id": key, "type": "article", "genre": "preprint"}
+    title = paper.get("title", "")
+    if title:
+        item["title"] = _one_line(title)
+    authors = []
+    for author in paper.get("authors") or []:
+        family, given = _split_name(author)
+        authors.append(
+            {"family": family, "given": given} if family else {"literal": author}
+        )
+    if authors:
+        item["author"] = authors
+    published = paper.get("published", "")
+    year = _year_of(published)
+    if year:
+        date_parts: List[int] = [int(year)]
+        if len(published) >= 10 and published[4] == "-" and published[7] == "-":
+            date_parts += [int(published[5:7]), int(published[8:10])]
+        item["issued"] = {"date-parts": [date_parts]}
+    categories = paper.get("categories") or []
+    if categories:
+        item["categories"] = list(categories)
+    item["publisher"] = "arXiv"
+    item["number"] = requested_id
+    item["DOI"] = _arxiv_doi(requested_id)
+    item["URL"] = f"https://arxiv.org/abs/{requested_id}"
+    return item
+
+
+def _render(fmt: str, key: str, paper: Dict[str, Any], requested_id: str):
+    """Dispatch to the renderer for *fmt*."""
+    if fmt == "ris":
+        return _render_ris(key, paper, requested_id)
+    if fmt == "csl-json":
+        return _render_csl(key, paper, requested_id)
+    return _render_entry(key, paper, requested_id)
+
+
 async def _fetch_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """Fetch authoritative metadata for *ids* in one arXiv API request.
 
@@ -158,11 +275,11 @@ export_citations_tool = types.Tool(
     name="export_citations",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
-        "Export BibTeX citations for one or more arXiv papers using authoritative arXiv "
+        "Export citations for one or more arXiv papers using authoritative arXiv "
         "metadata (title, authors, year, primary category), never model-generated fields. "
-        "Version suffixes (e.g. '2401.12345v2') are preserved and citation keys are "
-        "deterministic. Returns the rendered BibTeX plus per-paper status/error. "
-        "BibTeX only; RIS/CSL-JSON are not yet supported."
+        "Formats: BibTeX (default), RIS, CSL-JSON. Version suffixes (e.g. '2401.12345v2') "
+        "are preserved, citation keys are deterministic, and each paper carries its own "
+        "status/error alongside the rendered citation."
     ),
     inputSchema={
         "type": "object",
@@ -176,7 +293,16 @@ export_citations_tool = types.Tool(
                     "arXiv IDs, new-style ('2401.12345', optionally versioned "
                     "'2401.12345v2') or legacy ('hep-ph/9901234')."
                 ),
-            }
+            },
+            "format": {
+                "type": "string",
+                "enum": list(FORMATS),
+                "default": DEFAULT_FORMAT,
+                "description": (
+                    "Citation format: 'bibtex' (default), 'ris', or 'csl-json'. "
+                    "CSL-JSON is returned as structured items, the others as text."
+                ),
+            },
         },
         "required": ["paper_ids"],
         "additionalProperties": False,
@@ -194,6 +320,14 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
             return _error("paper_ids must be a non-empty list of arXiv IDs")
         if len(raw_ids) > MAX_IDS:
             return _error(f"too many IDs: {len(raw_ids)} (max {MAX_IDS})")
+
+        fmt = arguments.get("format", DEFAULT_FORMAT)
+        if not isinstance(fmt, str) or fmt.lower() not in FORMATS:
+            return _error(
+                f"unsupported format: {fmt!r} (expected one of {', '.join(FORMATS)})"
+            )
+        fmt = fmt.lower()
+        payload_key = _PAYLOAD_KEY[fmt]
 
         valid_ids = [
             pid.strip()
@@ -237,7 +371,7 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
                     "paper_id": candidate,
                     "status": "success",
                     "key": key,
-                    "bibtex": _render_entry(key, paper, candidate),
+                    payload_key: _render(fmt, key, paper, candidate),
                 }
             )
 
@@ -249,10 +383,12 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
         # tests/test_mcp_tool_error_semantics.py. The JSON body — including
         # per-paper diagnostics — is preserved in the error content.
         overall = "success" if not failed else ("partial" if succeeded else "error")
+        rendered = [r[payload_key] for r in succeeded]
+        combined = rendered if fmt == "csl-json" else "\n\n".join(rendered)
         payload = {
             "status": overall,
-            "format": "bibtex",
-            "bibtex": "\n\n".join(r["bibtex"] for r in succeeded),
+            "format": fmt,
+            payload_key: combined,
             "results": results,
             "count": {
                 "requested": len(raw_ids),

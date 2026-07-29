@@ -302,3 +302,127 @@ async def test_tool_registered_in_server():
     tools = {tool.name: tool for tool in await list_tools()}
     assert "export_citations" in tools
     assert tools["export_citations"].inputSchema["additionalProperties"] is False
+
+
+# --------------------------------------------------------------------------- #
+# RIS and CSL-JSON (follow-up to #41: formats scoped out of the first PR)      #
+# --------------------------------------------------------------------------- #
+
+
+def test_arxiv_doi_derived_from_bare_id():
+    # The version suffix belongs to the citation, not to the DOI.
+    assert ec._arxiv_doi("2401.12345v2") == "10.48550/arXiv.2401.12345"
+    assert ec._arxiv_doi("hep-ph/9901234") == "10.48550/arXiv.hep-ph/9901234"
+
+
+def test_one_line_collapses_wrapped_metadata():
+    assert ec._one_line("Attention\n  Is All\tYou Need") == "Attention Is All You Need"
+
+
+def test_split_name_family_and_given():
+    assert ec._split_name("Ashish Vaswani") == ("Vaswani", "Ashish")
+    assert ec._split_name("Jean-Luc de la Fontaine") == ("Fontaine", "Jean-Luc de la")
+    assert ec._split_name("Collaboration") == ("", "")
+    # Corporate authors are not people: they must not be split into given/family.
+    assert ec._split_name("LIGO Scientific Collaboration") == ("", "")
+
+
+@pytest.mark.asyncio
+async def test_ris_record_structure(monkeypatch):
+    _stub_metadata(
+        monkeypatch,
+        [_paper("2401.00001", "Deep Nets", ["Ada Lovelace", "Alan Turing"])],
+    )
+    payload = await _run({"paper_ids": ["2401.00001"], "format": "ris"})
+
+    assert payload["status"] == "success"
+    assert payload["format"] == "ris"
+    record = payload["ris"]
+    lines = record.split("\n")
+    assert lines[0] == "TY  - GEN"
+    assert lines[-1] == "ER  - "
+    assert "AU  - Ada Lovelace" in lines
+    assert "AU  - Alan Turing" in lines
+    assert "TI  - Deep Nets" in lines
+    assert "PY  - 2024" in lines
+    assert "DA  - 2024/01/15" in lines
+    assert "PB  - arXiv" in lines
+    assert "DO  - 10.48550/arXiv.2401.00001" in lines
+    assert "UR  - https://arxiv.org/abs/2401.00001" in lines
+    assert f"ID  - {payload['results'][0]['key']}" in lines
+    # Every line is a tag line; nothing wrapped across lines.
+    assert all(line[:2].isalpha() and line[2:6] == "  - " for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_ris_preserves_requested_version_in_url_only(monkeypatch):
+    _stub_metadata(monkeypatch, [_paper("2401.00002", "Versioned", ["Grace Hopper"])])
+    payload = await _run({"paper_ids": ["2401.00002v3"], "format": "ris"})
+
+    assert "UR  - https://arxiv.org/abs/2401.00002v3" in payload["ris"]
+    assert "DO  - 10.48550/arXiv.2401.00002" in payload["ris"]
+
+
+@pytest.mark.asyncio
+async def test_csl_json_items(monkeypatch):
+    _stub_metadata(
+        monkeypatch,
+        [
+            _paper(
+                "2401.00003",
+                "On Categories\nand Functors",
+                ["Emmy Noether", "LIGO Collaboration"],
+                categories=("math.CT", "cs.LO"),
+            )
+        ],
+    )
+    payload = await _run({"paper_ids": ["2401.00003"], "format": "csl-json"})
+
+    assert payload["format"] == "csl-json"
+    items = payload["csl"]
+    assert isinstance(items, list) and len(items) == 1
+    item = items[0]
+    # CSL has no "preprint" item type; "article" + genre is the faithful mapping.
+    assert item["type"] == "article"
+    assert item["genre"] == "preprint"
+    assert item["title"] == "On Categories and Functors"
+    assert item["author"][0] == {"family": "Noether", "given": "Emmy"}
+    assert item["author"][1] == {"literal": "LIGO Collaboration"}
+    assert item["issued"] == {"date-parts": [[2024, 1, 15]]}
+    assert item["DOI"] == "10.48550/arXiv.2401.00003"
+    assert item["URL"] == "https://arxiv.org/abs/2401.00003"
+    assert item["publisher"] == "arXiv"
+    assert item["categories"] == ["math.CT", "cs.LO"]
+    assert item["id"] == payload["results"][0]["key"]
+
+
+@pytest.mark.asyncio
+async def test_default_format_stays_bibtex(monkeypatch):
+    _stub_metadata(monkeypatch, [_paper("2401.00004", "Unchanged", ["Ada Lovelace"])])
+    payload = await _run({"paper_ids": ["2401.00004"]})
+
+    assert payload["format"] == "bibtex"
+    assert payload["bibtex"].startswith("@misc{")
+    assert "ris" not in payload and "csl" not in payload
+
+
+@pytest.mark.asyncio
+async def test_unsupported_format_is_rejected(monkeypatch):
+    _stub_metadata(monkeypatch, [_paper("2401.00005", "Nope", ["Ada Lovelace"])])
+    payload = await _run({"paper_ids": ["2401.00005"], "format": "endnote"})
+
+    assert payload["status"] == "error"
+    assert "unsupported format" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_partial_batch_keeps_per_paper_status_in_ris(monkeypatch):
+    _stub_metadata(monkeypatch, [_paper("2401.00006", "Present", ["Ada Lovelace"])])
+    payload = await _run(
+        {"paper_ids": ["2401.00006", "2401.99999", "not-an-id"], "format": "ris"}
+    )
+
+    assert payload["status"] == "partial"
+    assert payload["count"] == {"requested": 3, "succeeded": 1, "failed": 2}
+    statuses = [r["status"] for r in payload["results"]]
+    assert statuses == ["success", "error", "error"]

@@ -56,7 +56,7 @@ The server registers 14 tools:
 - Full text: `download_paper`, `list_papers`, `read_paper`
 - Original source: `get_paper_latex`, `list_paper_latex_sections`, `get_paper_latex_section`
 - Graphs and monitoring: `citation_graph`, `watch_topic`, `check_alerts`
-- Citation export: `export_citations`
+- Citation export: `export_citations` (BibTeX, RIS, CSL-JSON via `format`)
 - Optional local embeddings: `semantic_search`, `reindex`
 
 Keep tool schemas, package exports, server registration, dispatch, tests, and README documentation synchronized when changing the tool surface.
