@@ -1,5 +1,7 @@
 # arxiv-mcp-server
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.blazickjp%2Farxiv-mcp-server.svg)](https://mcptoplist.com/server/io.github.blazickjp%2Farxiv-mcp-server)
+
 <!-- mcp-name: io.github.blazickjp/arxiv-mcp-server -->
 
 [![PyPI](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
