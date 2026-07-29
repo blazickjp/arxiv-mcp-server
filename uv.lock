@@ -197,7 +197,7 @@ wheels = [
 
 [[package]]
 name = "arxiv-mcp-server"
-version = "0.6.1"
+version = "0.6.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -244,7 +244,7 @@ requires-dist = [
     { name = "arxiv", specifier = ">=2.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.3.0" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "mcp", specifier = ">=1.27.0" },
+    { name = "mcp", specifier = ">=1.27.0,<2.0.0" },
     { name = "numpy", marker = "extra == 'pro'", specifier = ">=1.26.0" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "pydantic-settings", specifier = ">=2.1.0" },
