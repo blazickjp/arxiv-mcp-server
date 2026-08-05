@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
-from .content import add_content_payload
+from .content import add_content_payload, bound_arguments
 
 settings = Settings()
 
@@ -21,7 +21,9 @@ read_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "Read the text content of a paper that was previously downloaded via download_paper. "
-        "Returns the paper in markdown format and supports start/max_chars pagination for large papers. "
+        "Returns the paper in markdown format, bounded to roughly 12,000 characters by default "
+        "so one call cannot return an unbounded paper body; use start/max_chars to page through "
+        "the rest, or return_full_text: true to opt into the full unbounded text. "
         "Will fail with a clear error if the paper has not been downloaded yet — call download_paper first. "
         "Workflow: search_papers -> download_paper -> read_paper."
     ),
@@ -40,7 +42,11 @@ read_tool = types.Tool(
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum raw paper characters to return from start; omit for full content",
+                "description": "Maximum raw paper characters to return from start; omit for the bounded default (~12,000 chars)",
+            },
+            "return_full_text": {
+                "type": "boolean",
+                "description": "Set true to opt out of the bounded default and return the entire remaining paper in one call",
             },
         },
         "required": ["paper_id"],
@@ -84,7 +90,7 @@ async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent
                 "paper_id": paper_id,
             },
             content,
-            arguments,
+            bound_arguments(arguments),
             _CONTENT_WARNING,
         )
 
