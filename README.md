@@ -315,6 +315,14 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 
 Environment variable names are case-insensitive through Pydantic settings. `--storage-path` is a command-line option rather than an environment setting.
 
+
+#### Embedding model configuration
+- ARXIV_MCP_EMBEDDING_MODEL (optional): sentence-transformers model id used for local semantic embeddings. Example:
+  - export ARXIV_MCP_EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+- You can also set EMBEDDING_MODEL via environment variables (pydantic Settings).
+- Important: Changing the embedding model requires rebuilding the semantic index because stored vectors are model-dependent and may have different dimensions. Run the `reindex` tool with `clear_existing=True` after changing the model.
+
+
 ## Security
 
 Paper text and LaTeX are untrusted external content. A paper can contain text intended to manipulate an AI client into ignoring its instructions or calling unrelated tools.
