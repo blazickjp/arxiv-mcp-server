@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
+    # Default sentence-transformers model id. Can be overridden via
+    # ARXIV_MCP_EMBEDDING_MODEL env var or EMBEDDING_MODEL env var.
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     model_config = SettingsConfigDict(extra="allow")
 
     @property

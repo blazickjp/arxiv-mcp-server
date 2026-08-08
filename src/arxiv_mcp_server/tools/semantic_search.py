@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -21,10 +22,18 @@ from .list_papers import is_valid_arxiv_id
 np: Any = None
 SentenceTransformer: Any = None
 
-logger = logging.getLogger("arxiv-mcp-server")
+ogger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# Embedding model selection:
+# Priority:
+# 1. ARXIV_MCP_EMBEDDING_MODEL env var (explicit)
+# 2. Settings.EMBEDDING_MODEL (pydantic env-backed)
+# 3. fallback default (preserve previous behavior)
+EMBEDDING_MODEL_NAME = os.environ.get(
+    "ARXIV_MCP_EMBEDDING_MODEL",
+    getattr(settings, "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+)
 INDEX_DB_NAME = "semantic_index.db"
 
 _model: Optional[Any] = None
@@ -152,9 +161,21 @@ def _get_model() -> Any:
     """Load the sentence-transformers model lazily."""
     global _model
     if _model is None:
-        logger.info("Loading semantic embedding model %s", EMBEDDING_MODEL_NAME)
+        logging.getLogger("arxiv-mcp-server").info(
+    "Loading semantic embedding model %s", EMBEDDING_MODEL_NAME)
         _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
+
+
+def _current_model_dim() -> int:
+    """Return the current model's embedding dimension (loads model if necessary)."""
+    model = _get_model()
+    # Use a quick encode to discover the dimension. Keep convert_to_numpy True.
+    vec = model.encode("", convert_to_numpy=True, normalize_embeddings=True)
+    try:
+        return int(vec.shape[0])
+    except Exception:
+        return int(len(vec))
 
 
 def _embed_text(text: str) -> Any:
@@ -263,7 +284,15 @@ def index_paper_from_result(paper: Any) -> bool:
 
 
 def _load_vectors(exclude_paper_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load all vectors (optionally excluding one paper)."""
+    """Load all vectors (optionally excluding one paper). Skip records with incompatible dims."""
+    # Try to infer the current model dimension. If we can't (missing deps),
+    # leave current_dim as None which disables skipping.
+    current_dim = None
+    try:
+        if _load_dependencies():
+            current_dim = _current_model_dim()
+    except Exception:
+        current_dim = None
     with _connect() as conn:
         if exclude_paper_id:
             rows = conn.execute(
@@ -271,12 +300,14 @@ def _load_vectors(exclude_paper_id: Optional[str] = None) -> List[Dict[str, Any]
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM semantic_index").fetchall()
-
     vectors: List[Dict[str, Any]] = []
+    skipped = 0
     for row in rows:
-        vector = np.frombuffer(
-            row["embedding"], dtype=np.float32, count=row["embedding_dim"]
-        )
+        row_dim = int(row["embedding_dim"])
+        if current_dim is not None and row_dim != current_dim:
+            skipped += 1
+            continue
+        vector = np.frombuffer(row["embedding"], dtype=np.float32, count=row_dim)
         vectors.append(
             {
                 "paper_id": row["paper_id"],
@@ -287,6 +318,13 @@ def _load_vectors(exclude_paper_id: Optional[str] = None) -> List[Dict[str, Any]
                 "published": row["published"] or "",
                 "vector": vector,
             }
+        )
+    if skipped:
+        logger.warning(
+            "Skipped %d indexed papers because their embedding_dim does not match the current model (%s). "
+            "Run the 'reindex' tool with clear_existing=True to rebuild the index using the current embedding model.",
+            skipped,
+            current_dim or "unknown",
         )
     return vectors
 
