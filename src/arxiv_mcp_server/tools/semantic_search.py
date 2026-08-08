@@ -162,7 +162,8 @@ def _get_model() -> Any:
     global _model
     if _model is None:
         logging.getLogger("arxiv-mcp-server").info(
-    "Loading semantic embedding model %s", EMBEDDING_MODEL_NAME)
+            "Loading semantic embedding model %s", EMBEDDING_MODEL_NAME
+        )
         _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 
