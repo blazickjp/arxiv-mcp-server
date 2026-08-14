@@ -15,6 +15,8 @@
 [![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%2C%22disabled%22%3Afalse%2C%22autoApprove%22%3A%5B%5D%7D)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Install-D97757?style=flat-square&logo=anthropic&logoColor=white)](#claude-code)
 [![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex-Install-000000?style=flat-square&logo=openai&logoColor=white)](#openai-codex)
+[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Install-6C5CE7?style=flat-square)](#hermes-agent)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-Listed-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/?search=io.github.blazickjp%2Farxiv-mcp-server)
 
 An MCP server for searching arXiv, downloading papers, reading bounded full text, retrieving original LaTeX by section, following citation graphs, and maintaining research alerts.
 
@@ -29,8 +31,7 @@ The command-based integrations require [uv](https://docs.astral.sh/uv/getting-st
 Add the MCP server for all projects:
 
 ```bash
-claude mcp add --transport stdio --scope user arxiv \
-  -- uvx arxiv-mcp-server
+claude mcp add --transport stdio --scope user arxiv -- uvx arxiv-mcp-server
 ```
 
 For the richer plugin integration—which installs the MCP connection plus the bundled arXiv research skill—register this repository as a marketplace and install the plugin:
@@ -59,6 +60,15 @@ codex plugin add arxiv-mcp-server@arxiv-mcp
 
 Verify the direct MCP installation with `codex mcp get arxiv`. Codex CLI, the Codex IDE extension, and Codex in the ChatGPT desktop app share this MCP configuration.
 
+### Hermes Agent
+
+Add the server, approve the discovered tools, and test the saved connection:
+
+```bash
+hermes mcp add arxiv --command uvx --args arxiv-mcp-server
+hermes mcp test arxiv
+```
+
 ### Kiro and VS Code
 
 Use the **Add to Kiro**, **Install in VS Code**, or **Install in VS Code Insiders** button above.
@@ -80,9 +90,9 @@ macOS users can install a bundled `.mcpb` extension from the [latest GitHub rele
 
 Double-click the bundle, drag it into Claude Desktop, or open **Settings → Extensions → Advanced settings → Install Extension…**. The bundle includes the server dependencies and requires CPython 3.11.x.
 
-### Any MCP client
+### Other MCP clients
 
-Add this stdio configuration to any client that accepts standard MCP JSON:
+Add this stdio configuration to clients that accept the `mcpServers` JSON shape, such as Claude Desktop and Kiro. Other clients may use a top-level `servers` object, TOML, or their own settings UI; consult the client's MCP documentation.
 
 ```json
 {
@@ -118,6 +128,32 @@ For older papers that require PDF conversion, run the package with its PDF extra
 
 The supported package is published on PyPI. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
 
+### If an existing installation is missing newer tools
+
+`uvx` reuses cached tool environments. Force it to resolve the current PyPI release with a supported interpreter, then restart your MCP client:
+
+```bash
+uvx --python 3.11 --refresh-package arxiv-mcp-server arxiv-mcp-server
+```
+
+If your client still launches an older environment, add `"--python", "3.11"` before `"arxiv-mcp-server"` in its `args` array.
+
+### If a desktop client cannot find `uvx`
+
+Desktop applications do not always inherit the same `PATH` as your terminal. If `uvx arxiv-mcp-server` works in a terminal but the client reports that the server failed to connect, find the executable's absolute path:
+
+```bash
+# macOS and Linux
+command -v uvx
+```
+
+```powershell
+# Windows PowerShell
+(Get-Command uvx).Source
+```
+
+Replace `"command": "uvx"` with the returned absolute path, then restart the client. Keep the `args` value unchanged.
+
 ### Persistent command install
 
 To place `arxiv-mcp-server` on your `PATH` instead of launching it through `uvx`:
@@ -126,7 +162,7 @@ To place `arxiv-mcp-server` on your `PATH` instead of launching it through `uvx`
 uv tool install arxiv-mcp-server
 ```
 
-Afterward, use `"command": "arxiv-mcp-server"` and omit the package name from `args`.
+If the command is not immediately available, run `uv tool update-shell` and restart the terminal. Afterward, use `"command": "arxiv-mcp-server"` and omit the package name from `args`.
 
 ## Plugin integrations
 
@@ -248,16 +284,16 @@ Choose the install variant that matches the features you need:
 uv tool install arxiv-mcp-server
 
 # Base server plus PDF conversion
-uv tool install 'arxiv-mcp-server[pdf]'
+uv tool install "arxiv-mcp-server[pdf]"
 
 # Base server plus local semantic search
-uv tool install 'arxiv-mcp-server[pro]'
+uv tool install "arxiv-mcp-server[pro]"
 ```
 
 If the base tool is already installed, reinstall the selected variant:
 
 ```bash
-uv tool install --force 'arxiv-mcp-server[pdf]'
+uv tool install --force "arxiv-mcp-server[pdf]"
 ```
 
 The `pdf` extra installs `pymupdf4llm` and `pymupdf-layout` for papers without usable arXiv HTML. The `pro` extra adds local embedding dependencies for `semantic_search` and `reindex`; semantic search only operates on papers already downloaded to the configured storage directory.
@@ -283,6 +319,15 @@ For deployments where stdio is not practical:
 ```bash
 TRANSPORT=http HOST=127.0.0.1 PORT=8080 \
   uvx arxiv-mcp-server --storage-path /absolute/path/to/papers
+```
+
+PowerShell:
+
+```powershell
+$env:TRANSPORT = "http"
+$env:HOST = "127.0.0.1"
+$env:PORT = "8080"
+uvx arxiv-mcp-server --storage-path C:\absolute\path\to\papers
 ```
 
 Connect clients to:
