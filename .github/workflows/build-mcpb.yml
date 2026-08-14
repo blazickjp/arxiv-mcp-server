@@ -19,11 +19,15 @@ jobs:
       matrix:
         os: [macos-15-intel, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.event.release.tag_name || github.sha }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v7
@@ -35,6 +39,35 @@ jobs:
           version: "0.11.30"
           enable-cache: true
 
+      - name: Validate release tag and checked-out commit
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import tomllib
+
+          tag = os.environ.get("RELEASE_TAG", "").strip()
+          if not tag:
+              print("No release tag supplied; building an unattached workflow artifact")
+              raise SystemExit(0)
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          expected_tag = f"v{version}"
+          if tag != expected_tag:
+              raise SystemExit(f"Release tag {tag!r} does not match {expected_tag!r}")
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tag_commit = subprocess.check_output(["git", "rev-list", "-n", "1", tag], text=True).strip()
+          if head != tag_commit:
+              raise SystemExit(
+                  f"Checked-out commit {head} does not match {tag} commit {tag_commit}"
+              )
+          print(f"Validated {tag} at {head}")
+          PY
+
       - name: Set up Node.js 24
         uses: actions/setup-node@v7
         with:
@@ -42,6 +75,11 @@ jobs:
 
       - name: Build MCPB bundle
         run: bash scripts/build-mcpb.sh
+
+      - name: Smoke-test MCPB bundle over MCP
+        env:
+          PYTHONPATH: ${{ github.workspace }}/mcpb-build/server/vendor
+        run: python scripts/smoke_mcpb.py
 
       - name: Upload MCPB to release
         if: github.event_name == 'release' || inputs.release_tag != ''

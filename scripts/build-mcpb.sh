@@ -73,7 +73,16 @@ PYEOF
 
 # Copy server source
 cp -R "$ROOT/src/arxiv_mcp_server" "$BUILD_DIR/server/arxiv_mcp_server"
-echo "Copied server source"
+"$PYTHON_BIN" - "$BUILD_DIR/server/arxiv_mcp_server/_bundle_version.py" "$VERSION" <<'PYEOF'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_text(
+    f'"""Generated MCPB package version; do not edit."""\n\nVERSION = {sys.argv[2]!r}\n',
+    encoding="utf-8",
+)
+PYEOF
+echo "Copied server source and generated bundle version metadata"
 
 # Vendor the locked base and PDF-extra dependencies. Exporting from uv.lock keeps
 # the bundle aligned with the package release instead of maintaining a second

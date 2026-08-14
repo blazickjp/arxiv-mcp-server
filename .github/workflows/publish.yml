@@ -11,6 +11,7 @@ permissions:
 jobs:
   validate-and-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -54,29 +55,8 @@ jobs:
       - name: Validate distributions
         run: uv run --with twine twine check dist/*
 
-      - name: Smoke-test built wheel
-        run: |
-          uv venv --python 3.11 /tmp/arxiv-release-smoke
-          uv pip install --python /tmp/arxiv-release-smoke/bin/python dist/*.whl
-          /tmp/arxiv-release-smoke/bin/python - <<'PY'
-          import importlib.metadata
-          from arxiv_mcp_server.server import list_tools
-          import asyncio
-
-          version = importlib.metadata.version("arxiv-mcp-server")
-          tools = asyncio.run(list_tools())
-          names = {tool.name for tool in tools}
-          required = {
-              "search_papers",
-              "download_paper",
-              "get_paper_latex",
-              "list_paper_latex_sections",
-              "get_paper_latex_section",
-          }
-          if not required.issubset(names):
-              raise SystemExit(f"Missing tools: {sorted(required - names)}")
-          print(f"Installed arxiv-mcp-server {version} with {len(names)} tools")
-          PY
+      - name: Smoke-test built wheel over MCP
+        run: uv run python scripts/smoke_installed_wheel.py
 
       - name: Install MCP Registry publisher
         run: |

@@ -123,8 +123,23 @@ def test_readme_exposes_supported_install_paths():
     assert "static.pepy.tech/badge/arxiv-mcp-server" in readme
     assert "claude mcp add --transport stdio --scope user arxiv" in readme
     assert "codex mcp add arxiv -- uvx arxiv-mcp-server" in readme
+    assert "hermes mcp add arxiv --command uvx --args arxiv-mcp-server" in readme
+    assert "hermes mcp test arxiv" in readme
+    assert (
+        "uvx --python 3.11 --refresh-package arxiv-mcp-server arxiv-mcp-server"
+        in readme
+    )
+    assert "command -v uvx" in readme
+    assert "Get-Command uvx" in readme
+    assert "uv tool update-shell" in readme
+    assert (
+        "registry.modelcontextprotocol.io/?search=io.github.blazickjp%2Farxiv-mcp-server"
+        in readme
+    )
     assert "claude plugin install arxiv-mcp-server@arxiv-mcp" in readme
     assert "codex plugin add arxiv-mcp-server@arxiv-mcp" in readme
+    assert '$env:TRANSPORT = "http"' in readme
+    assert "clients that accept the `mcpServers` JSON shape" in readme
     assert "Smithery" not in readme
     assert "smithery" not in readme
 
@@ -165,3 +180,50 @@ def test_readme_exposes_supported_install_paths():
     assert insiders_query["name"] == ["arxiv-mcp-server"]
     assert insiders_query["quality"] == ["insiders"]
     assert json.loads(insiders_query["config"][0]) == vscode_config
+
+
+def test_claude_manifests_reference_live_schemastore_schemas():
+    plugin = json.loads(
+        (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    marketplace = json.loads(
+        (ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+    )
+
+    assert plugin["$schema"] == (
+        "https://www.schemastore.org/claude-code-plugin-manifest.json"
+    )
+    assert marketplace["$schema"] == (
+        "https://www.schemastore.org/claude-code-marketplace.json"
+    )
+
+
+def test_mcpb_manual_release_dispatch_checks_out_and_validates_the_tag():
+    workflow = (ROOT / ".github" / "workflows" / "build-mcpb.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "ref: ${{ inputs.release_tag || github.event.release.tag_name || github.sha }}"
+        in workflow
+    )
+    assert (
+        "RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}"
+        in workflow
+    )
+    assert 'expected_tag = f"v{version}"' in workflow
+    assert (
+        'tag_commit = subprocess.check_output(["git", "rev-list", "-n", "1", tag]'
+        in workflow
+    )
+
+
+def test_workflows_bound_protocol_smoke_runtime():
+    workflows = {
+        name: (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        for name in ("tests.yml", "publish.yml", "build-mcpb.yml")
+    }
+
+    assert "timeout-minutes: 20" in workflows["tests.yml"]
+    assert "timeout-minutes: 20" in workflows["publish.yml"]
+    assert "timeout-minutes: 30" in workflows["build-mcpb.yml"]

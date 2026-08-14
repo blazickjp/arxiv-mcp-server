@@ -1,15 +1,26 @@
 """Configuration settings for the arXiv MCP server."""
 
 import sys
+from importlib import import_module
 from importlib.metadata import version, PackageNotFoundError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import logging
 
-try:
-    _PACKAGE_VERSION = version("arxiv-mcp-server")
-except PackageNotFoundError:
-    _PACKAGE_VERSION = "0.0.0"
+
+def _resolve_package_version() -> str:
+    """Resolve the bundled version first, then installed package metadata."""
+    try:
+        bundle_version = import_module("._bundle_version", package=__package__)
+    except ImportError:
+        try:
+            return version("arxiv-mcp-server")
+        except PackageNotFoundError:
+            return "0.0.0"
+    return bundle_version.VERSION
+
+
+_PACKAGE_VERSION = _resolve_package_version()
 
 logger = logging.getLogger(__name__)
 

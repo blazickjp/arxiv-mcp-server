@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
 from arxiv_mcp_server.config import Settings
 from unittest.mock import MagicMock, patch
 
@@ -141,3 +142,41 @@ def test_close_arxiv_client_releases_shared_session(monkeypatch):
 
     client._session.close.assert_called_once_with()
     assert config._arxiv_client is None
+
+
+def test_package_version_prefers_generated_bundle_version(monkeypatch):
+    from arxiv_mcp_server import config
+
+    bundle_module = ModuleType("arxiv_mcp_server._bundle_version")
+    setattr(bundle_module, "VERSION", "9.9.9")
+    monkeypatch.setitem(sys.modules, bundle_module.__name__, bundle_module)
+    monkeypatch.setattr(config, "version", lambda _name: "0.6.2")
+
+    assert config._resolve_package_version() == "9.9.9"
+
+
+def test_package_version_uses_distribution_metadata_without_bundle(monkeypatch):
+    from arxiv_mcp_server import config
+
+    def missing_bundle(_name, *, package):
+        raise ImportError(package)
+
+    monkeypatch.setattr(config, "import_module", missing_bundle)
+    monkeypatch.setattr(config, "version", lambda _name: "0.6.2")
+
+    assert config._resolve_package_version() == "0.6.2"
+
+
+def test_package_version_falls_back_without_bundle_or_distribution(monkeypatch):
+    from arxiv_mcp_server import config
+
+    def missing_bundle(_name, *, package):
+        raise ImportError(package)
+
+    def missing_distribution(_name):
+        raise config.PackageNotFoundError
+
+    monkeypatch.setattr(config, "import_module", missing_bundle)
+    monkeypatch.setattr(config, "version", missing_distribution)
+
+    assert config._resolve_package_version() == "0.0.0"

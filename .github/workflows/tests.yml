@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   test:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -34,8 +35,20 @@ jobs:
       - name: Install locked test environment
         run: uv sync --locked --extra test
 
+      - name: Resolve optional extras from binary wheels
+        run: >-
+          uv pip compile pyproject.toml --extra pdf --extra pro
+          --only-binary :all:
+          --output-file "${{ runner.temp }}/arxiv-extras.txt"
+
       - name: Run tests
         run: uv run pytest --cov-report=xml
+
+      - name: Build candidate wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Smoke-test installed wheel over MCP
+        run: uv run python scripts/smoke_installed_wheel.py
 
   docker-smoke:
     runs-on: ubuntu-latest
