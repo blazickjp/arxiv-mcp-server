@@ -6,6 +6,7 @@ from importlib.metadata import version, PackageNotFoundError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import logging
+import requests
 
 
 def _resolve_package_version() -> str:
@@ -39,7 +40,39 @@ def get_arxiv_client():
     if _arxiv_client is None:
         import arxiv
 
-        _arxiv_client = arxiv.Client()
+        client = arxiv.Client()
+
+        # The upstream arxiv package issues HTTP requests through a
+        # requests.Session with no timeout (arxiv.Client._session.get),
+        # so a connection that silently stops responding (a "black hole":
+        # the peer never answers again, no FIN/RST — root cause unknown,
+        # see issue) blocks forever inside ARXIV_RATE_LIMITER's
+        # process-wide lock, wedging every subsequent search until the
+        # server is restarted.
+        #
+        # 1. Inject connect/read timeouts so such a request fails within
+        #    ~35s, the lock is released, and later calls recover.
+        # 2. Disable keep-alive connection reuse so a pooled connection
+        #    can never be reused after going stale (urllib3's stale check
+        #    only verifies the socket object exists, not that the peer is
+        #    still reachable).
+        #
+        # Only patch a real requests.Session; tests may substitute a mock
+        # client without one.
+        session = getattr(client, "_session", None)
+        if isinstance(session, requests.Session):
+            _orig_get = session.get
+
+            def _get_with_timeout(url, **kwargs):
+                kwargs.setdefault("timeout", (5.0, 30.0))
+                return _orig_get(url, **kwargs)
+
+            session.get = _get_with_timeout
+            # requests' default headers already include 'Connection: keep-alive',
+            # so setdefault would be a no-op; assign directly.
+            session.headers["Connection"] = "close"
+
+        _arxiv_client = client
     return _arxiv_client
 
 

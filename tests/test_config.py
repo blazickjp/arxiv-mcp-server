@@ -180,3 +180,63 @@ def test_package_version_falls_back_without_bundle_or_distribution(monkeypatch):
     monkeypatch.setattr(config, "version", missing_distribution)
 
     assert config._resolve_package_version() == "0.0.0"
+
+
+def test_get_arxiv_client_injects_timeout_and_disables_keepalive(monkeypatch):
+    """Regression: a blackholed request must not hang forever.
+
+    The upstream arxiv package sends requests with no timeout through a
+    shared requests.Session; a silently-dropped (blackholed) connection
+    then blocks inside ARXIV_RATE_LIMITER's lock forever, wedging every
+    subsequent search until the server is restarted. The client must be
+    built with HTTP timeouts and keep-alive disabled.
+    """
+    import sys
+    from unittest.mock import MagicMock, patch
+    import requests
+    from arxiv_mcp_server import config
+
+    real_session = requests.Session()
+    fake_client = MagicMock()
+    fake_client._session = real_session
+    arxiv_mod = MagicMock()
+    arxiv_mod.Client.return_value = fake_client
+
+    monkeypatch.setattr(config, "_arxiv_client", None)
+    monkeypatch.setitem(sys.modules, "arxiv", arxiv_mod)
+
+    with patch.object(requests.Session, "get") as mock_get:
+        client = config.get_arxiv_client()
+
+        assert client is fake_client
+        # session.get must be wrapped with a default timeout
+        assert real_session.get.__name__ == "_get_with_timeout"
+
+        # the wrapper must inject the default timeout on the underlying call
+        real_session.get("https://export.arxiv.org/api/query")
+        _args, kwargs = mock_get.call_args
+        assert kwargs["timeout"] == (5.0, 30.0)
+
+    # keep-alive must be disabled so no stale pooled connection is reused
+    assert real_session.headers.get("Connection") == "close"
+
+
+def test_get_arxiv_client_skips_wrapping_without_real_session(monkeypatch):
+    """Mocks without a requests.Session must not be touched."""
+    import sys
+    from unittest.mock import MagicMock
+    from arxiv_mcp_server import config
+
+    fake_client = MagicMock()
+    fake_client._session = MagicMock()  # not a requests.Session
+    arxiv_mod = MagicMock()
+    arxiv_mod.Client.return_value = fake_client
+
+    monkeypatch.setattr(config, "_arxiv_client", None)
+    monkeypatch.setitem(sys.modules, "arxiv", arxiv_mod)
+
+    client = config.get_arxiv_client()
+
+    assert client is fake_client
+    # untouched: still a MagicMock, not the _get_with_timeout wrapper
+    assert client._session.get.__class__.__name__ == "MagicMock"
