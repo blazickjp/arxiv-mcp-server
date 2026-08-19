@@ -343,6 +343,8 @@ Connect clients to:
 }
 ```
 
+Cloud and load-balancer probes should GET `http://<host>:<port>/healthz`. It returns `200` with body `ok` once the HTTP server is listening. There is no separate `/ready` check: if the process is up, it is ready. The stdio transport has no HTTP endpoints.
+
 The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protection. If a reverse proxy exposes the server, keep the process on a private interface and provide authentication and network controls upstream. Use `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` for the host and origin values forwarded by the proxy.
 
 ## Configuration
