@@ -12,7 +12,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
-from .content import add_content_payload
+from .content import add_content_payload, bound_arguments
 from .list_papers import is_valid_arxiv_id
 import logging
 import threading
@@ -192,8 +192,10 @@ download_tool = types.Tool(
     description=(
         "Download a paper from arXiv and return its text content. "
         "Tries the HTML version first for clean extraction; falls back to "
-        "PDF conversion if HTML is unavailable. Stores the paper locally "
-        "and supports start/max_chars pagination for very large papers."
+        "PDF conversion if HTML is unavailable. Stores the paper locally. "
+        "The returned text is bounded to roughly 12,000 characters by default "
+        "so one call cannot return an unbounded paper body; use start/max_chars "
+        "to page through the rest, or return_full_text: true for the full unbounded text."
     ),
     inputSchema={
         "type": "object",
@@ -210,7 +212,11 @@ download_tool = types.Tool(
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum raw paper characters to return from start; omit for full content",
+                "description": "Maximum raw paper characters to return from start; omit for the bounded default (~12,000 chars)",
+            },
+            "return_full_text": {
+                "type": "boolean",
+                "description": "Set true to opt out of the bounded default and return the entire remaining paper in one call",
             },
         },
         "required": ["paper_id"],
@@ -346,7 +352,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     "source": "cache",
                 },
                 content,
-                arguments,
+                bound_arguments(arguments),
                 _CONTENT_WARNING,
             )
             return [
@@ -372,7 +378,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     "source": "html",
                 },
                 html_text,
-                arguments,
+                bound_arguments(arguments),
                 _CONTENT_WARNING,
             )
             return [
@@ -417,7 +423,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 "source": "pdf",
             },
             markdown,
-            arguments,
+            bound_arguments(arguments),
             _CONTENT_WARNING,
         )
         return [
