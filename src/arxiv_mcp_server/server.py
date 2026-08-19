@@ -17,7 +17,8 @@ from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
-from starlette.routing import Mount
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount, Route
 from .config import Settings, close_arxiv_client
 from .tools import (
     handle_search,
@@ -208,6 +209,21 @@ async def _run_stdio() -> None:
         await server.run(streams[0], streams[1], _initialization_options())
 
 
+async def _healthz(_request):
+    """Liveness probe for HTTP deploys. Process up means ready."""
+    return PlainTextResponse("ok")
+
+
+def _build_http_app(session_manager) -> Starlette:
+    """HTTP app: MCP mount plus a deploy probe. stdio does not use this."""
+    return Starlette(
+        routes=[
+            Route("/healthz", _healthz, methods=["GET"]),
+            Mount("/mcp", app=session_manager.handle_request),
+        ]
+    )
+
+
 async def _run_streamable_http() -> None:
     """Run the MCP server over Streamable HTTP."""
     session_manager = StreamableHTTPSessionManager(
@@ -216,9 +232,7 @@ async def _run_streamable_http() -> None:
         json_response=False,
         security_settings=_transport_security_settings(),
     )
-    starlette_app = Starlette(
-        routes=[Mount("/mcp", app=session_manager.handle_request)]
-    )
+    starlette_app = _build_http_app(session_manager)
     config = uvicorn.Config(
         starlette_app,
         host=settings.HOST,

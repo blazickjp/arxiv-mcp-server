@@ -139,3 +139,18 @@ def test_http_defaults_bind_to_localhost():
     assert settings.TRANSPORT == "stdio"
     assert settings.HOST == "127.0.0.1"
     assert settings.PORT == 8000
+
+
+def test_http_app_exposes_healthz():
+    """HTTP deploys can probe /healthz without speaking MCP."""
+    from starlette.testclient import TestClient
+
+    session_manager = MagicMock()
+    session_manager.handle_request = AsyncMock()
+    app = server_module._build_http_app(session_manager)
+
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.text == "ok"
