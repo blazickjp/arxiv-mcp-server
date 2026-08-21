@@ -72,6 +72,7 @@ def save_paper_metadata(
     title: Optional[str] = None,
     authors: Optional[List[str]] = None,
     published: Optional[str] = None,
+    extractor_version: Optional[int] = None,
     path: Optional[Path] = None,
 ) -> None:
     """Persist lightweight paper metadata next to the downloaded markdown."""
@@ -82,6 +83,8 @@ def save_paper_metadata(
         "authors": list(authors or []),
         "published": published or None,
     }
+    if extractor_version is not None:
+        payload["extractor_version"] = extractor_version
     destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
