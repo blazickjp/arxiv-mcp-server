@@ -89,3 +89,75 @@ async def test_check_alerts_handles_partial_paper_fields(monkeypatch, alerts_tes
     assert len(response) >= 1
     payload = json.loads(response[0].text)
     assert "status" in payload
+
+
+@pytest.mark.asyncio
+async def test_list_watches_returns_watch_without_changing_last_checked(
+    alerts_test_env,
+):
+    """list_watches should return saved watches and leave last_checked unchanged."""
+    await alerts_module.handle_watch_topic(
+        {"topic": "mixture of experts", "categories": ["cs.LG"]}
+    )
+
+    first = json.loads((await alerts_module.handle_list_watches({}))[0].text)
+    assert first["status"] == "success"
+    assert first["watch_count"] == 1
+    watch = first["watches"][0]
+    assert watch["topic"] == "mixture of experts"
+    assert watch["categories"] == ["cs.LG"]
+    assert "last_checked" in watch
+    last_checked = watch["last_checked"]
+
+    second = json.loads((await alerts_module.handle_list_watches({}))[0].text)
+    assert second["watches"][0]["last_checked"] == last_checked
+    assert second["watches"][0]["updated_at"] == watch["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_list_watches_does_not_write_storage(monkeypatch, alerts_test_env):
+    """list_watches is read-only and must not persist watches."""
+    await alerts_module.handle_watch_topic({"topic": "agents"})
+    called = {"count": 0}
+
+    def _fail_save(_payload):
+        called["count"] += 1
+        raise AssertionError("list_watches must not call _save_watches")
+
+    monkeypatch.setattr(alerts_module, "_save_watches", _fail_save)
+    response = await alerts_module.handle_list_watches({})
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert called["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_unwatch_topic_removes_watch_and_errors_when_missing(alerts_test_env):
+    """unwatch_topic should delete an exact match and return a clean not-found error."""
+    await alerts_module.handle_watch_topic({"topic": "mixture of experts"})
+
+    removed = json.loads(
+        (await alerts_module.handle_unwatch_topic({"topic": "mixture of experts"}))[
+            0
+        ].text
+    )
+    assert removed["status"] == "success"
+    assert removed["topic"] == "mixture of experts"
+
+    listed = json.loads((await alerts_module.handle_list_watches({}))[0].text)
+    assert listed["watch_count"] == 0
+    assert listed["watches"] == []
+
+    missing = json.loads(
+        (await alerts_module.handle_unwatch_topic({"topic": "mixture of experts"}))[
+            0
+        ].text
+    )
+    assert missing["status"] == "error"
+    assert "not found" in missing["message"].lower()
+
+
+def test_list_and_unwatch_tool_annotations():
+    """list_watches is read-only; unwatch_topic is a write."""
+    assert alerts_module.list_watches_tool.annotations.readOnlyHint is True
+    assert alerts_module.unwatch_topic_tool.annotations.readOnlyHint is False
