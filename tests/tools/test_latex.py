@@ -260,13 +260,13 @@ def test_flatten_source_does_not_escape_via_import():
 
 def test_parse_sections_returns_stable_hierarchical_ids():
     source = r"""
-\\section{Introduction}
+\section{Introduction}
 Intro.
-\\subsection{Motivation}
+\subsection{Motivation}
 Why.
-\\subsubsection{Prior work}
+\subsubsection{Prior work}
 History.
-\\section{Results}
+\section{Results}
 Numbers.
 """
 
@@ -282,3 +282,309 @@ Numbers.
         "\\subsection{Motivation}"
     )
     assert "\\section{Results}" not in latex._extract_section(source, sections, "1")
+
+
+def test_extract_tex_files_streams_members_without_getmembers(monkeypatch):
+    archive = _tar_bytes({"main.tex": b"\\documentclass{article}"})
+
+    def forbidden(_self):
+        raise AssertionError("getmembers must not scan the complete archive")
+
+    monkeypatch.setattr(tarfile.TarFile, "getmembers", forbidden)
+
+    assert latex._extract_tex_files(archive)["main.tex"] == "\\documentclass{article}"
+
+
+def test_extract_tex_files_enforces_member_count_during_iteration(monkeypatch):
+    monkeypatch.setattr(latex, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = _tar_bytes(
+        {
+            "one.txt": b"1",
+            "two.txt": b"2",
+            "main.tex": b"\\documentclass{article}",
+        }
+    )
+
+    with pytest.raises(latex.SourceArchiveLimitError, match="too many members"):
+        latex._extract_tex_files(archive)
+
+
+def test_flatten_source_enforces_aggregate_output_budget(monkeypatch):
+    monkeypatch.setattr(latex, "MAX_FLATTENED_CHARS", 40)
+    files = {
+        "main.tex": "\\documentclass{article}\n" + "\\input{child}\n" * 10,
+        "child.tex": "0123456789",
+    }
+
+    with pytest.raises(latex.SourceArchiveLimitError, match="flattened"):
+        latex._flatten_source(files)
+
+
+def test_parse_sections_ignores_commented_headings():
+    source = "% \\section{Fake}\n\\section{Real}\nText"
+
+    sections = latex._parse_sections(source)
+
+    assert [(item.section_id, item.title) for item in sections] == [("1", "Real")]
+
+
+def test_download_archive_aborts_when_stream_exceeds_limit(monkeypatch):
+    monkeypatch.setattr(latex, "MAX_ARCHIVE_BYTES", 5)
+    response = MagicMock()
+    response.headers = {}
+    response.raise_for_status = MagicMock()
+    response.iter_bytes.return_value = [b"123", b"456"]
+    response_cm = MagicMock()
+    response_cm.__enter__.return_value = response
+    response_cm.__exit__.return_value = False
+    client = MagicMock()
+    client.stream.return_value = response_cm
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    monkeypatch.setattr(latex.httpx, "Client", lambda **_: client)
+    monkeypatch.setattr(
+        latex.ARXIV_RATE_LIMITER, "run_sync", lambda operation: operation()
+    )
+
+    with pytest.raises(latex.SourceArchiveLimitError, match="compressed"):
+        latex._download_source_archive("2401.00001")
+
+
+def test_tool_schemas_are_closed_and_content_is_bounded():
+    assert latex.get_paper_latex_tool.inputSchema["additionalProperties"] is False
+    props = latex.get_paper_latex_tool.inputSchema["properties"]
+    assert props["max_chars"]["maximum"] == latex.MAX_RETURN_CHARS
+    assert (
+        latex.get_paper_latex_section_tool.inputSchema["additionalProperties"] is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_latex_rejects_invalid_id_before_loading(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(latex, "_load_source", load)
+
+    payload = _payload(await latex.handle_get_paper_latex({"paper_id": "../secret"}))
+
+    assert payload["status"] == "error"
+    assert "invalid arXiv ID" in payload["message"]
+    load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_latex_rejects_overlong_legacy_id_before_loading(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(latex, "_load_source", load)
+    paper_id = f"{'a' * 100}/9901001"
+
+    payload = _payload(await latex.handle_get_paper_latex({"paper_id": paper_id}))
+
+    assert payload["status"] == "error"
+    assert payload["message"] == "invalid arXiv ID"
+    load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_latex_defaults_to_bounded_content(monkeypatch):
+    monkeypatch.setattr(latex, "DEFAULT_MAX_CHARS", 10)
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(
+            content="abcdefghijklmnopqrstuvwxyz", main_file="main.tex", source_files=2
+        ),
+    )
+
+    payload = _payload(await latex.handle_get_paper_latex({"paper_id": "2401.00001"}))
+
+    assert payload["status"] == "success"
+    assert payload["returned_chars"] == 10
+    assert payload["next_start"] == 10
+    assert payload["is_truncated"] is True
+    assert payload["content"].endswith("abcdefghij")
+    assert payload["main_file"] == "main.tex"
+
+
+@pytest.mark.asyncio
+async def test_get_latex_honors_explicit_page(monkeypatch):
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(
+            content="abcdefghijklmnopqrstuvwxyz", main_file="paper.tex", source_files=1
+        ),
+    )
+
+    payload = _payload(
+        await latex.handle_get_paper_latex(
+            {"paper_id": "2401.00001", "start": 5, "max_chars": 4}
+        )
+    )
+
+    assert payload["content"].endswith("fghi")
+    assert payload["start"] == 5
+    assert payload["next_start"] == 9
+
+
+@pytest.mark.asyncio
+async def test_list_latex_sections_errors_when_outline_empty(monkeypatch):
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(
+            content=(
+                "\\documentclass{article}\\usepackage{import}"
+                "\\begin{document}\\end{document}"
+            ),
+            main_file="main.tex",
+            source_files=2,
+            unmatched_includes=("\\import{sections/}{intro}",),
+        ),
+    )
+
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections({"paper_id": "2401.00001"})
+    )
+
+    assert payload["status"] == "error"
+    assert "did not resolve" in payload["message"]
+    assert "read_paper" in payload["message"]
+    assert "HTML" in payload["message"]
+    assert "\\import{sections/}{intro}" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_list_latex_sections_is_compact(monkeypatch):
+    source = "\\section{Intro}\nA\n\\subsection{Method}\nB"
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(source, "main.tex", 1),
+    )
+
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections({"paper_id": "2401.00001"})
+    )
+
+    assert payload["status"] == "success"
+    assert payload["sections"] == [
+        {"id": "1", "level": 1, "title": "Intro"},
+        {"id": "1.1", "level": 2, "title": "Method"},
+    ]
+    assert "content" not in payload
+
+
+@pytest.mark.asyncio
+async def test_list_latex_sections_is_paginated_and_bounded(monkeypatch):
+    source = "\n".join(f"\\section{{Section {index}}}\nText" for index in range(6))
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(source, "main.tex", 1),
+    )
+
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections(
+            {"paper_id": "2401.00001", "start": 1, "max_sections": 2}
+        )
+    )
+
+    assert payload["total_sections"] == 6
+    assert payload["start"] == 1
+    assert payload["returned_sections"] == 2
+    assert payload["next_start"] == 3
+    assert payload["is_truncated"] is True
+    assert [item["id"] for item in payload["sections"]] == ["2", "3"]
+
+
+@pytest.mark.asyncio
+async def test_get_latex_section_supports_bounded_continuation(monkeypatch):
+    source = "\\section{Intro}\nabcdefghij\n\\section{Next}\nnope"
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(source, "main.tex", 1),
+    )
+
+    first = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": "2401.00001", "section_id": "1", "max_chars": 8}
+        )
+    )
+    second = _payload(
+        await latex.handle_get_paper_latex_section(
+            {
+                "paper_id": "2401.00001",
+                "section_id": "1",
+                "start": first["next_start"],
+                "max_chars": 100,
+            }
+        )
+    )
+
+    assert first["is_truncated"] is True
+    assert second["is_truncated"] is False
+    assert "Next" not in first["content"] + second["content"]
+
+
+@pytest.mark.asyncio
+async def test_get_latex_section_rejects_overlong_identifier_without_echo(monkeypatch):
+    load = MagicMock()
+    monkeypatch.setattr(latex, "_load_source", load)
+    section_id = "x" * 1_000_000
+
+    payload = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": "2401.00001", "section_id": section_id}
+        )
+    )
+
+    assert payload["status"] == "error"
+    assert payload["message"] == "section_id exceeds 200 characters"
+    assert len(json.dumps(payload)) < 500
+    load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_latex_section_reports_missing_section(monkeypatch):
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource("\\section{Intro}\nText", "main.tex", 1),
+    )
+
+    payload = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": "2401.00001", "section_id": "99"}
+        )
+    )
+
+    assert payload["status"] == "error"
+    assert "not found" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_server_registers_and_routes_latex_tools(monkeypatch):
+    from arxiv_mcp_server import server
+
+    names = {tool.name for tool in await server.list_tools()}
+    assert {
+        "get_paper_latex",
+        "list_paper_latex_sections",
+        "get_paper_latex_section",
+    } <= names
+
+    monkeypatch.setattr(
+        server,
+        "handle_get_paper_latex",
+        lambda _args: None,
+    )
+
+    async def fake_handler(_args):
+        from mcp.types import TextContent
+
+        return [TextContent(type="text", text='{"status":"success"}')]
+
+    monkeypatch.setattr(server, "handle_get_paper_latex", fake_handler)
+    result = await server.call_tool("get_paper_latex", {"paper_id": "2401.00001"})
+    assert json.loads(result[0].text)["status"] == "success"
