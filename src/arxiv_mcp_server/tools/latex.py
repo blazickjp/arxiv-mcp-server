@@ -1,1 +1,1 @@
-placeholder-will-replace
+"""Safe, bounded retrieval of original LaTeX sources from arXiv."""
