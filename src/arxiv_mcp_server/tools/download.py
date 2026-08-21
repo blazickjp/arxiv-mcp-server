@@ -124,6 +124,10 @@ async def shutdown_background_tasks() -> None:
 
 settings = Settings()
 
+# Bump when HTML extraction changes so cached markdown is treated as stale
+# and re-downloaded without requiring the caller to pass force=true.
+EXTRACTOR_VERSION = 2
+
 
 # ---------------------------------------------------------------------------
 # HTML parsing helpers
@@ -295,6 +299,34 @@ def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
     return storage_path / f"{paper_id}{suffix}"
 
 
+def _read_extractor_version(paper_id: str) -> int | None:
+    """Return the sidecar extractor version, or None if missing/unreadable."""
+    path = get_paper_path(paper_id, ".meta.json")
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("extractor_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return version
+
+
+def _is_fresh_cache(paper_id: str) -> bool:
+    """True when cached markdown exists and the sidecar version is current."""
+    stored = _read_extractor_version(paper_id)
+    return stored is not None and stored >= EXTRACTOR_VERSION
+
+
+def _wants_force_refresh(arguments: Dict[str, Any]) -> bool:
+    """Return True when the caller asked to overwrite a cached paper."""
+    return bool(arguments.get("force") or arguments.get("refresh"))
+
+
 # ---------------------------------------------------------------------------
 # Tool definition
 # ---------------------------------------------------------------------------
@@ -306,7 +338,8 @@ download_tool = types.Tool(
         "Download a paper from arXiv and return its text content. "
         "Tries the HTML version first for clean extraction; falls back to "
         "PDF conversion if HTML is unavailable. Stores the paper locally "
-        "and supports start/max_chars pagination for very large papers."
+        "and supports start/max_chars pagination for very large papers. "
+        "Set force=true to re-fetch and overwrite a cached paper."
     ),
     inputSchema={
         "type": "object",
@@ -324,6 +357,14 @@ download_tool = types.Tool(
                 "type": "integer",
                 "minimum": 1,
                 "description": "Maximum raw paper characters to return from start; omit for full content",
+            },
+            "force": {
+                "type": "boolean",
+                "description": (
+                    "If true, re-download and overwrite the local markdown and "
+                    "metadata sidecar even if the paper is already cached. "
+                    "Default false."
+                ),
             },
         },
         "required": ["paper_id"],
@@ -493,6 +534,7 @@ def _persist_paper_metadata(
             title=metadata.get("title") or title_hint,
             authors=metadata.get("authors") or [],
             published=metadata.get("published"),
+            extractor_version=EXTRACTOR_VERSION,
             path=get_paper_path(paper_id, ".meta.json"),
         )
     except Exception:
@@ -521,9 +563,10 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 )
             ]
         md_path = get_paper_path(paper_id, ".md")
+        force = _wants_force_refresh(arguments)
 
-        # --- Cache hit: return immediately with content ---
-        if md_path.exists():
+        # --- Cache hit: return immediately unless force/stale extractor ---
+        if md_path.exists() and not force and _is_fresh_cache(paper_id):
             content = md_path.read_text(encoding="utf-8")
             payload = add_content_payload(
                 {
