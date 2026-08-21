@@ -1,1 +1,1 @@
-"""Tests for safe, bounded arXiv LaTeX source tools."""
+PLACEHOLDER_USE_LOCAL_FILE
