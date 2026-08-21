@@ -267,6 +267,116 @@ def test_html_to_text_extracts_article_text():
     assert "Footer" not in text
 
 
+ARXIV_CHROME_FIXTURE = """
+<html>
+  <head><title>Attention Is All You Need</title></head>
+  <body>
+    <dialog id="modal-form">
+      <form>
+        <h5>Report GitHub Issue</h5>
+        <label>Title:</label>
+        <input id="form_title" name="form_title" placeholder="Enter title">
+        <p>Content selection saved. Describe the issue below:</p>
+        <label>Description:</label>
+      </form>
+    </dialog>
+    <div class="ds-announcement" id="announcement-banner">
+      <span>arXiv is now an independent nonprofit!</span>
+      <a>Learn more</a>
+      <button aria-label="Dismiss announcement">×</button>
+    </div>
+    <header class="arxiv-html-header">
+      <span class="sr-only">Back to arXiv</span>
+    </header>
+    <nav>Why HTML?</nav>
+    <div class="infobox" id="infobox">
+      <div id="watermark-tr">arXiv:1706.03762v7 [cs.CL] 02 Aug 2023</div>
+    </div>
+    <article class="ltx_document">
+      <h1 class="ltx_title">Attention Is All You Need</h1>
+      <div class="ltx_authors">
+        <span class="ltx_personname">Ashish Vaswani</span>
+        <span class="ltx_author_notes">
+          <span class="ltx_contact ltx_role_thanks">
+            <span class="ltx_contact_name">Thanks:</span>
+            ORCID: 0009-0009-0452-9407
+          </span>
+          <span class="ltx_contact ltx_role_affiliation">
+            <span class="ltx_contact_name">Affiliation:</span> Google Brain
+          </span>
+          <span class="ltx_contact ltx_role_email">
+            <span class="ltx_contact_name">Email:</span> avaswani@google.com
+          </span>
+        </span>
+      </div>
+      <p>Paper body sentence about attention.</p>
+    </article>
+  </body>
+</html>
+"""
+
+ARXIV_MATH_FIXTURE = """
+<html>
+  <body>
+    <article>
+      <p>measured decode is
+        <math class="ltx_Math" alttext="0.44" display="inline">
+          <semantics>
+            <mn>0.44</mn>
+            <annotation encoding="application/x-tex">0.44</annotation>
+          </semantics>
+        </math>
+        tok/s warm, reuse is
+        <math class="ltx_Math" alttext="2.0\\times" display="inline">
+          <semantics>
+            <mrow><mn>2.0</mn><mo>×</mo></mrow>
+            <annotation encoding="application/x-tex">2.0\\times</annotation>
+          </semantics>
+        </math>
+        chance.</p>
+    </article>
+  </body>
+</html>
+"""
+
+
+def test_html_to_text_strips_arxiv_site_chrome():
+    """Site chrome, report dialog, and author-note widgets must not leak."""
+    text = _html_to_text(ARXIV_CHROME_FIXTURE)
+    assert "Paper body sentence about attention." in text
+    assert "Ashish Vaswani" in text
+    assert text.count("Attention Is All You Need") == 1
+    leaked = [
+        "Content selection saved",
+        "Describe the issue below",
+        "arXiv is now an independent nonprofit",
+        "Learn more",
+        "Title:",
+        "Description:",
+        "Thanks:",
+        "ORCID",
+        "Affiliation:",
+        "Email:",
+        "Report GitHub Issue",
+        "Back to arXiv",
+        "Why HTML?",
+        "arXiv:1706.03762",
+    ]
+    for snippet in leaked:
+        assert snippet not in text, snippet
+
+
+def test_html_to_text_keeps_math_once():
+    """MathML + TeX annotation must not be concatenated as 0.44 0.44."""
+    text = _html_to_text(ARXIV_MATH_FIXTURE)
+    assert "measured decode is" in text
+    assert "tok/s warm" in text
+    assert text.count("0.44") == 1
+    assert "2.0\\times" in text
+    assert text.count("2.0\\times") == 1
+    assert "2.0×" not in text
+
+
 # ---------------------------------------------------------------------------
 # Integration-style handler tests
 # ---------------------------------------------------------------------------
