@@ -41,6 +41,10 @@ from .tools import (
     watch_topic_tool,
     handle_check_alerts,
     check_alerts_tool,
+    handle_list_watches,
+    list_watches_tool,
+    handle_unwatch_topic,
+    unwatch_topic_tool,
     get_paper_latex_tool,
     handle_get_paper_latex,
     list_paper_latex_sections_tool,
@@ -87,6 +91,8 @@ async def list_tools() -> List[types.Tool]:
         export_citations_tool,
         watch_topic_tool,
         check_alerts_tool,
+        list_watches_tool,
+        unwatch_topic_tool,
         get_paper_latex_tool,
         list_paper_latex_sections_tool,
         get_paper_latex_section_tool,
@@ -136,6 +142,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             result = await handle_watch_topic(arguments)
         elif name == "check_alerts":
             result = await handle_check_alerts(arguments)
+        elif name == "list_watches":
+            result = await handle_list_watches(arguments)
+        elif name == "unwatch_topic":
+            result = await handle_unwatch_topic(arguments)
         elif name == "get_paper_latex":
             result = await handle_get_paper_latex(arguments)
         elif name == "list_paper_latex_sections":
