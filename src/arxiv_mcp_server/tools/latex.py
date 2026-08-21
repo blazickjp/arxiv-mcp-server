@@ -371,3 +371,30 @@ def _resolve_include(
         if from_root is not None and from_root in files:
             return from_root
     return relative or from_root
+
+
+def _balanced_arg(source: str, open_brace: int) -> tuple[str, int] | None:
+    """Return (inner, index_after_close) for a '{...}' starting at open_brace."""
+    if open_brace >= len(source) or source[open_brace] != "{":
+        return None
+    depth = 0
+    index = open_brace
+    while index < len(source):
+        char = source[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace + 1 : index], index + 1
+        index += 1
+    return None
+
+
+def _skip_ws(source: str, index: int) -> int:
+    while index < len(source) and source[index] in " \t\r\n":
+        index += 1
+    return index
