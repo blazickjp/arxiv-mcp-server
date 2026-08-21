@@ -329,7 +329,7 @@ PowerShell:
 $env:TRANSPORT = "http"
 $env:HOST = "127.0.0.1"
 $env:PORT = "8080"
-uvx arxiv-mcp-server --storage-path C:\\absolute\\path\\to\\papers
+uvx arxiv-mcp-server --storage-path C:\absolute\path\to\papers
 ```
 
 Connect clients to:
