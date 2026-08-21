@@ -398,3 +398,31 @@ def _skip_ws(source: str, index: int) -> int:
     while index < len(source) and source[index] in " \t\r\n":
         index += 1
     return index
+
+
+def _plain_section_title(raw: str) -> str:
+    """Prefer the text argument of \\texorpdfstring{pdf}{text} when present."""
+    title = raw.strip()
+    prefix = "\\texorpdfstring"
+    if title.startswith(prefix):
+        index = _skip_ws(title, len(prefix))
+        first = _balanced_arg(title, index)
+        if first is not None:
+            second = _balanced_arg(title, _skip_ws(title, first[1]))
+            if second is not None:
+                title = second[0].strip()
+    title = re.sub(r"\s+", " ", title).strip()
+    return title[:MAX_SECTION_TITLE_CHARS]
+
+
+def _collect_macros(text: str, masked: str) -> dict[str, tuple[int, str]]:
+    macros: dict[str, tuple[int, str]] = {}
+    for match in _MACRO_DEF_RE.finditer(masked):
+        name = match.group(1) or match.group(2)
+        nargs = int(match.group(3) or "0")
+        body_start = _skip_ws(masked, match.end())
+        extracted = _balanced_arg(text, body_start)
+        if extracted is None:
+            continue
+        macros[name] = (nargs, extracted[0])
+    return macros
