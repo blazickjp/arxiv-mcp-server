@@ -131,42 +131,155 @@ settings = Settings()
 
 
 class _ArticleTextExtractor(HTMLParser):
-    """Extract readable text from an arXiv HTML paper page.
+    """Extract readable paper text from an arXiv HTML page.
 
     Strategy:
-      - Ignore content inside <script>, <style>, <nav>, <header>, <footer> tags.
-      - Collect text from everywhere else, with minimal whitespace cleanup.
+      - Prefer ``<article>`` body text when present so site chrome outside
+        the paper is dropped (banners, report-issue dialog, watermarks).
+      - Skip script/style/nav/header/footer plus arXiv UI widgets.
+      - Skip author-note chrome (Thanks/ORCID/affiliation/email blocks).
+      - Keep math once: prefer ``alttext``, otherwise MathML without TeX
+        ``<annotation>`` duplicates.
     """
 
-    SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside"}
+    SKIP_TAGS = {
+        "script",
+        "style",
+        "head",
+        "nav",
+        "header",
+        "footer",
+        "aside",
+        "dialog",
+        "form",
+        "noscript",
+        "template",
+        "button",
+        "input",
+        "select",
+        "textarea",
+        "label",
+        "annotation",
+        "annotation-xml",
+    }
+    SKIP_CLASSES = {
+        "ds-announcement",
+        "arxiv-html-header",
+        "ds-site-footer",
+        "infobox",
+        "ltx_author_notes",
+        "ltx_contact",
+        "sr-only",
+        "ltx_page_logo",
+        "html-header-logo",
+    }
+    SKIP_IDS = {
+        "modal-form",
+        "announcement-banner",
+        "infobox",
+        "watermark-tr",
+    }
+    VOID_TAGS = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
 
     def __init__(self):
         super().__init__()
         self._skip_depth: int = 0
-        self._chunks: list[str] = []
+        self._skip_stack: list[bool] = []
+        self._article_depth: int = 0
+        self._article_chunks: list[str] = []
+        self._body_chunks: list[str] = []
+
+    def _should_skip(self, tag: str, attr_map: dict[str, str]) -> bool:
+        if tag in self.SKIP_TAGS:
+            return True
+        classes = set((attr_map.get("class") or "").split())
+        if classes & self.SKIP_CLASSES:
+            return True
+        elem_id = attr_map.get("id") or ""
+        return elem_id in self.SKIP_IDS
+
+    def _emit(self, text: str) -> None:
+        if self._skip_depth or not text:
+            return
+        if self._article_depth > 0:
+            self._article_chunks.append(text)
+        else:
+            self._body_chunks.append(text)
 
     def handle_starttag(self, tag: str, attrs):
-        if tag in self.SKIP_TAGS:
+        attr_map = dict(attrs)
+        if tag == "article":
+            self._article_depth += 1
+
+        # Void elements have no children. Incrementing skip_depth for
+        # <input> etc. and never seeing an end tag left the rest of the
+        # document, including <article>, permanently skipped.
+        if tag in self.VOID_TAGS:
+            return
+
+        skip = self._should_skip(tag, attr_map)
+        if tag == "math":
+            alttext = (attr_map.get("alttext") or "").strip()
+            if alttext:
+                # Emit TeX/alt once and ignore MathML + annotation children.
+                self._emit(alttext)
+                skip = True
+
+        if skip:
             self._skip_depth += 1
+        self._skip_stack.append(skip)
 
     def handle_endtag(self, tag: str):
-        if tag in self.SKIP_TAGS and self._skip_depth > 0:
-            self._skip_depth -= 1
+        if self._skip_stack and self._skip_stack.pop():
+            self._skip_depth = max(0, self._skip_depth - 1)
+        if tag == "article" and self._article_depth > 0:
+            self._article_depth -= 1
+
+    def handle_startendtag(self, tag: str, attrs):
+        if tag in self.VOID_TAGS:
+            return
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
 
     def handle_data(self, data: str):
-        if self._skip_depth == 0:
-            stripped = data.strip()
-            if stripped:
-                self._chunks.append(stripped)
+        self._emit(data.strip())
 
     def get_text(self) -> str:
-        return "\n".join(self._chunks)
+        chunks = self._article_chunks or self._body_chunks
+        return "\n".join(chunks)
+
+
+def _extract_article_fragment(html: str) -> str | None:
+    """Return the first <article>…</article> slice when present."""
+    lower = html.lower()
+    start = lower.find("<article")
+    if start < 0:
+        return None
+    end = lower.find("</article>", start)
+    if end < 0:
+        return html[start:]
+    return html[start : end + len("</article>")]
 
 
 def _html_to_text(html: str) -> str:
-    """Parse raw HTML and return cleaned plain text."""
+    """Parse raw HTML and return cleaned paper text."""
     parser = _ArticleTextExtractor()
-    parser.feed(html)
+    parser.feed(_extract_article_fragment(html) or html)
     return parser.get_text()
 
 
