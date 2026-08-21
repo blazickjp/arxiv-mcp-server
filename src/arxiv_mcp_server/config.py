@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
+    SEMANTIC_SCHOLAR_API_KEY: str = ""
     model_config = SettingsConfigDict(extra="allow")
 
     @property
