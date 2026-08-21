@@ -13,7 +13,7 @@ from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
-from .list_papers import is_valid_arxiv_id
+from .list_papers import is_valid_arxiv_id, save_paper_metadata
 import logging
 import threading
 
@@ -425,6 +425,80 @@ def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
         return _fetch_pdf_content_unlocked(paper_id)
 
 
+def _metadata_from_arxiv_result(paper_id: str, paper) -> dict[str, Any]:
+    """Build local list_papers metadata from an arXiv result."""
+    published = getattr(paper, "published", None)
+    published_text = None
+    if published is not None:
+        iso = getattr(published, "isoformat", None)
+        published_text = iso() if callable(iso) else str(published)
+    authors = []
+    for author in getattr(paper, "authors", None) or []:
+        name = getattr(author, "name", None)
+        if name:
+            authors.append(name)
+        elif author:
+            authors.append(str(author))
+    return {
+        "title": getattr(paper, "title", None) or None,
+        "authors": authors,
+        "published": published_text,
+    }
+
+
+def _title_hint_from_text(text: str | None) -> str | None:
+    """Use the first non-empty markdown line as a title fallback."""
+    if not text:
+        return None
+    for line in text.splitlines():
+        hint = line.strip().lstrip("#").strip()
+        if hint:
+            return hint
+    return None
+
+
+def _fetch_arxiv_metadata(paper_id: str) -> dict[str, Any] | None:
+    """Best-effort arXiv metadata lookup used after an HTML download."""
+    try:
+        client = get_arxiv_client()
+        paper = ARXIV_RATE_LIMITER.run_sync(
+            lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
+        )
+        return _metadata_from_arxiv_result(paper_id, paper)
+    except Exception as exc:
+        logger.info("Could not fetch metadata for %s: %s", paper_id, exc)
+        return None
+
+
+def _persist_paper_metadata(
+    paper_id: str,
+    arxiv_result=None,
+    title_hint: str | None = None,
+) -> None:
+    """Write a sidecar next to the downloaded markdown. Never fail the download."""
+    try:
+        metadata = None
+        if arxiv_result is not None:
+            metadata = _metadata_from_arxiv_result(paper_id, arxiv_result)
+        if metadata is None:
+            metadata = _fetch_arxiv_metadata(paper_id)
+        if metadata is None:
+            metadata = {
+                "title": title_hint,
+                "authors": [],
+                "published": None,
+            }
+        save_paper_metadata(
+            paper_id,
+            title=metadata.get("title") or title_hint,
+            authors=metadata.get("authors") or [],
+            published=metadata.get("published"),
+            path=get_paper_path(paper_id, ".meta.json"),
+        )
+    except Exception:
+        logger.warning("Failed to persist metadata for %s", paper_id, exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
@@ -475,6 +549,12 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         if html_text is not None:
             # Save to cache
             md_path.write_text(html_text, encoding="utf-8")
+            await asyncio.to_thread(
+                _persist_paper_metadata,
+                paper_id,
+                None,
+                _title_hint_from_text(html_text),
+            )
             # Best-effort index; the tracked task is drained at shutdown.
             _track_index_task(_run_index_by_id(paper_id))
             payload = add_content_payload(
@@ -518,6 +598,12 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
 
         # Save to cache
         md_path.write_text(markdown, encoding="utf-8")
+        await asyncio.to_thread(
+            _persist_paper_metadata,
+            paper_id,
+            arxiv_result,
+            _title_hint_from_text(markdown),
+        )
 
         # Best-effort index; the tracked task is drained at shutdown.
         _track_index_task(_run_index_from_result(arxiv_result))

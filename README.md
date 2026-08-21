@@ -187,7 +187,7 @@ The server currently exposes 14 tools.
 | `search_papers` | Search arXiv by query, category, date, and sort order | Remote arXiv API |
 | `get_abstract` | Fetch metadata and an abstract by arXiv ID | Does not download the paper |
 | `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]` |
-| `list_papers` | List papers stored locally | Returns arXiv IDs |
+| `list_papers` | List papers stored locally | Returns id, title, authors, published; `compact` for IDs only |
 | `read_paper` | Read locally stored paper content | Supports `start` and `max_chars` |
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |

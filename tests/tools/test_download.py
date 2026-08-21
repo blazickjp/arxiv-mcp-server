@@ -468,6 +468,10 @@ async def test_html_endpoint_success(temp_storage_path, mocker):
         "arxiv_mcp_server.tools.download._fetch_html_content",
         return_value=html_text,
     )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_arxiv_metadata",
+        return_value=None,
+    )
     # PDF path should NOT be called
     mock_pdf = mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
 
@@ -570,6 +574,10 @@ async def test_no_check_status_parameter(temp_storage_path, mocker):
         "arxiv_mcp_server.tools.download._fetch_html_content",
         return_value=html_text,
     )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_arxiv_metadata",
+        return_value=None,
+    )
 
     # Should not raise even if client passes check_status=True (it's ignored)
     response = await handle_download({"paper_id": paper_id})
@@ -615,3 +623,78 @@ async def test_unexpected_error_returns_error_status(temp_storage_path, mocker):
 
     assert result["status"] == "error"
     assert "Error:" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_html_download_persists_local_metadata(temp_storage_path, mocker):
+    """HTML downloads should write a sidecar so list_papers needs no re-fetch."""
+    paper_id = "2103.55555"
+
+    def fake_path(pid, suffix=".md"):
+        return temp_storage_path / f"{pid}{suffix}"
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content",
+        return_value="Attention Is All You Need\nAbstract body.",
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_arxiv_metadata",
+        return_value={
+            "title": "Attention Is All You Need",
+            "authors": ["Ashish Vaswani"],
+            "published": "2017-06-12T00:00:00+00:00",
+        },
+    )
+    mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+    assert result["status"] == "success"
+
+    sidecar = json.loads(
+        (temp_storage_path / f"{paper_id}.meta.json").read_text(encoding="utf-8")
+    )
+    assert sidecar["id"] == paper_id
+    assert sidecar["title"] == "Attention Is All You Need"
+    assert sidecar["authors"] == ["Ashish Vaswani"]
+    assert sidecar["published"] == "2017-06-12T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_pdf_download_persists_metadata_from_arxiv_result(
+    temp_storage_path, mocker, mock_paper
+):
+    """PDF fallback already has an arXiv result — persist it locally."""
+    paper_id = "2103.66666"
+
+    def fake_path(pid, suffix=".md"):
+        return temp_storage_path / f"{pid}{suffix}"
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.download.get_paper_path", side_effect=fake_path
+    )
+    mocker.patch("arxiv_mcp_server.tools.download._pdf_available", True)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content",
+        return_value=None,
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_pdf_content",
+        return_value=("# Test Paper\nConverted from PDF.", mock_paper),
+    )
+    fetch_meta = mocker.patch("arxiv_mcp_server.tools.download._fetch_arxiv_metadata")
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+    assert result["status"] == "success"
+    fetch_meta.assert_not_called()
+
+    sidecar = json.loads(
+        (temp_storage_path / f"{paper_id}.meta.json").read_text(encoding="utf-8")
+    )
+    assert sidecar["title"] == "Test Paper"
+    assert sidecar["authors"] == ["John Doe", "Jane Smith"]
+    assert sidecar["published"].startswith("2023-01-01")
