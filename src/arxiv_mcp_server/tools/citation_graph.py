@@ -13,6 +13,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
+from .arxiv_ids import is_valid_arxiv_id, normalize_arxiv_id
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -157,9 +158,13 @@ def _bound_max_citations(value: Any) -> int:
 async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle citation graph lookup for a single arXiv paper ID."""
     try:
-        paper_id = arguments["paper_id"].strip()
+        paper_id = normalize_arxiv_id(arguments["paper_id"])
         if not paper_id:
             return [types.TextContent(type="text", text="Error: paper_id is required")]
+        if not is_valid_arxiv_id(paper_id):
+            return [
+                types.TextContent(type="text", text="Error: invalid arXiv ID format")
+            ]
 
         limit = _bound_max_citations(arguments.get("max_citations"))
         s2_paper_identifier = quote(f"ARXIV:{paper_id}", safe=":")

@@ -16,7 +16,7 @@ import httpx
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from .list_papers import is_valid_arxiv_id
+from .arxiv_ids import is_valid_arxiv_id, normalize_arxiv_id
 from .search import ARXIV_API_URL, _parse_arxiv_atom_response, _rate_limited_get
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -195,17 +195,19 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
         if len(raw_ids) > MAX_IDS:
             return _error(f"too many IDs: {len(raw_ids)} (max {MAX_IDS})")
 
-        valid_ids = [
-            pid.strip()
-            for pid in raw_ids
-            if isinstance(pid, str) and is_valid_arxiv_id(pid.strip())
-        ]
+        valid_ids = []
+        for pid in raw_ids:
+            if not isinstance(pid, str):
+                continue
+            candidate = normalize_arxiv_id(pid)
+            if is_valid_arxiv_id(candidate):
+                valid_ids.append(candidate)
         metadata = await _fetch_metadata(valid_ids) if valid_ids else {}
 
         results: List[Dict[str, Any]] = []
         used_keys: set = set()
         for pid in raw_ids:
-            candidate = pid.strip() if isinstance(pid, str) else ""
+            candidate = normalize_arxiv_id(pid) if isinstance(pid, str) else ""
             if not candidate or not is_valid_arxiv_id(candidate):
                 results.append(
                     {
