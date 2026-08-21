@@ -114,3 +114,98 @@ class LatexSection:
     title: str
     start: int
     end: int
+
+
+def _error(message: str, paper_id: str | None = None) -> list[types.TextContent]:
+    payload: dict[str, Any] = {"status": "error", "message": message}
+    if paper_id:
+        payload["paper_id"] = paper_id
+    return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
+
+
+def _normalized_paper_id(arguments: dict[str, Any]) -> str | None:
+    value = arguments.get("paper_id")
+    if not isinstance(value, str):
+        return None
+    paper_id = value.strip()
+    if len(paper_id) > MAX_PAPER_ID_CHARS:
+        return None
+    return paper_id if is_valid_arxiv_id(paper_id) else None
+
+
+def _bounded_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    bounded = dict(arguments)
+    if "max_chars" not in bounded:
+        bounded["max_chars"] = DEFAULT_MAX_CHARS
+    else:
+        try:
+            bounded["max_chars"] = min(
+                MAX_RETURN_CHARS, max(1, int(bounded["max_chars"]))
+            )
+        except (TypeError, ValueError):
+            bounded["max_chars"] = DEFAULT_MAX_CHARS
+    return bounded
+
+
+def _download_source_archive(paper_id: str) -> bytes:
+    """Download one arXiv e-print while enforcing a compressed-size limit."""
+
+    def operation() -> bytes:
+        timeout = httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
+        headers = {
+            "User-Agent": (
+                f"{settings.APP_NAME}/{settings.APP_VERSION} "
+                "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
+            )
+        }
+        url = f"https://arxiv.org/e-print/{paper_id}"
+        with httpx.Client(
+            timeout=timeout, follow_redirects=True, headers=headers
+        ) as client:
+            with client.stream("GET", url) as response:
+                response.raise_for_status()
+                declared = response.headers.get("content-length")
+                if declared:
+                    try:
+                        if int(declared) > MAX_ARCHIVE_BYTES:
+                            raise SourceArchiveLimitError(
+                                "LaTeX source compressed archive exceeds safety limit"
+                            )
+                    except ValueError:
+                        pass
+                chunks: list[bytes] = []
+                received = 0
+                for chunk in response.iter_bytes(chunk_size=256 * 1024):
+                    received += len(chunk)
+                    if received > MAX_ARCHIVE_BYTES:
+                        raise SourceArchiveLimitError(
+                            "LaTeX source compressed archive exceeds safety limit"
+                        )
+                    chunks.append(chunk)
+        return b"".join(chunks)
+
+    return ARXIV_RATE_LIMITER.run_sync(operation)
+
+
+def _safe_member_name(name: str) -> str:
+    normalized = name.replace("\\", "/")
+    if "\x00" in normalized:
+        raise UnsafeSourceArchiveError(f"NUL byte in source archive path: {name!r}")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if len(normalized.encode("utf-8")) > MAX_ARCHIVE_PATH_BYTES:
+        raise SourceArchiveLimitError(
+            f"source archive path length exceeds limit: {name}"
+        )
+    raw_parts = normalized.split("/")
+    if len(raw_parts) > MAX_ARCHIVE_PATH_DEPTH:
+        raise SourceArchiveLimitError(
+            f"source archive path depth exceeds limit: {name}"
+        )
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise UnsafeSourceArchiveError(f"unsafe path in source archive: {name}")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts or not path.name:
+        raise UnsafeSourceArchiveError(f"unsafe path in source archive: {name}")
+    return posixpath.normpath(normalized)
