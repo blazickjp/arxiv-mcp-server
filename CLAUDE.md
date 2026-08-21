@@ -83,6 +83,7 @@ Keep tool schemas, package exports, server registration, dispatch, tests, and RE
 - `PORT`
 - `ALLOWED_HOSTS`
 - `ALLOWED_ORIGINS`
+- `SEMANTIC_SCHOLAR_API_KEY`
 
 Paper storage is selected with the `--storage-path` command-line option and defaults to `~/.arxiv-mcp-server/papers`.
 

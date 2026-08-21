@@ -192,7 +192,7 @@ The server currently exposes 14 tools.
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
-| `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API |
+| `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API; optional `SEMANTIC_SCHOLAR_API_KEY` |
 | `export_citations` | Export BibTeX for one or more arXiv IDs | Authoritative arXiv metadata |
 | `watch_topic` | Save or update an arXiv topic watch | Stored locally |
 | `check_alerts` | Check saved watches for new papers | Returns papers since the last check |
@@ -359,6 +359,7 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 | `PORT` | `8000` | HTTP bind port |
 | `ALLOWED_HOSTS` | empty | Additional accepted HTTP Host values |
 | `ALLOWED_ORIGINS` | empty | Additional accepted HTTP Origin values |
+| `SEMANTIC_SCHOLAR_API_KEY` | empty | Optional Semantic Scholar API key for `citation_graph` |
 
 Environment variable names are case-insensitive through Pydantic settings. `--storage-path` is a command-line option rather than an environment setting.
 
