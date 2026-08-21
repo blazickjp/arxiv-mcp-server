@@ -85,3 +85,32 @@ _TWO_ARG_IMPORT_KIND = {
     "subinputfrom": "subimport",
     "subincludefrom": "subimport",
 }
+
+
+class LatexSourceError(RuntimeError):
+    """Base error for unavailable or invalid LaTeX source."""
+
+
+class UnsafeSourceArchiveError(LatexSourceError):
+    """The source archive contains unsafe paths or links."""
+
+
+class SourceArchiveLimitError(LatexSourceError):
+    """The compressed or expanded source exceeds a safety bound."""
+
+
+@dataclass(frozen=True)
+class LatexSource:
+    content: str
+    main_file: str
+    source_files: int
+    unmatched_includes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LatexSection:
+    section_id: str
+    level: int
+    title: str
+    start: int
+    end: int
