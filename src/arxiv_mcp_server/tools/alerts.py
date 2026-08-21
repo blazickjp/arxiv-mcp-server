@@ -90,6 +90,50 @@ check_alerts_tool = types.Tool(
 )
 
 
+list_watches_tool = types.Tool(
+    name="list_watches",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    description=(
+        "List all saved topic watches without checking for new papers. "
+        "Returns each watch's topic, categories, last_checked timestamp, and other stored fields. "
+        "Does not update last_checked — use this to inspect what is saved. "
+        "Use unwatch_topic to remove a watch, or check_alerts to poll for new papers."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+)
+
+unwatch_topic_tool = types.Tool(
+    name="unwatch_topic",
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True, openWorldHint=False
+    ),
+    description=(
+        "Delete a saved topic watch by exact topic string. "
+        "The topic must match the stored watch_topic value exactly. "
+        "Returns a clear not-found error if no matching watch exists. "
+        "Use list_watches to inspect saved watches before deleting."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": (
+                    "Exact topic string of the watch to remove. "
+                    "Must match the topic used in watch_topic."
+                ),
+            },
+        },
+        "required": ["topic"],
+        "additionalProperties": False,
+    },
+)
+
+
 def _watch_file_path() -> Path:
     """Get watched topics file path."""
     return Path(settings.STORAGE_PATH) / WATCH_FILE_NAME
@@ -248,4 +292,71 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
     except Exception as exc:
         logger.error("check_alerts error: %s", exc)
+        return [types.TextContent(type="text", text=f"Error: {str(exc)}")]
+
+
+async def handle_list_watches(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """Return saved watches without updating last_checked."""
+    try:
+        payload = _load_watches()
+        watches = list(payload.get("topics", []))
+        result = {
+            "status": "success",
+            "watch_count": len(watches),
+            "watches": watches,
+        }
+        return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+    except Exception as exc:
+        logger.error("list_watches error: %s", exc)
+        return [types.TextContent(type="text", text=f"Error: {str(exc)}")]
+
+
+async def handle_unwatch_topic(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """Delete a watched topic by exact topic string."""
+    try:
+        topic = (arguments.get("topic") or "").strip()
+        if not topic:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"status": "error", "message": "topic is required"}
+                    ),
+                )
+            ]
+
+        payload = _load_watches()
+        topics = payload.get("topics", [])
+        remaining = [item for item in topics if item.get("topic") != topic]
+        if len(remaining) == len(topics):
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"Watch not found: {topic}",
+                        }
+                    ),
+                )
+            ]
+
+        payload["topics"] = remaining
+        _save_watches(payload)
+
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "status": "success",
+                        "message": "Topic watch removed",
+                        "topic": topic,
+                    },
+                    indent=2,
+                ),
+            )
+        ]
+    except Exception as exc:
+        logger.error("unwatch_topic error: %s", exc)
         return [types.TextContent(type="text", text=f"Error: {str(exc)}")]

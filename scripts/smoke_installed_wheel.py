@@ -31,10 +31,12 @@ EXPECTED_TOOLS = {
     "get_paper_latex_section",
     "list_paper_latex_sections",
     "list_papers",
+    "list_watches",
     "read_paper",
     "reindex",
     "search_papers",
     "semantic_search",
+    "unwatch_topic",
     "watch_topic",
 }
 PROMPT_ARGUMENTS = {
