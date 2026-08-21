@@ -53,7 +53,8 @@ semantic_search_tool = types.Tool(
         "IMPORTANT: only searches your local downloaded collection — will return empty results if no papers "
         "have been downloaded yet. Use search_papers to find papers on arXiv, then download_paper to add "
         "them to the local index before using this tool. "
-        'Requires pro dependencies: uv pip install -e ".[pro]"'
+        "Requires pro dependencies: uvx --from 'arxiv-mcp-server[pro]' arxiv-mcp-server "
+        "(or uv tool install 'arxiv-mcp-server[pro]')."
     ),
     inputSchema={
         "type": "object",
@@ -116,8 +117,10 @@ def _dependency_error() -> Optional[str]:
     """Return a friendly dependency error if pro packages are missing."""
     if not _load_dependencies():
         return (
-            "Pro feature dependency missing. Install with: "
-            '`uv pip install -e ".[pro]"`'
+            "Pro feature dependency missing. Install with "
+            "`uvx --from 'arxiv-mcp-server[pro]' arxiv-mcp-server` "
+            "(or `uv tool install 'arxiv-mcp-server[pro]'`). "
+            'For a local checkout: `uv pip install -e ".[pro]"`.'
         )
     return None
 

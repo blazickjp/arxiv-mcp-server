@@ -7,13 +7,41 @@ import pytest
 
 from arxiv_mcp_server.tools import semantic_search as semantic_module
 
-np = pytest.importorskip("numpy")
+EDITABLE_PRO_INSTALL = 'uv pip install -e ".[pro]"'
+
+
+def _assert_pro_install_hint(message: str) -> None:
+    """uvx users should see a PyPI extra path; checkout install is secondary."""
+    assert message
+    assert "uvx" in message
+    assert "arxiv-mcp-server[pro]" in message
+    assert message.index("uvx") < message.index(EDITABLE_PRO_INSTALL)
+
+
+@pytest.mark.asyncio
+async def test_missing_pro_deps_error_mentions_uvx(monkeypatch):
+    """Missing [pro] extras should not point only at a git-checkout install."""
+    monkeypatch.setattr(semantic_module, "_load_dependencies", lambda: False)
+
+    hint = semantic_module._dependency_error()
+    _assert_pro_install_hint(hint)
+    assert hint.count("uvx") >= 1
+    assert "uv tool install" in hint
+
+    search = await semantic_module.handle_semantic_search({"query": "transformers"})
+    _assert_pro_install_hint(search[0].text)
+
+    reindex = await semantic_module.handle_reindex({})
+    payload = json.loads(reindex[0].text)
+    assert payload["status"] == "error"
+    _assert_pro_install_hint(payload["message"])
 
 
 class DummyModel:
     """Deterministic embedding model for tests."""
 
     def encode(self, text, convert_to_numpy=True, normalize_embeddings=True):
+        np = pytest.importorskip("numpy")
         vector = np.array(
             [
                 float("transformer" in text.lower()),
@@ -31,6 +59,7 @@ class DummyModel:
 @pytest.fixture
 def semantic_test_env(monkeypatch, temp_storage_path):
     """Configure semantic search module to use a temporary index and dummy model."""
+    np = pytest.importorskip("numpy")
     monkeypatch.setattr(
         semantic_module.settings,
         "_get_storage_path_from_args",

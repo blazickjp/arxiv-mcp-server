@@ -180,7 +180,7 @@ Direct MCP installation is the shortest path. Install the plugin when you also w
 
 ## Tools
 
-The server currently exposes 14 tools.
+The server currently exposes 16 tools.
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -195,7 +195,9 @@ The server currently exposes 14 tools.
 | `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API; optional `SEMANTIC_SCHOLAR_API_KEY` |
 | `export_citations` | Export BibTeX for one or more arXiv IDs | Authoritative arXiv metadata |
 | `watch_topic` | Save or update an arXiv topic watch | Stored locally |
+| `list_watches` | List saved topic watches | Read-only; does not advance last_checked |
 | `check_alerts` | Check saved watches for new papers | Returns papers since the last check |
+| `unwatch_topic` | Delete a saved topic watch | Exact topic match; not-found if missing |
 | `semantic_search` | Search downloaded papers by semantic similarity | Requires `[pro]` |
 | `reindex` | Rebuild the local semantic index | Requires `[pro]` |
 
