@@ -186,7 +186,7 @@ The server currently exposes 16 tools.
 |---|---|---|
 | `search_papers` | Search arXiv by query, category, date, and sort order | Remote arXiv API |
 | `get_abstract` | Fetch metadata and an abstract by arXiv ID | Does not download the paper |
-| `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]` |
+| `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]`; `force=true` re-fetches |
 | `list_papers` | List papers stored locally | Returns id, title, authors, published; `compact` for IDs only |
 | `read_paper` | Read locally stored paper content | Supports `start` and `max_chars` |
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
@@ -232,6 +232,8 @@ Call `download_paper` with:
   "max_chars": 12000
 }
 ```
+
+Cached papers are returned immediately. Pass `"force": true` to re-download and overwrite the local markdown and sidecar (also happens automatically when the HTML extractor version changes).
 
 Then page through the cached content with `read_paper`:
 
