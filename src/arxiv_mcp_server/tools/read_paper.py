@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
+from .arxiv_ids import normalize_arxiv_id
 from .content import add_content_payload
 
 settings = Settings()
@@ -58,7 +59,7 @@ async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent
     """Handle requests to read a paper's content."""
     try:
         paper_ids = list_papers()
-        paper_id = arguments["paper_id"]
+        paper_id = normalize_arxiv_id(arguments["paper_id"])
         # Check if paper exists
         if paper_id not in paper_ids:
             return [
