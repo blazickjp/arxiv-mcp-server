@@ -117,13 +117,9 @@ async def shutdown_background_tasks() -> None:
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _index_tasks.clear()
-    # Semaphores are event-loop-bound once contended; do not reuse one after
-    # this server lifecycle ends.
     _index_semaphore = None
 
 
 settings = Settings()
 
-# Bump when HTML extraction changes so cached markdown is treated as stale
-# and re-downloaded without requiring the caller to pass force=true.
 EXTRACTOR_VERSION = 2
