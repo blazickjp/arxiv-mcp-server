@@ -9,6 +9,8 @@ from arxiv_mcp_server.tools.search import (
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
+    _parse_opensearch_total_results,
+    _build_search_response,
     _scope_user_query,
     build_arxiv_search_query,
     build_arxiv_search_url,
@@ -33,7 +35,9 @@ async def test_basic_search(mock_client):
 
         assert len(result) == 1
         content = json.loads(result[0].text)
-        assert content["total_results"] == 1
+        assert content["returned"] == 1
+        assert "total_results" not in content
+        assert content["has_more"] is False
         paper = content["papers"][0]
         assert paper["id"] == "2103.12345"
         assert paper["title"] == "Test Paper"
@@ -70,16 +74,17 @@ async def test_search_with_categories(mock_client):
 @pytest.mark.asyncio
 async def test_search_with_dates():
     """Test paper search with date filtering uses raw API."""
-    mock_xml_response = """<?xml version="1.0" encoding="UTF-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+    mock_xml_response = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:arxiv=\"http://arxiv.org/schemas/atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">
+        <opensearch:totalResults>42</opensearch:totalResults>
         <entry>
             <id>http://arxiv.org/abs/2301.00001v1</id>
             <title>Test Paper</title>
             <summary>Test abstract</summary>
             <published>2023-06-15T00:00:00Z</published>
             <author><name>Test Author</name></author>
-            <arxiv:primary_category term="cs.AI"/>
-            <link title="pdf" href="http://arxiv.org/pdf/2301.00001v1"/>
+            <arxiv:primary_category term=\"cs.AI\"/>
+            <link title=\"pdf\" href=\"http://arxiv.org/pdf/2301.00001v1\"/>
         </entry>
     </feed>"""
 
@@ -104,7 +109,9 @@ async def test_search_with_dates():
         )
 
         content = json.loads(result[0].text)
-        assert content["total_results"] == 1
+        assert content["total_results"] == 42
+        assert content["returned"] == 1
+        assert content["has_more"] is True
         assert len(content["papers"]) == 1
 
 
@@ -131,8 +138,8 @@ def test_validate_categories():
 
 def test_parse_arxiv_atom_response():
     """Test parsing of arXiv Atom XML response."""
-    sample_xml = """<?xml version="1.0" encoding="UTF-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+    sample_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:arxiv=\"http://arxiv.org/schemas/atom\">
         <entry>
             <id>http://arxiv.org/abs/2301.00001v1</id>
             <title>Test Paper Title</title>
@@ -140,10 +147,10 @@ def test_parse_arxiv_atom_response():
             <published>2023-01-01T00:00:00Z</published>
             <author><name>John Doe</name></author>
             <author><name>Jane Smith</name></author>
-            <arxiv:primary_category term="cs.AI"/>
-            <category term="cs.AI"/>
-            <category term="cs.LG"/>
-            <link title="pdf" href="http://arxiv.org/pdf/2301.00001v1"/>
+            <arxiv:primary_category term=\"cs.AI\"/>
+            <category term=\"cs.AI\"/>
+            <category term=\"cs.LG\"/>
+            <link title=\"pdf\" href=\"http://arxiv.org/pdf/2301.00001v1\"/>
         </entry>
     </feed>"""
 
@@ -165,8 +172,8 @@ async def test_raw_arxiv_search_builds_correct_url():
 
     # Mock the httpx client
     mock_response = MagicMock()
-    mock_response.text = """<?xml version="1.0" encoding="UTF-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+    mock_response.text = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:arxiv=\"http://arxiv.org/schemas/atom\">
     </feed>"""
     mock_response.raise_for_status = MagicMock()
 
@@ -276,7 +283,8 @@ async def test_search_reuses_client_and_updates_page_size_inside_gate(
         await handle_search({"query": "second", "max_results": 7})
 
     mock_client_class.assert_called_once_with()
-    assert observed_page_sizes == [5, 7]
+    # Client path requests max_results+1 so has_more is not a page-size guess.
+    assert observed_page_sizes == [6, 8]
 
 
 @pytest.mark.asyncio
@@ -378,3 +386,106 @@ def test_raw_search_url_groups_or_phrase_with_categories_and_date():
     assert "sortBy=submittedDate" in url
     decoded = unquote(url)
     assert '"mixture of experts" OR MoE' in decoded
+
+
+def _atom_feed_with_totals(entry_count: int, total_results: int) -> str:
+    """Build a minimal arXiv Atom feed with OpenSearch totalResults."""
+    entries = []
+    for i in range(entry_count):
+        n = i + 1
+        entries.append(f"""
+        <entry>
+            <id>http://arxiv.org/abs/2301.0000{n}v1</id>
+            <title>Test Paper {n}</title>
+            <summary>Test abstract {n}</summary>
+            <published>2023-01-0{n}T00:00:00Z</published>
+            <author><name>Test Author</name></author>
+            <arxiv:primary_category term=\"cs.AI\"/>
+            <link title=\"pdf\" href=\"http://arxiv.org/pdf/2301.0000{n}v1\"/>
+        </entry>""")
+    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\"
+          xmlns:arxiv=\"http://arxiv.org/schemas/atom\"
+          xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">
+        <opensearch:totalResults>{total_results}</opensearch:totalResults>
+        {''.join(entries)}
+    </feed>"""
+
+
+def test_parse_opensearch_total_results_from_atom_feed():
+    """Atom totalResults is the corpus count, not the number of entries."""
+    xml = _atom_feed_with_totals(entry_count=5, total_results=1234)
+    papers = _parse_arxiv_atom_response(xml)
+    assert len(papers) == 5
+    assert _parse_opensearch_total_results(xml) == 1234
+
+    payload = _build_search_response(papers, total_results=1234)
+    assert payload["total_results"] == 1234
+    assert payload["returned"] == 5
+    assert payload["has_more"] is True
+    assert len(payload["papers"]) == 5
+
+
+def test_build_search_response_never_aliases_page_size_as_total():
+    """A 5-paper page must not report total_results=5 when the feed says otherwise."""
+    papers = [{"id": str(i)} for i in range(5)]
+    payload = _build_search_response(papers, total_results=1234)
+    assert payload["total_results"] == 1234
+    assert payload["returned"] == 5
+    assert payload["total_results"] != payload["returned"]
+
+
+@pytest.mark.asyncio
+async def test_search_reports_feed_total_results_not_page_size():
+    """max_results=5 must not force total_results=5 when the feed says 1234."""
+    mock_response = MagicMock()
+    mock_response.text = _atom_feed_with_totals(entry_count=5, total_results=1234)
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        result = await handle_search(
+            {
+                "query": "transformers",
+                "date_from": "2020-01-01",
+                "max_results": 5,
+            }
+        )
+
+    content = json.loads(result[0].text)
+    assert content["total_results"] == 1234
+    assert content["returned"] == 5
+    assert content["has_more"] is True
+    assert len(content["papers"]) == 5
+    assert content["total_results"] != content["returned"]
+
+
+@pytest.mark.asyncio
+async def test_client_path_has_more_from_extra_fetched_paper(mock_paper):
+    """Without Atom totals, the client path uses max_results+1 to set has_more."""
+    extra = MagicMock()
+    extra.get_short_id.return_value = "2103.99999"
+    extra.title = "Extra Paper"
+    extra.authors = mock_paper.authors
+    extra.summary = "Extra abstract"
+    extra.categories = ["cs.LG"]
+    extra.published = mock_paper.published
+    extra.pdf_url = "https://arxiv.org/pdf/2103.99999"
+
+    client = MagicMock()
+    client.results.return_value = [mock_paper, extra]
+
+    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+        result = await handle_search({"query": "test query", "max_results": 1})
+
+    content = json.loads(result[0].text)
+    assert content["returned"] == 1
+    assert content["has_more"] is True
+    assert "total_results" not in content
+    assert len(content["papers"]) == 1
+    assert content["papers"][0]["id"] == "2103.12345"

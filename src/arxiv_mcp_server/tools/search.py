@@ -62,6 +62,7 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ARXIV_NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
+    "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
 }
 
 # Valid arXiv category prefixes for validation
@@ -211,13 +212,16 @@ async def _raw_arxiv_search(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     categories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Perform arXiv search using raw HTTP requests.
 
     This bypasses the arxiv Python package to avoid URL encoding issues
     with date filters. The arxiv package encodes '+' as '%2B' which breaks
     the submittedDate:[YYYYMMDD TO YYYYMMDD] syntax.
+
+    Returns (papers, total_results) where total_results is the OpenSearch
+    corpus hit count from the Atom feed, not the page size.
     """
     url = build_arxiv_search_url(
         query,
@@ -233,8 +237,49 @@ async def _raw_arxiv_search(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _rate_limited_get(client, url)
 
-    # Parse the Atom XML response
-    return _parse_arxiv_atom_response(response.text)
+    papers = _parse_arxiv_atom_response(response.text)
+    return papers, _parse_opensearch_total_results(response.text)
+
+
+def _parse_opensearch_total_results(xml_text: str) -> Optional[int]:
+    """Return arXiv OpenSearch totalResults, or None if the feed omits it."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    elem = root.find("opensearch:totalResults", ARXIV_NS)
+    if elem is None:
+        # Some feeds use a different prefix or the 1.0 namespace.
+        for child in list(root):
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "totalResults":
+                elem = child
+                break
+    if elem is None or elem.text is None:
+        return None
+    try:
+        return int(elem.text.strip())
+    except ValueError:
+        return None
+
+
+def _build_search_response(
+    papers: List[Dict[str, Any]],
+    *,
+    total_results: Optional[int] = None,
+    has_more: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Assemble search JSON. Never report page size as total_results."""
+    returned = len(papers)
+    response: Dict[str, Any] = {"returned": returned, "papers": papers}
+    if total_results is not None:
+        response["total_results"] = total_results
+        if has_more is None:
+            has_more = total_results > returned
+    if has_more is not None:
+        response["has_more"] = bool(has_more)
+    return response
 
 
 def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
@@ -384,6 +429,7 @@ DATE FILTERING: Use YYYY-MM-DD format for historical research:
 
 RESULT QUALITY: Default sort is RELEVANCE (most pertinent results first). Use sort_by: "date" to get newest papers first.
 Choose relevance for focused topic searches; choose date for monitoring recent developments.
+Each response reports total_results (arXiv corpus hit count, not page size), returned (papers in this page), and has_more.
 
 RATE LIMITING: arXiv enforces a 3-second minimum between requests. This server handles that automatically.
 If you see a rate limit error, wait 60 seconds before retrying — do not call the tool repeatedly in a loop.
@@ -397,7 +443,7 @@ TIPS FOR FOUNDATIONAL RESEARCH:
         "properties": {
             "query": {
                 "type": "string",
-                "description": 'Search query using quoted phrases for exact matches (e.g., \'"machine learning" OR "deep learning"\') or specific technical terms. Avoid overly broad or generic terms.',
+                "description": "Search query using quoted phrases for exact matches (e.g., '\"machine learning\" OR \"deep learning\"') or specific technical terms. Avoid overly broad or generic terms.",
             },
             "max_results": {
                 "type": "integer",
@@ -521,7 +567,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 optimized_query = (
                     _optimize_query(base_query) if base_query.strip() else ""
                 )
-                results = await _raw_arxiv_search(
+                results, total_results = await _raw_arxiv_search(
                     query=optimized_query,
                     max_results=max_results,
                     sort_by=sort_by_arg,
@@ -533,7 +579,9 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 logger.info(
                     f"Raw API search completed: {len(results)} results returned"
                 )
-                response_data = {"total_results": len(results), "papers": results}
+                response_data = _build_search_response(
+                    results, total_results=total_results
+                )
 
                 return [
                     types.TextContent(
@@ -590,23 +638,25 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             sort_criterion = arxiv.SortCriterion.Relevance
             logger.debug("Using relevance sorting (most relevant first)")
 
+        # Request one extra hit so has_more is real, not a page-size guess.
+        fetch_limit = max_results + 1
         search = arxiv.Search(
             query=final_query,
-            max_results=max_results,
+            max_results=fetch_limit,
             sort_by=sort_criterion,
         )
 
         def fetch_results() -> List[Dict[str, Any]]:
-            client.page_size = max_results
+            client.page_size = fetch_limit
             results = []
             for paper in client.results(search):
-                if len(results) >= max_results:
-                    break
                 results.append(_process_paper(paper))
+                if len(results) >= fetch_limit:
+                    break
             return results
 
         try:
-            results = await asyncio.to_thread(
+            fetched = await asyncio.to_thread(
                 ARXIV_RATE_LIMITER.run_sync, fetch_results
             )
         except arxiv.ArxivError as e:
@@ -617,8 +667,10 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 )
             raise
 
+        has_more = len(fetched) > max_results
+        results = fetched[:max_results]
         logger.info(f"Search completed: {len(results)} results returned")
-        response_data = {"total_results": len(results), "papers": results}
+        response_data = _build_search_response(results, has_more=has_more)
 
         return [
             types.TextContent(type="text", text=json.dumps(response_data, indent=2))
