@@ -18,6 +18,10 @@ from .alerts import (
     handle_watch_topic,
     check_alerts_tool,
     handle_check_alerts,
+    list_watches_tool,
+    handle_list_watches,
+    unwatch_topic_tool,
+    handle_unwatch_topic,
 )
 from .latex import (
     get_paper_latex_tool,
@@ -51,6 +55,10 @@ __all__ = [
     "handle_watch_topic",
     "check_alerts_tool",
     "handle_check_alerts",
+    "list_watches_tool",
+    "handle_list_watches",
+    "unwatch_topic_tool",
+    "handle_unwatch_topic",
     "get_paper_latex_tool",
     "handle_get_paper_latex",
     "list_paper_latex_sections_tool",
