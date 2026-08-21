@@ -255,6 +255,7 @@ def _extract_tex_files(data: bytes) -> dict[str, str]:
                     )
                 normalized_name = member.name.replace("\\", "/")
                 if member.isdir() and posixpath.normpath(normalized_name) == ".":
+                    # Real arXiv archives may contain an explicit root directory entry.
                     continue
                 safe_name = _safe_member_name(member.name)
                 if safe_name in normalized_members:
@@ -312,3 +313,61 @@ def _extract_tex_files(data: bytes) -> dict[str, str]:
     if not files:
         raise LatexSourceError("arXiv source archive contains no TeX files")
     return files
+
+
+def _main_file_score(name: str, content: str) -> tuple[int, int, str]:
+    score = 0
+    if "\\documentclass" in content or "\\documentstyle" in content:
+        score += 100
+    if "\\begin{document}" in content:
+        score += 50
+    if PurePosixPath(name).stem.lower() in {"main", "paper", "article", "manuscript"}:
+        score += 20
+    return score, len(content), name
+
+
+def _safe_member_candidate(*parts: str) -> str | None:
+    """Join path parts into an archive member name, or None if unsafe."""
+    pieces: list[str] = []
+    for part in parts:
+        cleaned = part.strip().replace("\\", "/")
+        if cleaned.startswith("/"):
+            return None
+        if cleaned:
+            pieces.append(cleaned)
+    if not pieces:
+        return None
+    candidate = posixpath.normpath(posixpath.join(*pieces))
+    if candidate in {".", ".."} or candidate.startswith("../"):
+        return None
+    if any(part in {"", ".", ".."} for part in candidate.split("/")):
+        return None
+    if not PurePosixPath(candidate).suffix:
+        candidate += ".tex"
+    return candidate
+
+
+def _resolve_include(
+    current_file: str,
+    requested: str,
+    directory: str | None = None,
+    *,
+    kind: str = "input",
+    files: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve one-arg \\input/\\include or two-arg import-package paths."""
+    current_dir = posixpath.dirname(current_file)
+    if directory is None:
+        return _safe_member_candidate(current_dir, requested)
+
+    if kind == "subimport":
+        return _safe_member_candidate(current_dir, directory, requested)
+
+    relative = _safe_member_candidate(current_dir, directory, requested)
+    from_root = _safe_member_candidate(directory, requested)
+    if files is not None:
+        if relative is not None and relative in files:
+            return relative
+        if from_root is not None and from_root in files:
+            return from_root
+    return relative or from_root
