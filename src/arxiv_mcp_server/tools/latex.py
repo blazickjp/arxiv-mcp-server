@@ -426,3 +426,33 @@ def _collect_macros(text: str, masked: str) -> dict[str, tuple[int, str]]:
             continue
         macros[name] = (nargs, extracted[0])
     return macros
+
+
+def _expandable_macros(
+    macros: dict[str, tuple[int, str]],
+) -> dict[str, tuple[int, str]]:
+    """Expand only macros that wrap includes/sections or those macros."""
+    expandable = {
+        name
+        for name, (_nargs, body) in macros.items()
+        if _INCLUDE_OR_SECTION_RE.search(body)
+    }
+    changed = True
+    while changed:
+        changed = False
+        for name, (_nargs, body) in macros.items():
+            if name in expandable:
+                continue
+            if any(
+                re.search(rf"\\{re.escape(other)}(?![A-Za-z@])", body)
+                for other in expandable
+            ):
+                expandable.add(name)
+                changed = True
+    return {name: macros[name] for name in expandable}
+
+
+def _flatten_source(files: dict[str, str]) -> tuple[str, str]:
+    """Select the main document and inline local includes within a hard budget."""
+    content, main_file, _unmatched = _flatten_source_with_unmatched(files)
+    return content, main_file
