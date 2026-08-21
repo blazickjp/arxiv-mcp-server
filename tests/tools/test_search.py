@@ -9,6 +9,9 @@ from arxiv_mcp_server.tools.search import (
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
+    _scope_user_query,
+    build_arxiv_search_query,
+    build_arxiv_search_url,
 )
 
 
@@ -182,11 +185,15 @@ async def test_raw_arxiv_search_builds_correct_url():
             categories=["cs.AI"],
         )
 
-        # Check that the URL was constructed with unencoded +TO+
+        # Date ranges must decode to " TO ", never %2BTO%2B
+        from urllib.parse import unquote
+
         call_args = mock_client.get.call_args
         url = call_args[0][0]
-        assert "+TO+" in url  # Critical: must not be encoded as %2B
-        assert "submittedDate:" in url
+        decoded = unquote(url)
+        assert "%2BTO%2B" not in url
+        assert " TO " in decoded
+        assert "submittedDate:" in decoded
         assert "20230101" in url
         assert "20231231" in url
 
@@ -311,3 +318,63 @@ async def test_search_no_query_optimization(mock_client):
     bool_query = "machine learning AND deep learning"
     optimized = _optimize_query(bool_query)
     assert optimized == bool_query
+
+
+def test_scope_user_query_keeps_field_prefixes():
+    """Explicit ti:/au:/abs: queries must not be rewritten."""
+    field_query = 'ti:"transformer architecture"'
+    assert _scope_user_query(field_query) == f"({field_query})"
+
+
+def test_raw_search_url_groups_or_phrase_with_categories_and_date():
+    """Date sort must keep (phrase OR MoE) AND categories AND date.
+
+    Regression for issue #159: a loose OR MoE must not drop the topic
+    clause and return newest papers in the selected categories.
+    """
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    user_query = '"mixture of experts" OR MoE'
+    logical = build_arxiv_search_query(
+        user_query,
+        date_from="2026-01-01",
+        date_to="2026-12-31",
+        categories=["cs.LG", "cs.CL"],
+    )
+
+    assert '"mixture of experts" OR MoE' in logical
+    assert "(cat:cs.LG OR cat:cs.CL)" in logical
+    assert "submittedDate:[202601010000 TO 202612312359]" in logical
+    assert " AND " in logical
+    # Unprefixed OR queries are scoped to title/abstract, not all:/au:
+    assert "ti:(" in logical
+    assert "abs:(" in logical
+    assert "all:" not in logical
+    phrase_at = logical.index('"mixture of experts" OR MoE')
+    cats_at = logical.index("(cat:cs.LG OR cat:cs.CL)")
+    date_at = logical.index("submittedDate:[")
+    assert phrase_at < cats_at < date_at
+
+    url = build_arxiv_search_url(
+        user_query,
+        max_results=5,
+        sort_by="date",
+        date_from="2026-01-01",
+        date_to="2026-12-31",
+        categories=["cs.LG", "cs.CL"],
+    )
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    search_query = params["search_query"][0]
+    assert '"mixture of experts" OR MoE' in search_query
+    assert "cat:cs.LG OR cat:cs.CL" in search_query
+    assert "submittedDate:[202601010000 TO 202612312359]" in search_query
+    assert params["sortBy"] == ["submittedDate"]
+    assert params["max_results"] == ["5"]
+    # Quotes must be percent-encoded so the OR group survives HTTP parsing
+    assert "%22mixture" in url or "%22mixture%20of%20experts%22" in url
+    assert '"mixture' not in url
+    assert "%2BTO%2B" not in url
+    assert "sortBy=submittedDate" in url
+    decoded = unquote(url)
+    assert '"mixture of experts" OR MoE' in decoded

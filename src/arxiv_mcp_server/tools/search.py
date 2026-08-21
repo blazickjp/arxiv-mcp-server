@@ -6,6 +6,7 @@ import logging
 import httpx
 import asyncio
 import xml.etree.ElementTree as ET
+from urllib.parse import quote
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from dateutil import parser
@@ -88,6 +89,121 @@ VALID_CATEGORIES = {
 }
 
 
+_USER_QUERY_FIELD_PREFIXES = (
+    "ti:",
+    "au:",
+    "abs:",
+    "cat:",
+    "co:",
+    "jr:",
+    "rn:",
+    "all:",
+)
+
+
+def _user_query_has_field_prefix(query: str) -> bool:
+    """Return True if the user already targeted an arXiv search field."""
+    lowered = query.lower()
+    return any(prefix in lowered for prefix in _USER_QUERY_FIELD_PREFIXES)
+
+
+def _scope_user_query(query: str) -> str:
+    """Group a user query and keep unprefixed terms in title/abstract.
+
+    Bare tokens are mapped by arXiv to ``all:``, which includes authors. A
+    short ``OR`` term such as ``MoE`` then matches author-name fragments
+    (for example ``Moe Jafari`` or ``Mo Zhou``). Under date sort that
+    collapses to "newest papers in these categories."
+    """
+    query = query.strip()
+    if not query:
+        return query
+    if _user_query_has_field_prefix(query):
+        return f"({query})"
+    return f"(ti:({query}) OR abs:({query}))"
+
+
+def _format_submitted_date_filter(
+    date_from: Optional[str], date_to: Optional[str]
+) -> str:
+    """Build an arXiv submittedDate range using spaces around TO."""
+    try:
+        if date_from:
+            start_date = parser.parse(date_from).strftime("%Y%m%d0000")
+        else:
+            start_date = "199107010000"  # arXiv started July 1991
+
+        if date_to:
+            end_date = parser.parse(date_to).strftime("%Y%m%d2359")
+        else:
+            end_date = datetime.now().strftime("%Y%m%d2359")
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error parsing dates: {e}")
+        raise ValueError(f"Invalid date format. Use YYYY-MM-DD format: {e}")
+
+    # Spaces, not pre-baked '+TO+'. Percent-encoding then yields %20TO%20,
+    # which decodes to the required range operator. Encoding a literal '+'
+    # as %2B is what breaks the arxiv package date filter.
+    return f"submittedDate:[{start_date} TO {end_date}]"
+
+
+def build_arxiv_search_query(
+    query: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+) -> str:
+    """Return the unencoded arXiv search_query string."""
+    query_parts: list[str] = []
+
+    if query.strip():
+        query_parts.append(_scope_user_query(query))
+
+    if categories:
+        category_filter = " OR ".join(f"cat:{cat}" for cat in categories)
+        query_parts.append(f"({category_filter})")
+
+    if date_from or date_to:
+        date_filter = _format_submitted_date_filter(date_from, date_to)
+        query_parts.append(date_filter)
+        logger.debug(f"Added date filter: {date_filter}")
+
+    if not query_parts:
+        raise ValueError("No search criteria provided")
+
+    return " AND ".join(query_parts)
+
+
+def build_arxiv_search_url(
+    query: str,
+    max_results: int = 10,
+    sort_by: str = "relevance",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+) -> str:
+    """Build a raw arXiv API URL with a percent-encoded search_query."""
+    final_query = build_arxiv_search_query(
+        query,
+        date_from=date_from,
+        date_to=date_to,
+        categories=categories,
+    )
+    logger.debug(f"Raw API query: {final_query}")
+
+    sort_map = {
+        "relevance": "relevance",
+        "date": "submittedDate",
+    }
+    encoded_query = quote(final_query, safe="")
+    base_params = (
+        f"max_results={max_results}"
+        f"&sortBy={sort_map.get(sort_by, 'relevance')}"
+        f"&sortOrder=descending"
+    )
+    return f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
+
+
 async def _raw_arxiv_search(
     query: str,
     max_results: int = 10,
@@ -101,68 +217,16 @@ async def _raw_arxiv_search(
 
     This bypasses the arxiv Python package to avoid URL encoding issues
     with date filters. The arxiv package encodes '+' as '%2B' which breaks
-    the submittedDate:[YYYYMMDD+TO+YYYYMMDD] syntax.
+    the submittedDate:[YYYYMMDD TO YYYYMMDD] syntax.
     """
-    # Build query components
-    query_parts = []
-
-    if query.strip():
-        query_parts.append(f"({query})")
-
-    # Add category filtering
-    if categories:
-        category_filter = " OR ".join(f"cat:{cat}" for cat in categories)
-        query_parts.append(f"({category_filter})")
-
-    # Add date filtering using arXiv API syntax
-    if date_from or date_to:
-        try:
-            if date_from:
-                start_date = parser.parse(date_from).strftime("%Y%m%d0000")
-            else:
-                start_date = "199107010000"  # arXiv started July 1991
-
-            if date_to:
-                end_date = parser.parse(date_to).strftime("%Y%m%d2359")
-            else:
-                end_date = datetime.now().strftime("%Y%m%d2359")
-
-            # CRITICAL: This must NOT be URL-encoded. The '+' in '+TO+' must remain literal.
-            date_filter = f"submittedDate:[{start_date}+TO+{end_date}]"
-            query_parts.append(date_filter)
-            logger.debug(f"Added date filter: {date_filter}")
-        except (ValueError, TypeError) as e:
-            logger.error(f"Error parsing dates: {e}")
-            raise ValueError(f"Invalid date format. Use YYYY-MM-DD format: {e}")
-
-    if not query_parts:
-        raise ValueError("No search criteria provided")
-
-    # Combine query parts with AND (space in arXiv = AND)
-    final_query = " AND ".join(query_parts)
-    logger.debug(f"Raw API query: {final_query}")
-
-    # Map sort parameter to arXiv API values
-    sort_map = {
-        "relevance": "relevance",
-        "date": "submittedDate",
-    }
-    sort_order = "descending"
-
-    # Build the URL manually to avoid encoding the '+' in date ranges
-    # We encode most parameters but carefully preserve '+TO+' in date filters
-    base_params = f"max_results={max_results}&sortBy={sort_map.get(sort_by, 'relevance')}&sortOrder={sort_order}"
-
-    # Manually construct search_query parameter
-    # We need to encode spaces and special chars BUT NOT the '+' in '+TO+'
-    # Strategy: encode the query parts separately, then join with encoded AND
-    encoded_query = (
-        final_query.replace(" AND ", "+AND+").replace(" OR ", "+OR+").replace(" ", "+")
+    url = build_arxiv_search_url(
+        query,
+        max_results=max_results,
+        sort_by=sort_by,
+        date_from=date_from,
+        date_to=date_to,
+        categories=categories,
     )
-    # But we need to be careful about existing '+TO+' - it should stay as-is
-    # Since we built the date filter with literal '+TO+', it's already correct
-
-    url = f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
     logger.debug(f"Raw API URL: {url}")
 
     # Make the request via rate-limited helper
@@ -496,7 +560,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Add base query with optimization
         if base_query.strip():
             optimized_query = _optimize_query(base_query)
-            query_parts.append(f"({optimized_query})")
+            query_parts.append(_scope_user_query(optimized_query))
             if optimized_query != base_query:
                 logger.debug(f"Optimized query: '{base_query}' -> '{optimized_query}'")
 
