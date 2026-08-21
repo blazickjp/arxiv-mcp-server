@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
+from .arxiv_ids import parse_arxiv_id
 from .search import _rate_limited_get, ARXIV_API_URL
 import httpx
 import xml.etree.ElementTree as ET
@@ -39,7 +40,8 @@ abstract_tool = types.Tool(
 async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Fetch paper metadata via arXiv API without downloading the full paper."""
     try:
-        paper_id = arguments["paper_id"].strip()
+        raw_id = arguments["paper_id"]
+        paper_id = raw_id.strip() if isinstance(raw_id, str) else ""
         if not paper_id:
             return [
                 types.TextContent(
@@ -49,6 +51,18 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
                     ),
                 )
             ]
+
+        parsed = parse_arxiv_id(paper_id)
+        if parsed is None:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {"status": "error", "message": "invalid arXiv ID format"}
+                    ),
+                )
+            ]
+        paper_id = parsed
 
         url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
 
@@ -128,6 +142,19 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
         return [
             types.TextContent(
                 type="text", text=json.dumps({"status": "error", "message": str(e)})
+            )
+        ]
+    except httpx.HTTPStatusError:
+        # Never leak upstream status lines / URLs (issue #166).
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"Paper {paper_id} not found on arXiv",
+                    }
+                ),
             )
         ]
     except Exception as e:

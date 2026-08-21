@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,24 +9,12 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
+from .arxiv_ids import is_valid_arxiv_id
 
 settings = Settings()
 logger = logging.getLogger("arxiv-mcp-server")
 
-# Matches both new-style (YYMM.NNNNN) and old-style (cat/YYMMNNN) arXiv IDs,
-# with optional version suffix (v1, v2, …).
-_ARXIV_ID_RE = re.compile(
-    r"^(\d{4}\.\d{4,5}(v\d+)?"  # new-style: 2404.18922 or 2404.18922v3
-    r"|[a-z\-]+(/[a-z\-]+)?/\d{7}(v\d+)?)$",  # old-style: hep-ph/9901234
-    re.IGNORECASE,
-)
-
 METADATA_SUFFIX = ".meta.json"
-
-
-def is_valid_arxiv_id(stem: str) -> bool:
-    """Return True if *stem* looks like a valid arXiv paper ID."""
-    return bool(_ARXIV_ID_RE.match(stem))
 
 
 list_tool = types.Tool(
