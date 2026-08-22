@@ -186,9 +186,9 @@ The server currently exposes 16 tools.
 |---|---|---|
 | `search_papers` | Search arXiv by query, category, date, and sort order | Remote arXiv API |
 | `get_abstract` | Fetch metadata and an abstract by arXiv ID | Does not download the paper |
-| `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]`; `force=true` re-fetches |
+| `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]`; `force=true` re-fetches; content bounded to 12,000 chars by default |
 | `list_papers` | List papers stored locally | Returns id, title, authors, published; `compact` for IDs only |
-| `read_paper` | Read locally stored paper content | Supports `start` and `max_chars` |
+| `read_paper` | Read locally stored paper content | Bounded to 12,000 chars by default; supports `start`/`max_chars`/`return_full_text` |
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
@@ -274,24 +274,44 @@ Call `download_paper` with:
 
 ```json
 {
-  "paper_id": "2404.19756",
-  "max_chars": 12000
+  "paper_id": "2404.19756"
 }
 ```
 
-Cached papers are returned immediately. Pass `"force": true` to re-download and overwrite the local markdown and sidecar (also happens automatically when the HTML extractor version changes).
+Omitting `max_chars` returns a bounded first chunk (default **12,000** paper characters). Cached papers are returned immediately. Pass `"force": true` to re-download and overwrite the local markdown and sidecar (also happens automatically when the HTML extractor version changes).
 
 Then page through the cached content with `read_paper`:
 
 ```json
 {
   "paper_id": "2404.19756",
-  "start": 0,
-  "max_chars": 12000
+  "start": 0
 }
 ```
 
-Large-content responses include `content_length`, `returned_chars`, `next_start`, and `is_truncated`. Pass `next_start` into the next call to continue reading.
+Or continue from a prior chunk:
+
+```json
+{
+  "paper_id": "2404.19756",
+  "start": 12000
+}
+```
+
+Large-content responses include `content_length`, `returned_chars`, `next_start`, `is_truncated`, and (when truncated) `next_retrieval` with the next-call instruction. Pass `next_start` into the next call's `start` to continue reading. Pass an explicit `max_chars` to override the default chunk size, or `"return_full_text": true` to opt into the previous unbounded full-paper response.
+
+#### Migration notes (bounded content default)
+
+Previously, omitting `max_chars` on `download_paper` / `read_paper` returned the **entire** paper. That default is now a **12,000-character** chunk so a single MCP tool call cannot flood the client context window.
+
+| Need | Call |
+|---|---|
+| First bounded chunk (new default) | `{ "paper_id": "…" }` |
+| Continue reading | `{ "paper_id": "…", "start": <next_start> }` |
+| Custom chunk size | `{ "paper_id": "…", "max_chars": 5000 }` |
+| Old unbounded behavior | `{ "paper_id": "…", "return_full_text": true }` |
+
+Clients that already passed `max_chars` are unchanged. Only callers that relied on the omitted-`max_chars` = full-text behavior need to add `return_full_text: true` or page via `next_start`.
 
 ### Read original LaTeX by section
 
