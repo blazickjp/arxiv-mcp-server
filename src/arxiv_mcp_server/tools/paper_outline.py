@@ -3,7 +3,8 @@
 Section IDs use hierarchical counters (``1``, ``1.1``, ``1.1.1``), matching the
 LaTeX outline tools. Missing heading levels insert ``0`` placeholders (e.g. an
 ``h3`` after an ``h1`` becomes ``1.0.1``). Duplicate titles remain distinct via
-those counters. Papers with no ATX headings expose a synthetic section ``1``.
+those counters. Papers with no recognized headings (ATX, numbered, or common
+bare arXiv section titles) expose a synthetic section ``1``.
 """
 
 from __future__ import annotations
@@ -46,9 +47,51 @@ DEFAULT_PASSAGE_CHARS = 800
 MAX_PASSAGE_CHARS = 2000
 MAX_SECTION_COUNT = 2000
 
-# ATX headings only; setext headings are uncommon in arXiv markdown conversions.
-_ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$", re.MULTILINE)
+# Heading styles seen in arXiv markdown (ATX, numbered, bare HTML titles).
+_ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
+_NUMBERED_HEADING_RE = re.compile(r"^(\d+(?:\.\d+){0,5})[ \t]+(.+?)[ \t]*$")
 _FENCE_RE = re.compile(r"^```")
+_MAX_BARE_TITLE_CHARS = 80
+
+# Common standalone section titles from arXiv HTML→md conversions.
+_BARE_SECTION_TITLES = frozenset(
+    {
+        "abstract",
+        "introduction",
+        "background",
+        "related work",
+        "related works",
+        "method",
+        "methods",
+        "methodology",
+        "approach",
+        "experiment",
+        "experiments",
+        "experimental setup",
+        "experimental results",
+        "result",
+        "results",
+        "discussion",
+        "discussions",
+        "conclusion",
+        "conclusions",
+        "future work",
+        "limitations",
+        "reference",
+        "references",
+        "appendix",
+        "appendices",
+        "acknowledgement",
+        "acknowledgements",
+        "acknowledgment",
+        "acknowledgments",
+        "bibliography",
+        "notation",
+        "preliminaries",
+        "problem formulation",
+        "problem statement",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -118,8 +161,44 @@ def _mask_fenced_code(content: str) -> str:
     return "".join(chars)
 
 
+def _match_heading_line(line: str) -> tuple[int, str] | None:
+    """Return (level, title) for a heading line, or None if not a heading.
+
+    Preference: ATX > numbered > bare known section titles. Bare titles must be
+    short standalone lines (no trailing prose).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    atx = _ATX_HEADING_RE.match(stripped)
+    if atx:
+        title = atx.group(2).strip()
+        if title:
+            return len(atx.group(1)), title
+        return None
+
+    numbered = _NUMBERED_HEADING_RE.match(stripped)
+    if numbered:
+        numbering = numbered.group(1)
+        title = numbered.group(2).strip()
+        # Reject numbered list items that look like long prose.
+        if title and len(stripped) <= _MAX_BARE_TITLE_CHARS:
+            if re.match(r"[A-Za-z]", title):
+                level = min(6, numbering.count(".") + 1)
+                return level, title
+
+    if len(stripped) <= _MAX_BARE_TITLE_CHARS:
+        # Allow optional trailing colon or period on bare titles.
+        candidate = stripped.rstrip(":.").strip()
+        if candidate.casefold() in _BARE_SECTION_TITLES:
+            return 1, candidate
+
+    return None
+
+
 def parse_markdown_sections(content: str) -> list[MdSection]:
-    """Parse ATX headings into hierarchical sections with stable IDs.
+    """Parse ATX, numbered, and bare arXiv headings into hierarchical sections.
 
     Section body runs from the heading start through the character before the
     next heading of the same or higher level (lower or equal level number).
@@ -131,20 +210,30 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
     raw: list[tuple[int, str, str, int]] = []
     counters = [0, 0, 0, 0, 0, 0]
 
-    for match in _ATX_HEADING_RE.finditer(masked):
+    offset = 0
+    in_fence = False
+    for line in masked.splitlines(keepends=True):
         if len(raw) >= MAX_SECTION_COUNT:
             break
-        level = len(match.group(1))
-        title = match.group(2).strip()
-        if not title:
+        stripped = line.lstrip(" \t")
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            offset += len(line)
             continue
-        # Map match offsets back to original content (same length as masked).
-        start = match.start()
-        counters[level - 1] += 1
-        for index in range(level, 6):
-            counters[index] = 0
-        section_id = ".".join(str(value) for value in counters[:level])
-        raw.append((level, section_id, title, start))
+        if not in_fence:
+            logical = line[:-1] if line.endswith("\n") else line
+            if logical.endswith("\r"):
+                logical = logical[:-1]
+            matched = _match_heading_line(logical)
+            if matched is not None:
+                level, title = matched
+                start = offset
+                counters[level - 1] += 1
+                for index in range(level, 6):
+                    counters[index] = 0
+                section_id = ".".join(str(value) for value in counters[:level])
+                raw.append((level, section_id, title, start))
+        offset += len(line)
 
     if not raw:
         return [MdSection("1", 1, "(document)", 0, len(content))]
@@ -291,7 +380,7 @@ def search_passages(
                 "match_end": match_end,
                 "section_id": section.section_id if section else None,
                 "section_title": section.title if section else None,
-                "excerpt": _CONTENT_WARNING + excerpt,
+                "excerpt": excerpt,
                 "excerpt_chars": len(excerpt),
             }
         )

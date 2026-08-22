@@ -200,7 +200,8 @@ async def test_search_passages_and_empty(patch_storage):
     assert "start" in passage and "end" in passage
     assert "match_start" in passage and "match_end" in passage
     assert passage["section_id"] is not None
-    assert "UNTRUSTED EXTERNAL CONTENT" in passage["excerpt"]
+    assert "UNTRUSTED EXTERNAL CONTENT" not in passage["excerpt"]
+    assert "table" in passage["excerpt"].casefold()
 
     empty = await handle_search_paper_text({"paper_id": "2505.13525", "query": ""})
     empty_result = json.loads(empty[0].text)
@@ -234,3 +235,179 @@ async def test_not_found_and_no_heading_paper(patch_storage):
     )
     assert section["status"] == "success"
     assert "no headings here" in section["content"]
+
+
+BARE_HTML_PAPER = """Attention Is All You Need
+
+Abstract
+
+The dominant sequence transduction models are based on complex recurrent.
+
+Introduction
+
+Recurrent neural networks, long short-term memory and gated recurrent.
+
+Background
+
+The goal of reducing sequential computation forms the foundation.
+
+Related Work
+
+The Transformer is the first transduction model relying entirely.
+
+Methods
+
+We propose a new architecture.
+
+Experiments
+
+This section describes our experimental setup.
+
+Results
+
+On the WMT 2014 English-to-German translation task.
+
+Discussion
+
+In this work we presented the Transformer.
+
+Conclusion
+
+We are excited about the future of attention-based models.
+
+References
+
+[1] Someone et al.
+"""
+
+
+NUMBERED_PAPER = """1 Introduction
+
+Intro body about transformers.
+
+2 Background
+
+Background body.
+
+3 Model Architecture
+
+Top-level model section.
+
+3.1 Attention
+
+Scaled dot-product attention.
+
+3.2 Multi-Head Attention
+
+Multi-head details.
+
+4 Experiments
+
+Experiment body.
+
+4.1 Training
+
+Training details.
+"""
+
+
+def test_parse_bare_arxiv_html_titles():
+    sections = parse_markdown_sections(BARE_HTML_PAPER)
+    titles = [s.title for s in sections]
+    assert "(document)" not in titles
+    for expected in (
+        "Abstract",
+        "Introduction",
+        "Background",
+        "Related Work",
+        "Methods",
+        "Experiments",
+        "Results",
+        "Discussion",
+        "Conclusion",
+        "References",
+    ):
+        assert expected in titles, f"missing {expected}"
+    # Paper title line should not become a section.
+    assert "Attention Is All You Need" not in titles
+    intro = next(s for s in sections if s.title == "Introduction")
+    body = BARE_HTML_PAPER[intro.start : intro.end]
+    assert "Recurrent neural networks" in body
+    assert body.lstrip().startswith("Introduction")
+    # Sibling boundary: Results text should not leak into Introduction.
+    assert "WMT 2014" not in body
+    bg = next(s for s in sections if s.title == "Background")
+    assert BARE_HTML_PAPER[bg.start : bg.end].lstrip().startswith("Background")
+
+
+def test_parse_numbered_headings():
+    sections = parse_markdown_sections(NUMBERED_PAPER)
+    by_title = {s.title: s for s in sections}
+    assert by_title["Introduction"].section_id == "1"
+    assert by_title["Introduction"].level == 1
+    assert by_title["Background"].section_id == "2"
+    assert by_title["Model Architecture"].section_id == "3"
+    assert by_title["Attention"].section_id == "3.1"
+    assert by_title["Attention"].level == 2
+    assert by_title["Multi-Head Attention"].section_id == "3.2"
+    assert by_title["Experiments"].section_id == "4"
+    assert by_title["Training"].section_id == "4.1"
+    attention = by_title["Attention"]
+    body = NUMBERED_PAPER[attention.start : attention.end]
+    assert "Scaled dot-product" in body
+    assert "Multi-head details" not in body
+
+
+def test_parse_atx_still_preferred_over_bare():
+    md = """# Introduction
+
+Prose mentioning Background in a sentence should not split.
+
+Background
+
+Real bare section after ATX.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    assert titles[0] == "Introduction"
+    assert "Background" in titles
+    assert sections[0].level == 1
+
+
+@pytest.mark.asyncio
+async def test_bare_title_read_section_and_search_clean(patch_storage):
+    _write_paper(patch_storage, "1706.03762", BARE_HTML_PAPER)
+    outline = json.loads(
+        (await handle_get_paper_outline({"paper_id": "1706.03762"}))[0].text
+    )
+    assert outline["status"] == "success"
+    assert outline["total_sections"] >= 8
+    titles = [s["title"] for s in outline["sections"]]
+    assert "Introduction" in titles
+    assert titles != ["(document)"]
+
+    section = json.loads(
+        (
+            await handle_read_paper_section(
+                {"paper_id": "1706.03762", "section_id": "Introduction"}
+            )
+        )[0].text
+    )
+    assert section["status"] == "success"
+    assert "Recurrent neural networks" in section["content"]
+
+    search = json.loads(
+        (
+            await handle_search_paper_text(
+                {
+                    "paper_id": "1706.03762",
+                    "query": "transduction",
+                    "passage_chars": 200,
+                }
+            )
+        )[0].text
+    )
+    assert search["returned_passages"] >= 1
+    excerpt = search["passages"][0]["excerpt"]
+    assert "UNTRUSTED EXTERNAL CONTENT" not in excerpt
+    assert "transduction" in excerpt.casefold()
