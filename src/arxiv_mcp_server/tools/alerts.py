@@ -240,7 +240,6 @@ async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextConten
         if not topic:
             return [types.TextContent(type="text", text="Error: topic is required")]
 
-        categories = arguments.get("categories") or []
         max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
 
         payload = _load_watches()
@@ -248,6 +247,15 @@ async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextConten
         existing_index = next(
             (idx for idx, item in enumerate(topics) if item.get("topic") == topic), None
         )
+
+        # On update, only replace categories when the key is present so omitted
+        # categories preserve the stored filters. Explicit [] still clears.
+        if "categories" in arguments:
+            categories = arguments.get("categories") or []
+        elif existing_index is not None:
+            categories = topics[existing_index].get("categories") or []
+        else:
+            categories = []
 
         record = {
             "topic": topic,
