@@ -13,7 +13,8 @@ from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
-from .list_papers import is_valid_arxiv_id, save_paper_metadata
+from .arxiv_ids import parse_arxiv_id
+from .list_papers import save_paper_metadata
 from .search import ARXIV_API_URL, ARXIV_NS, _rate_limited_get
 import logging
 import threading
@@ -602,15 +603,17 @@ def _persist_paper_metadata(
 async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle paper download requests synchronously (HTML first, then PDF)."""
     try:
-        paper_id = arguments["paper_id"].strip()
-        if not is_valid_arxiv_id(paper_id):
+        raw_id = arguments["paper_id"]
+        paper_id = parse_arxiv_id(raw_id) if isinstance(raw_id, str) else None
+        if paper_id is None:
+            display = raw_id.strip() if isinstance(raw_id, str) else raw_id
             return [
                 types.TextContent(
                     type="text",
                     text=json.dumps(
                         {
                             "status": "error",
-                            "message": f"Invalid arXiv ID: {paper_id}",
+                            "message": f"Invalid arXiv ID: {display}",
                         }
                     ),
                 )

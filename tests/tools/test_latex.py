@@ -667,3 +667,74 @@ async def test_server_registers_and_routes_latex_tools(monkeypatch):
     monkeypatch.setattr(server, "handle_get_paper_latex", fake_handler)
     result = await server.call_tool("get_paper_latex", {"paper_id": "2401.00001"})
     assert json.loads(result[0].text)["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Shared ID normalization (issue #200)
+# ---------------------------------------------------------------------------
+
+_LATEX_ID_FORM_CASES = [
+    ("1706.03762", "1706.03762"),
+    ("arxiv:1706.03762", "1706.03762"),
+    ("https://arxiv.org/abs/1706.03762", "1706.03762"),
+    ("https://arxiv.org/pdf/1706.03762.pdf", "1706.03762"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_id, expected", _LATEX_ID_FORM_CASES)
+async def test_latex_list_paper_id_normalize_matrix(monkeypatch, raw_id, expected):
+    """list_paper_latex_sections accepts bare / arxiv: / abs / pdf forms."""
+    recorded = []
+
+    def _fake_load(paper_id):
+        recorded.append(paper_id)
+        return latex.LatexSource("\\section{Intro}\nHello", "main.tex", 1)
+
+    monkeypatch.setattr(latex, "_load_source", _fake_load)
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections({"paper_id": raw_id})
+    )
+    assert payload["status"] == "success"
+    assert payload["paper_id"] == expected
+    assert recorded == [expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_id, expected", _LATEX_ID_FORM_CASES)
+async def test_latex_get_paper_id_normalize_matrix(monkeypatch, raw_id, expected):
+    """get_paper_latex accepts bare / arxiv: / abs / pdf forms."""
+    recorded = []
+
+    def _fake_load(paper_id):
+        recorded.append(paper_id)
+        return latex.LatexSource("body text", "main.tex", 1)
+
+    monkeypatch.setattr(latex, "_load_source", _fake_load)
+    payload = _payload(await latex.handle_get_paper_latex({"paper_id": raw_id}))
+    assert payload["status"] == "success"
+    assert payload["paper_id"] == expected
+    assert recorded == [expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_id, expected", _LATEX_ID_FORM_CASES)
+async def test_latex_get_section_paper_id_normalize_matrix(
+    monkeypatch, raw_id, expected
+):
+    """get_paper_latex_section accepts bare / arxiv: / abs / pdf forms."""
+    recorded = []
+
+    def _fake_load(paper_id):
+        recorded.append(paper_id)
+        return latex.LatexSource("\\section{Intro}\nHello", "main.tex", 1)
+
+    monkeypatch.setattr(latex, "_load_source", _fake_load)
+    payload = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": raw_id, "section_id": "1"}
+        )
+    )
+    assert payload["status"] == "success"
+    assert payload["paper_id"] == expected
+    assert recorded == [expected]
