@@ -184,7 +184,7 @@ The server currently exposes 16 tools.
 
 | Tool | Purpose | Notes |
 |---|---|---|
-| `search_papers` | Search arXiv by query, category, date, and sort order | Remote arXiv API |
+| `search_papers` | Search arXiv by query, category, date, and sort order | Default ≤5 compact results (`abstract_mode=snippet`); remote arXiv API |
 | `get_abstract` | Fetch metadata and an abstract by arXiv ID | Does not download the paper |
 | `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]`; `force=true` re-fetches; content bounded to 12,000 chars by default |
 | `list_papers` | List papers stored locally | Returns id, title, authors, published; `compact` for IDs only |
@@ -241,10 +241,12 @@ Physics & other: `quant-ph`, `eess.SP`, `eess.AS`, `physics.data-an`
 - Default `sort_by` is `relevance`; use `date` for newest-first monitoring
 - Foundational work: `date_to: "2010-12-31"` with title/abstract field searches
 
-**Pagination and rate limits**
+**Result size, abstracts, and pagination**
 
-- Responses report `total_results` (corpus hits), `returned`, `has_more`, `start`, and `next_start`
-- Pass `start=next_start` for the next page
+- Default `max_results` is **5** (cap 50). Pass an explicit value for larger pages.
+- `abstract_mode`: `snippet` (default, ~280 chars, marked `… [truncated]` when cut), `full` (complete abstract), or `none` (omit abstracts). Other metadata (title, authors, categories, dates, URLs) is always returned.
+- Responses report `total_results` (corpus hits), `returned`, `has_more`, `start`, `next_start`, and `abstract_mode`
+- Pass `start=next_start` with the same `abstract_mode` for the next page
 - arXiv enforces ~3 seconds between requests (handled server-side); on rate-limit errors wait ~60s
 
 ### Search and inspect a paper
@@ -255,18 +257,19 @@ Ask your MCP client to call `search_papers` with:
 {
   "query": "\"Kolmogorov-Arnold Networks\"",
   "categories": ["cs.LG", "cs.AI"],
-  "max_results": 5,
   "sort_by": "date"
 }
 ```
 
-Then call `get_abstract` with:
+Defaults return up to five compact results with abstract snippets. Use `"abstract_mode": "full"` when you need complete abstracts in the search response, or call `get_abstract` for a single paper after a compact search:
 
 ```json
 {
   "paper_id": "2404.19756"
 }
 ```
+
+Do not call `get_abstract` again for papers already returned with `abstract_mode=full`.
 
 ### Download and read full text
 

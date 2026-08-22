@@ -81,6 +81,7 @@ def test_search_papers_schema_semantics_preserved():
         "query",
         "max_results",
         "start",
+        "abstract_mode",
         "date_from",
         "date_to",
         "categories",
@@ -90,6 +91,8 @@ def test_search_papers_schema_semantics_preserved():
     assert props["max_results"]["type"] == "integer"
     assert props["start"]["type"] == "integer"
     assert props["start"]["minimum"] == 0
+    assert props["abstract_mode"]["type"] == "string"
+    assert props["abstract_mode"]["enum"] == ["none", "snippet", "full"]
     assert props["date_from"]["type"] == "string"
     assert props["date_to"]["type"] == "string"
     assert props["categories"]["type"] == "array"
@@ -103,6 +106,8 @@ def test_search_papers_schema_semantics_preserved():
     assert "YYYY-MM-DD" in desc
     assert "relevance" in desc and "date" in desc
     assert "next_start" in desc
+    assert "abstract_mode" in desc
+    assert "snippet" in desc
 
 
 def test_search_papers_description_reduced_vs_baseline():
@@ -143,5 +148,6 @@ async def test_tools_list_serialized_size_snapshot():
     # Soft ceiling: after shrinking search_papers, total list should stay well
     # under the pre-change ~16k measurement on main @94a1317.
     assert search_chars < 3000
-    assert total_chars < 14000
+    # Soft ceiling allows abstract_mode (#128) on top of the #131 shrink.
+    assert total_chars < 14500
     assert len(search.description) < 1500
