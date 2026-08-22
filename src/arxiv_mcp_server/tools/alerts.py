@@ -65,7 +65,9 @@ watch_topic_tool = types.Tool(
 
 check_alerts_tool = types.Tool(
     name="check_alerts",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+    annotations=ToolAnnotations(
+        readOnlyHint=False, idempotentHint=False, openWorldHint=True
+    ),
     description=(
         "Check all saved topic watches for newly published papers since the last check. "
         "Omitting the topic parameter runs ALL saved watches and returns new papers for each. "
