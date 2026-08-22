@@ -23,7 +23,10 @@ read_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "Read the text content of a paper that was previously downloaded via download_paper. "
-        "Returns the paper in markdown format and supports start/max_chars pagination for large papers. "
+        "Returns the paper in markdown format, bounded to roughly 12,000 characters by default "
+        "so one call cannot return an unbounded paper body. When is_truncated is true, call again "
+        "with start=next_start (see next_retrieval) to continue, or pass return_full_text=true "
+        "for the entire remaining paper. "
         "Will fail with a clear error if the paper has not been downloaded yet — call download_paper first. "
         "Workflow: search_papers -> download_paper -> read_paper."
     ),
@@ -37,12 +40,25 @@ read_tool = types.Tool(
             "start": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Zero-based character offset for reading large papers in chunks",
+                "description": (
+                    "Zero-based character offset for reading large papers in chunks; "
+                    "pass next_start from a prior truncated response to continue"
+                ),
             },
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum raw paper characters to return from start; omit for full content",
+                "description": (
+                    "Maximum raw paper characters to return from start; "
+                    "omit for the bounded default (12,000 chars)"
+                ),
+            },
+            "return_full_text": {
+                "type": "boolean",
+                "description": (
+                    "Set true to opt out of the bounded default and return the "
+                    "entire remaining paper from start in one call"
+                ),
             },
         },
         "required": ["paper_id"],

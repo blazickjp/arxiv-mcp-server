@@ -335,3 +335,60 @@ async def test_download_rejects_invalid_id_forms(raw_id):
     result = json.loads(response[0].text)
     assert result["status"] == "error"
     assert "Invalid arXiv ID" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_download_paper_defaults_to_bounded_cached_content(
+    temp_storage_path, mocker
+):
+    """Omitting max_chars on download_paper returns a bounded chunk (#127)."""
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.content import DEFAULT_MAX_CHARS
+
+    paper_id = "2103.12345"
+    content = "C" * (DEFAULT_MAX_CHARS + 2_500)
+    _write_cached_paper(temp_storage_path, paper_id, content)
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mock_html = mocker.patch.object(download_module, "_fetch_html_content")
+    mock_pdf = mocker.patch.object(download_module, "_fetch_pdf_content")
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["source"] == "cache"
+    assert result["content_length"] == len(content)
+    assert result["returned_chars"] == DEFAULT_MAX_CHARS
+    assert result["is_truncated"] is True
+    assert result["next_start"] == DEFAULT_MAX_CHARS
+    assert "next_retrieval" in result
+    body = result["content"].split("\n\n", 1)[1]
+    assert len(body) == DEFAULT_MAX_CHARS
+    mock_html.assert_not_called()
+    mock_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_paper_return_full_text_opt_in(temp_storage_path, mocker):
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.content import DEFAULT_MAX_CHARS
+
+    paper_id = "2103.12345"
+    content = "D" * (DEFAULT_MAX_CHARS + 1_200)
+    _write_cached_paper(temp_storage_path, paper_id, content)
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+
+    response = await handle_download({"paper_id": paper_id, "return_full_text": True})
+    result = json.loads(response[0].text)
+
+    assert result["is_truncated"] is False
+    assert result["returned_chars"] == len(content)
+    assert result["next_start"] is None
