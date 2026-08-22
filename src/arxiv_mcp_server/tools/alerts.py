@@ -78,6 +78,7 @@ check_alerts_tool = types.Tool(
         "re-hit the boundary); last_checked tracks the newest returned paper. When the page is "
         "not full, last_checked becomes now and the drain cursor resets. "
         "Use watch_topic to register topics before calling this. "
+        "Returns a clear not-found error if a topic is provided but no matching watch exists. "
         "Returns a summary with new paper counts, has_more, and full paper metadata per topic."
     ),
     inputSchema={
@@ -302,6 +303,20 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
         payload = _load_watches()
         all_topics = payload.get("topics", [])
         topics = _filter_by_topic(all_topics, selected_topic)
+
+        # A specific topic that matches nothing must not look like "no new papers".
+        if selected_topic is not None and not topics:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"Watch not found: {selected_topic}",
+                        }
+                    ),
+                )
+            ]
 
         now_iso = _now_iso()
         alerts: List[Dict[str, Any]] = []
