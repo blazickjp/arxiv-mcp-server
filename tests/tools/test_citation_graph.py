@@ -105,10 +105,15 @@ async def test_citation_graph_success():
 
 @pytest.mark.asyncio
 async def test_citation_graph_http_error():
-    """Citation graph should surface HTTP API errors."""
+    """Citation graph should surface HTTP API errors without leaking S2 URLs."""
     mock_response = MagicMock()
     mock_response.status_code = 500
-    mock_response.raise_for_status.side_effect = Exception("boom")
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Client error '500 Internal Server Error' for url "
+        "'https://api.semanticscholar.org/graph/v1/paper/ARXIV:2401.12345'",
+        request=MagicMock(),
+        response=mock_response,
+    )
 
     mock_client = _mock_async_client([mock_response])
 
@@ -116,6 +121,9 @@ async def test_citation_graph_http_error():
         response = await handle_citation_graph({"paper_id": "2401.12345"})
 
     assert response[0].text.startswith("Error:")
+    assert "semanticscholar.org" not in response[0].text
+    assert "https://" not in response[0].text
+    assert "HTTP 500" in response[0].text
 
 
 @pytest.mark.asyncio
@@ -228,3 +236,83 @@ async def test_citation_graph_neighbors_include_arxiv_id_from_external_ids():
     neighbor_fields = mock_client.get.call_args_list[1].kwargs["params"]["fields"]
     assert neighbor_fields == citation_graph_module.NEIGHBOR_FIELDS
     assert "externalIds" in neighbor_fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "paper_id,expected_version",
+    [("1706.03762v1", "v1"), ("1706.03762v7", "v7")],
+)
+async def test_citation_graph_strips_version_for_s2_lookup(paper_id, expected_version):
+    """Versioned arXiv IDs must query Semantic Scholar with the bare ARXIV id."""
+    paper_payload = {
+        **PAPER_PAYLOAD,
+        "externalIds": {"ArXiv": "1706.03762"},
+    }
+    mock_client = _mock_async_client(
+        [
+            _json_response(paper_payload),
+            _json_response(CITATIONS_PAYLOAD),
+            _json_response(REFERENCES_PAYLOAD),
+        ]
+    )
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        response = await handle_citation_graph({"paper_id": paper_id})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert payload["paper"]["arxiv_id"] == "1706.03762"
+    assert payload["paper"]["requested_arxiv_id"] == paper_id
+    assert payload["paper"]["requested_version"] == expected_version
+
+    paper_url = mock_client.get.call_args_list[0].args[0]
+    assert paper_url.endswith("/paper/ARXIV:1706.03762")
+    assert expected_version not in paper_url.split("/paper/", 1)[1]
+    assert (
+        mock_client.get.call_args_list[1]
+        .args[0]
+        .endswith("/paper/ARXIV:1706.03762/citations")
+    )
+    assert (
+        mock_client.get.call_args_list[2]
+        .args[0]
+        .endswith("/paper/ARXIV:1706.03762/references")
+    )
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_bare_id_omits_requested_version_fields():
+    """Bare IDs should not invent requested_version metadata."""
+    mock_client = _mock_async_client(_success_responses())
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        response = await handle_citation_graph({"paper_id": "2401.12345"})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert payload["paper"]["arxiv_id"] == "2401.12345"
+    assert "requested_arxiv_id" not in payload["paper"]
+    assert "requested_version" not in payload["paper"]
+    assert mock_client.get.call_args_list[0].args[0].endswith("/paper/ARXIV:2401.12345")
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_404_does_not_leak_s2_url():
+    """404 responses must not expose the Semantic Scholar request URL."""
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Client error '404 Not Found' for url "
+        "'https://api.semanticscholar.org/graph/v1/paper/ARXIV:1706.03762v1'",
+        request=MagicMock(),
+        response=mock_response,
+    )
+    mock_client = _mock_async_client([mock_response])
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        response = await handle_citation_graph({"paper_id": "1706.03762v1"})
+
+    assert response[0].text == "Error: paper not found on Semantic Scholar"
+    assert "semanticscholar.org" not in response[0].text
+    assert "https://" not in response[0].text

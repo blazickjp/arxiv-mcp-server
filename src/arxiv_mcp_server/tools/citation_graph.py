@@ -13,7 +13,12 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
-from .arxiv_ids import is_valid_arxiv_id, normalize_arxiv_id
+from .arxiv_ids import (
+    arxiv_version_suffix,
+    bare_arxiv_id,
+    is_valid_arxiv_id,
+    normalize_arxiv_id,
+)
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -166,8 +171,11 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
                 types.TextContent(type="text", text="Error: invalid arXiv ID format")
             ]
 
+        # Semantic Scholar indexes bare arXiv IDs only; strip vN for lookup.
+        bare_id = bare_arxiv_id(paper_id)
+        requested_version = arxiv_version_suffix(paper_id)
         limit = _bound_max_citations(arguments.get("max_citations"))
-        s2_paper_identifier = quote(f"ARXIV:{paper_id}", safe=":")
+        s2_paper_identifier = quote(f"ARXIV:{bare_id}", safe=":")
         paper_url = f"{SEMANTIC_SCHOLAR_API_URL}/paper/{s2_paper_identifier}"
         citations_url = f"{paper_url}/citations"
         references_url = f"{paper_url}/references"
@@ -186,18 +194,23 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             _neighbor_papers(references_response.json(), "citedPaper")
         )
 
+        paper_meta = {
+            "paper_id": payload.get("paperId"),
+            "arxiv_id": bare_id,
+            "title": payload.get("title", ""),
+            "year": payload.get("year"),
+            "authors": [
+                author.get("name", "") for author in payload.get("authors", [])
+            ],
+            "external_ids": payload.get("externalIds") or {},
+        }
+        if requested_version is not None:
+            paper_meta["requested_arxiv_id"] = paper_id
+            paper_meta["requested_version"] = requested_version
+
         result = {
             "status": "success",
-            "paper": {
-                "paper_id": payload.get("paperId"),
-                "arxiv_id": paper_id,
-                "title": payload.get("title", ""),
-                "year": payload.get("year"),
-                "authors": [
-                    author.get("name", "") for author in payload.get("authors", [])
-                ],
-                "external_ids": payload.get("externalIds") or {},
-            },
+            "paper": paper_meta,
             "citation_count": len(citations),
             "reference_count": len(references),
             "citation_total": payload.get("citationCount"),
@@ -216,11 +229,21 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         if exc.response is not None and exc.response.status_code == 429:
             logger.error("Semantic Scholar rate limited: %s", exc)
             return [types.TextContent(type="text", text=f"Error: {RATE_LIMIT_MESSAGE}")]
-        logger.error("Semantic Scholar HTTP error: %s", exc)
+        status = exc.response.status_code if exc.response is not None else None
+        # Never leak upstream status lines / URLs (issue #166 class).
+        logger.error("Semantic Scholar HTTP error: status=%s", status)
+        if status == 404:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="Error: paper not found on Semantic Scholar",
+                )
+            ]
+        detail = f" (HTTP {status})" if status is not None else ""
         return [
             types.TextContent(
                 type="text",
-                text=f"Error: Semantic Scholar API HTTP error - {str(exc)}",
+                text=f"Error: Semantic Scholar API HTTP error{detail}",
             )
         ]
     except Exception as exc:
