@@ -201,6 +201,63 @@ def test_flatten_source_does_not_follow_unsafe_or_cyclic_inputs():
     assert len(flattened) < 1000
 
 
+def test_flatten_source_resolves_two_arg_import_and_subimport():
+    files = {
+        "main.tex": (
+            "\\documentclass{article}\n"
+            "\\begin{document}\n"
+            "\\import{sections/}{intro}\n"
+            "\\end{document}\n"
+        ),
+        "sections/intro.tex": ("\\section{Introduction}\n\\subimport{./}{method}\n"),
+        "sections/method.tex": "\\subsection{Method}\nDetails.\n",
+    }
+
+    flattened, main_file, unmatched = latex._flatten_source_with_unmatched(files)
+
+    assert main_file == "main.tex"
+    assert "\\section{Introduction}" in flattened
+    assert "\\subsection{Method}" in flattened
+    assert "Details." in flattened
+    assert "\\import{sections/}{intro}" not in flattened
+    assert "\\subimport{./}{method}" not in flattened
+    assert unmatched == ()
+
+
+def test_flatten_source_resolves_import_from_archive_root():
+    files = {
+        "nested/paper.tex": (
+            "\\documentclass{article}\n"
+            "\\begin{document}\n"
+            "\\import{shared/}{defs}\n"
+            "\\end{document}\n"
+        ),
+        "shared/defs.tex": "\\section{Definitions}\nTerms.",
+    }
+
+    flattened, main_file = latex._flatten_source(files)
+
+    assert main_file == "nested/paper.tex"
+    assert "\\section{Definitions}" in flattened
+    assert "Terms." in flattened
+
+
+def test_flatten_source_does_not_escape_via_import():
+    files = {
+        "main.tex": (
+            "\\documentclass{article}\n"
+            "\\import{../}{secret}\n"
+            "\\begin{document}\n\\end{document}\n"
+        ),
+        "../secret.tex": "must not appear",
+    }
+
+    flattened, _main, unmatched = latex._flatten_source_with_unmatched(files)
+
+    assert "must not appear" not in flattened
+    assert any("import" in item for item in unmatched)
+
+
 def test_parse_sections_returns_stable_hierarchical_ids():
     source = r"""
 \section{Introduction}
@@ -367,6 +424,33 @@ async def test_get_latex_honors_explicit_page(monkeypatch):
     assert payload["content"].endswith("fghi")
     assert payload["start"] == 5
     assert payload["next_start"] == 9
+
+
+@pytest.mark.asyncio
+async def test_list_latex_sections_errors_when_outline_empty(monkeypatch):
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(
+            content=(
+                "\\documentclass{article}\\usepackage{import}"
+                "\\begin{document}\\end{document}"
+            ),
+            main_file="main.tex",
+            source_files=2,
+            unmatched_includes=("\\import{sections/}{intro}",),
+        ),
+    )
+
+    payload = _payload(
+        await latex.handle_list_paper_latex_sections({"paper_id": "2401.00001"})
+    )
+
+    assert payload["status"] == "error"
+    assert "did not resolve" in payload["message"]
+    assert "read_paper" in payload["message"]
+    assert "HTML" in payload["message"]
+    assert "\\import{sections/}{intro}" in payload["message"]
 
 
 @pytest.mark.asyncio
