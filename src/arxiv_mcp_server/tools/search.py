@@ -182,6 +182,7 @@ def build_arxiv_search_url(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     categories: Optional[List[str]] = None,
+    start: int = 0,
 ) -> str:
     """Build a raw arXiv API URL with a percent-encoded search_query."""
     final_query = build_arxiv_search_query(
@@ -197,8 +198,10 @@ def build_arxiv_search_url(
         "date": "submittedDate",
     }
     encoded_query = quote(final_query, safe="")
+    start = max(0, int(start))
     base_params = (
-        f"max_results={max_results}"
+        f"start={start}"
+        f"&max_results={max_results}"
         f"&sortBy={sort_map.get(sort_by, 'relevance')}"
         f"&sortOrder=descending"
     )
@@ -212,6 +215,7 @@ async def _raw_arxiv_search(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     categories: Optional[List[str]] = None,
+    start: int = 0,
 ) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Perform arXiv search using raw HTTP requests.
@@ -230,6 +234,7 @@ async def _raw_arxiv_search(
         date_from=date_from,
         date_to=date_to,
         categories=categories,
+        start=start,
     )
     logger.debug(f"Raw API URL: {url}")
 
@@ -269,16 +274,31 @@ def _build_search_response(
     *,
     total_results: Optional[int] = None,
     has_more: Optional[bool] = None,
+    start: int = 0,
 ) -> Dict[str, Any]:
-    """Assemble search JSON. Never report page size as total_results."""
+    """Assemble search JSON. Never report page size as total_results.
+
+    Pagination mirrors read_paper / content helpers: ``start`` is the
+    zero-based offset for this page and ``next_start`` is set when more
+    results remain (otherwise None).
+    """
     returned = len(papers)
-    response: Dict[str, Any] = {"returned": returned, "papers": papers}
+    start = max(0, int(start))
+    response: Dict[str, Any] = {
+        "returned": returned,
+        "start": start,
+        "papers": papers,
+    }
     if total_results is not None:
         response["total_results"] = total_results
         if has_more is None:
-            has_more = total_results > returned
+            has_more = total_results > (start + returned)
     if has_more is not None:
         response["has_more"] = bool(has_more)
+    if response.get("has_more"):
+        response["next_start"] = start + returned
+    else:
+        response["next_start"] = None
     return response
 
 
@@ -429,7 +449,7 @@ DATE FILTERING: Use YYYY-MM-DD format for historical research:
 
 RESULT QUALITY: Default sort is RELEVANCE (most pertinent results first). Use sort_by: "date" to get newest papers first.
 Choose relevance for focused topic searches; choose date for monitoring recent developments.
-Each response reports total_results (arXiv corpus hit count, not page size), returned (papers in this page), and has_more.
+Each response reports total_results (arXiv corpus hit count, not page size), returned (papers in this page), has_more, start, and next_start (use start=next_start to fetch the next page).
 
 RATE LIMITING: arXiv enforces a 3-second minimum between requests. This server handles that automatically.
 If you see a rate limit error, wait 60 seconds before retrying — do not call the tool repeatedly in a loop.
@@ -448,6 +468,11 @@ TIPS FOR FOUNDATIONAL RESEARCH:
             "max_results": {
                 "type": "integer",
                 "description": "Maximum number of results to return (default: 10, max: 50). Use 15-20 for comprehensive searches.",
+            },
+            "start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based offset into the arXiv result set (default: 0). Pass next_start from a previous response to fetch the next page.",
             },
             "date_from": {
                 "type": "string",
@@ -537,6 +562,11 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """
     try:
         max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
+        start_arg = arguments.get("start", 0)
+        try:
+            start = max(0, int(start_arg))
+        except (TypeError, ValueError):
+            start = 0
         base_query = arguments["query"]
         date_from_arg = arguments.get("date_from")
         date_to_arg = arguments.get("date_to")
@@ -544,7 +574,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
         sort_by_arg = arguments.get("sort_by", "relevance")
 
         logger.debug(
-            f"Starting search with query: '{base_query}', max_results: {max_results}"
+            f"Starting search with query: '{base_query}', max_results: {max_results}, start: {start}"
         )
 
         # Validate categories if provided
@@ -574,13 +604,14 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     date_from=date_from_arg,
                     date_to=date_to_arg,
                     categories=categories,
+                    start=start,
                 )
 
                 logger.info(
                     f"Raw API search completed: {len(results)} results returned"
                 )
                 response_data = _build_search_response(
-                    results, total_results=total_results
+                    results, total_results=total_results, start=start
                 )
 
                 return [
@@ -639,17 +670,19 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
             logger.debug("Using relevance sorting (most relevant first)")
 
         # Request one extra hit so has_more is real, not a page-size guess.
+        # Client.results(offset=start) yields up to (max_results - offset)
+        # papers, so bump Search.max_results by start to keep the page size.
         fetch_limit = max_results + 1
         search = arxiv.Search(
             query=final_query,
-            max_results=fetch_limit,
+            max_results=start + fetch_limit,
             sort_by=sort_criterion,
         )
 
         def fetch_results() -> List[Dict[str, Any]]:
             client.page_size = fetch_limit
             results = []
-            for paper in client.results(search):
+            for paper in client.results(search, offset=start):
                 results.append(_process_paper(paper))
                 if len(results) >= fetch_limit:
                     break
@@ -670,7 +703,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
         has_more = len(fetched) > max_results
         results = fetched[:max_results]
         logger.info(f"Search completed: {len(results)} results returned")
-        response_data = _build_search_response(results, has_more=has_more)
+        response_data = _build_search_response(results, has_more=has_more, start=start)
 
         return [
             types.TextContent(type="text", text=json.dumps(response_data, indent=2))

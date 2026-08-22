@@ -36,8 +36,10 @@ async def test_basic_search(mock_client):
         assert len(result) == 1
         content = json.loads(result[0].text)
         assert content["returned"] == 1
+        assert content["start"] == 0
         assert "total_results" not in content
         assert content["has_more"] is False
+        assert content["next_start"] is None
         paper = content["papers"][0]
         assert paper["id"] == "2103.12345"
         assert paper["title"] == "Test Paper"
@@ -111,7 +113,9 @@ async def test_search_with_dates():
         content = json.loads(result[0].text)
         assert content["total_results"] == 42
         assert content["returned"] == 1
+        assert content["start"] == 0
         assert content["has_more"] is True
+        assert content["next_start"] == 1
         assert len(content["papers"]) == 1
 
 
@@ -272,7 +276,7 @@ async def test_search_reuses_client_and_updates_page_size_inside_gate(
     monkeypatch.setattr(config, "_arxiv_client", None)
     observed_page_sizes = []
 
-    def results(_search):
+    def results(_search, offset=0):
         observed_page_sizes.append(mock_client.page_size)
         return [mock_paper]
 
@@ -422,7 +426,9 @@ def test_parse_opensearch_total_results_from_atom_feed():
     payload = _build_search_response(papers, total_results=1234)
     assert payload["total_results"] == 1234
     assert payload["returned"] == 5
+    assert payload["start"] == 0
     assert payload["has_more"] is True
+    assert payload["next_start"] == 5
     assert len(payload["papers"]) == 5
 
 
@@ -460,7 +466,9 @@ async def test_search_reports_feed_total_results_not_page_size():
     content = json.loads(result[0].text)
     assert content["total_results"] == 1234
     assert content["returned"] == 5
+    assert content["start"] == 0
     assert content["has_more"] is True
+    assert content["next_start"] == 5
     assert len(content["papers"]) == 5
     assert content["total_results"] != content["returned"]
 
@@ -485,7 +493,158 @@ async def test_client_path_has_more_from_extra_fetched_paper(mock_paper):
 
     content = json.loads(result[0].text)
     assert content["returned"] == 1
+    assert content["start"] == 0
     assert content["has_more"] is True
+    assert content["next_start"] == 1
     assert "total_results" not in content
     assert len(content["papers"]) == 1
     assert content["papers"][0]["id"] == "2103.12345"
+
+
+def test_build_search_response_next_start_accounts_for_offset():
+    """has_more/next_start must use start + returned, not just returned."""
+    papers = [{"id": str(i)} for i in range(5)]
+    payload = _build_search_response(papers, total_results=14, start=10)
+    assert payload["start"] == 10
+    assert payload["returned"] == 5
+    assert payload["total_results"] == 14
+    assert payload["has_more"] is False
+    assert payload["next_start"] is None
+
+    payload = _build_search_response(papers, total_results=100, start=10)
+    assert payload["has_more"] is True
+    assert payload["next_start"] == 15
+
+
+@pytest.mark.asyncio
+async def test_raw_search_passes_start_to_arxiv_api():
+    """Date-filter path must forward start to the arXiv API URL."""
+    mock_response = MagicMock()
+    mock_response.text = _atom_feed_with_totals(entry_count=2, total_results=14)
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        result = await handle_search(
+            {
+                "query": "transformers",
+                "date_from": "2020-01-01",
+                "max_results": 2,
+                "start": 5,
+            }
+        )
+
+        from urllib.parse import parse_qs, urlparse
+
+        url = mock_client.get.call_args[0][0]
+        params = parse_qs(urlparse(url).query)
+        assert params["start"] == ["5"]
+        assert params["max_results"] == ["2"]
+
+    content = json.loads(result[0].text)
+    assert content["start"] == 5
+    assert content["returned"] == 2
+    assert content["total_results"] == 14
+    assert content["has_more"] is True
+    assert content["next_start"] == 7
+
+
+@pytest.mark.asyncio
+async def test_raw_search_end_of_results_clears_next_start():
+    """Last page should set has_more=false and next_start=null."""
+    mock_response = MagicMock()
+    mock_response.text = _atom_feed_with_totals(entry_count=4, total_results=14)
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client
+
+        result = await handle_search(
+            {
+                "query": "transformers",
+                "date_from": "2020-01-01",
+                "max_results": 10,
+                "start": 10,
+            }
+        )
+
+    content = json.loads(result[0].text)
+    assert content["start"] == 10
+    assert content["returned"] == 4
+    assert content["total_results"] == 14
+    assert content["has_more"] is False
+    assert content["next_start"] is None
+
+
+@pytest.mark.asyncio
+async def test_client_path_start_offset_page_two(mock_paper):
+    """Client path must pass offset=start and return next_start for page 2."""
+    papers = []
+    for i in range(3):
+        p = MagicMock()
+        p.get_short_id.return_value = f"2103.1000{i}"
+        p.title = f"Paper {i}"
+        p.authors = mock_paper.authors
+        p.summary = f"Abstract {i}"
+        p.categories = ["cs.LG"]
+        p.published = mock_paper.published
+        p.pdf_url = f"https://arxiv.org/pdf/2103.1000{i}"
+        papers.append(p)
+
+    client = MagicMock()
+    # max_results=2 requests fetch_limit=3; 3 papers => has_more
+    client.results.return_value = papers
+
+    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+        result = await handle_search(
+            {"query": "test query", "max_results": 2, "start": 10}
+        )
+
+    args, kwargs = client.results.call_args
+    assert kwargs.get("offset", args[1] if len(args) > 1 else None) == 10
+    search_arg = args[0]
+    assert search_arg.max_results == 13  # start + max_results + 1
+
+    content = json.loads(result[0].text)
+    assert content["start"] == 10
+    assert content["returned"] == 2
+    assert content["has_more"] is True
+    assert content["next_start"] == 12
+    assert content["papers"][0]["id"] == "2103.10000"
+
+
+@pytest.mark.asyncio
+async def test_client_path_end_of_results_no_next_start(mock_paper):
+    """Client path end page: fewer than max_results => next_start null."""
+    client = MagicMock()
+    client.results.return_value = [mock_paper]  # only one left
+
+    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+        result = await handle_search(
+            {"query": "test query", "max_results": 5, "start": 20}
+        )
+
+    content = json.loads(result[0].text)
+    assert content["start"] == 20
+    assert content["returned"] == 1
+    assert content["has_more"] is False
+    assert content["next_start"] is None
+
+
+def test_search_tool_schema_includes_start():
+    """Tool schema exposes optional start (>=0) for pagination."""
+    from arxiv_mcp_server.tools.search import search_tool
+
+    props = search_tool.inputSchema["properties"]
+    assert "start" in props
+    assert props["start"]["type"] == "integer"
+    assert props["start"]["minimum"] == 0
