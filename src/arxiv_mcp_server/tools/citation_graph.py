@@ -22,9 +22,9 @@ SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1"
 DEFAULT_MAX_CITATIONS = 50
 MAX_CITATIONS_CAP = 200
 PAPER_FIELDS = "title,year,authors,externalIds,citationCount,referenceCount"
-# Neighbors omit externalIds — that field set is expensive on Attention-scale
-# papers and is the usual cause of unauthenticated 429s.
-NEIGHBOR_FIELDS = "paperId,title,year,authors"
+# Include externalIds so neighbors can expose arxiv_id for download/get_abstract
+# hops. Keep default max_citations=50 and 429 retries to stay under quota.
+NEIGHBOR_FIELDS = "paperId,title,year,authors,externalIds"
 RATE_LIMIT_MESSAGE = (
     "Semantic Scholar rate-limited; set SEMANTIC_SCHOLAR_API_KEY or try again later"
 )
