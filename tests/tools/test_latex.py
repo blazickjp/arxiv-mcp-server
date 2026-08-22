@@ -328,6 +328,85 @@ def test_parse_sections_ignores_commented_headings():
     assert [(item.section_id, item.title) for item in sections] == [("1", "Real")]
 
 
+def test_parse_sections_expands_simple_title_macros():
+    source = r"""
+\newcommand{\cinnamon}{Llama 2}
+\newcommand{\modelname}{\textsc{Llama 2-Chat}\xspace}
+\def\anise{Llama 1}
+\section{Introduction}
+Intro.
+\subsection{\cinnamon Pretrained Model Evaluation}
+Details.
+\section{\modelname Alignment}
+Chat.
+\subsection{\anise Baseline}
+Prior.
+"""
+
+    sections = latex._parse_sections(source)
+
+    assert [(item.section_id, item.title) for item in sections] == [
+        ("1", "Introduction"),
+        ("1.1", "Llama 2 Pretrained Model Evaluation"),
+        ("2", "Llama 2-Chat Alignment"),
+        ("2.1", "Llama 1 Baseline"),
+    ]
+    body = latex._extract_section(
+        source, sections, "Llama 2 Pretrained Model Evaluation"
+    )
+    assert body is not None
+    assert body.startswith("\\subsection{\\cinnamon Pretrained Model Evaluation}")
+    assert "\\section{\\modelname Alignment}" not in body
+    # Raw macro title and messy whitespace/case still resolve.
+    assert latex._extract_section(
+        source, sections, "\\cinnamon Pretrained Model Evaluation"
+    )
+    assert latex._extract_section(
+        source, sections, "  llama 2   pretrained model evaluation "
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_latex_section_by_expanded_human_title(monkeypatch):
+    source = (
+        "\\newcommand{\\cinnamon}{Llama 2}\n"
+        "\\section{Intro}\nA\n"
+        "\\subsection{\\cinnamon Pretrained Model Evaluation}\nBody text\n"
+        "\\section{Next}\nNope\n"
+    )
+    monkeypatch.setattr(
+        latex,
+        "_load_source",
+        lambda _paper_id: latex.LatexSource(source, "main.tex", 1),
+    )
+
+    listed = _payload(
+        await latex.handle_list_paper_latex_sections({"paper_id": "2401.00001"})
+    )
+    assert listed["sections"][1]["title"] == "Llama 2 Pretrained Model Evaluation"
+
+    by_title = _payload(
+        await latex.handle_get_paper_latex_section(
+            {
+                "paper_id": "2401.00001",
+                "section_id": "Llama 2 Pretrained Model Evaluation",
+            }
+        )
+    )
+    by_id = _payload(
+        await latex.handle_get_paper_latex_section(
+            {"paper_id": "2401.00001", "section_id": "1.1"}
+        )
+    )
+
+    assert by_title["status"] == "success"
+    assert by_title["section"]["id"] == "1.1"
+    assert by_title["section"]["title"] == "Llama 2 Pretrained Model Evaluation"
+    assert "Body text" in by_title["content"]
+    assert "Nope" not in by_title["content"]
+    assert by_id["section"]["title"] == by_title["section"]["title"]
+
+
 def test_download_archive_aborts_when_stream_exceeds_limit(monkeypatch):
     monkeypatch.setattr(latex, "MAX_ARCHIVE_BYTES", 5)
     response = MagicMock()

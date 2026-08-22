@@ -45,9 +45,12 @@ from .latex_flatten import (
     MAX_SECTION_COUNT,
     MAX_SECTION_TITLE_CHARS,
     LatexSection,
+    _collect_macros,
     _extract_section,
+    _find_section,
     _flatten_source as _flatten_source_impl,
     _flatten_source_with_unmatched as _flatten_source_with_unmatched_impl,
+    _mask_tex_comments,
     _parse_sections,
     _resolve_include,
 )
@@ -308,7 +311,7 @@ list_paper_latex_sections_tool = types.Tool(
 get_paper_latex_section_tool = types.Tool(
     name="get_paper_latex_section",
     annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True),
-    description="Return one bounded LaTeX section by outline ID or exact title.",
+    description="Return one bounded LaTeX section by outline ID or title (whitespace/case normalized; macros expanded).",
     inputSchema={
         "type": "object",
         "properties": {
@@ -316,7 +319,7 @@ get_paper_latex_section_tool = types.Tool(
             "section_id": {
                 "type": "string",
                 "maxLength": 200,
-                "description": "Section ID from list_paper_latex_sections or exact title",
+                "description": "Section ID from list_paper_latex_sections or section title",
             },
             **_page_properties(),
         },
@@ -438,18 +441,14 @@ async def handle_get_paper_latex_section(
     try:
         source = await asyncio.to_thread(_load_source, paper_id)
         sections = _parse_sections(source.content)
-        content = _extract_section(source.content, sections, section_id)
-        if content is None:
+        macros = _collect_macros(source.content, _mask_tex_comments(source.content))
+        section = _find_section(sections, section_id, macros)
+        if section is None:
             return _error(
                 f"LaTeX section {section_id!r} not found; call list_paper_latex_sections first",
                 paper_id,
             )
-        section = next(
-            item
-            for item in sections
-            if item.section_id.casefold() == section_id.strip().casefold()
-            or item.title.casefold() == section_id.strip().casefold()
-        )
+        content = source.content[section.start : section.end].rstrip()
         payload: dict[str, Any] = {
             "status": "success",
             "paper_id": paper_id,
