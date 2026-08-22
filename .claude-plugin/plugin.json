@@ -2,7 +2,7 @@
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
   "name": "arxiv-mcp-server",
   "displayName": "arXiv MCP Server",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Search, download, read, and analyze arXiv papers through MCP.",
   "author": {
     "name": "Joseph Blazick"
