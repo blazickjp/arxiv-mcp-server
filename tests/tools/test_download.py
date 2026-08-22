@@ -284,3 +284,54 @@ def test_html_to_text_extracts_article_text():
     # because nav/footer ARE in SKIP_TAGS — verify they're gone
     assert "Nav stuff" not in text
     assert "Footer" not in text
+
+
+# ---------------------------------------------------------------------------
+# Shared ID normalization (issue #200)
+# ---------------------------------------------------------------------------
+
+_ID_FORM_CASES = [
+    ("1810.04805", "1810.04805"),
+    ("arxiv:1810.04805", "1810.04805"),
+    ("https://arxiv.org/abs/1810.04805", "1810.04805"),
+    ("https://arxiv.org/pdf/1810.04805.pdf", "1810.04805"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_id, expected", _ID_FORM_CASES)
+async def test_download_paper_id_normalize_matrix(
+    temp_storage_path, mocker, raw_id, expected
+):
+    """download_paper accepts bare / arxiv: / abs / pdf forms via parse_arxiv_id."""
+    from arxiv_mcp_server.tools import download as download_module
+
+    _write_cached_paper(temp_storage_path, expected, "# Cached\nNormalized ID path.")
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mock_html = mocker.patch.object(download_module, "_fetch_html_content")
+    mock_pdf = mocker.patch.object(download_module, "_fetch_pdf_content")
+
+    response = await handle_download({"paper_id": raw_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["paper_id"] == expected
+    assert result["source"] == "cache"
+    mock_html.assert_not_called()
+    mock_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_id",
+    ["not-a-paper", "arxiv:not-a-paper", "https://example.com/abs/1810.04805"],
+)
+async def test_download_rejects_invalid_id_forms(raw_id):
+    response = await handle_download({"paper_id": raw_id})
+    result = json.loads(response[0].text)
+    assert result["status"] == "error"
+    assert "Invalid arXiv ID" in result["message"]

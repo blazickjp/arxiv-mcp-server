@@ -54,7 +54,7 @@ from .latex_flatten import (
     _parse_sections,
     _resolve_include,
 )
-from .list_papers import is_valid_arxiv_id
+from .arxiv_ids import parse_arxiv_id
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -142,10 +142,10 @@ def _normalized_paper_id(arguments: dict[str, Any]) -> str | None:
     value = arguments.get("paper_id")
     if not isinstance(value, str):
         return None
-    paper_id = value.strip()
-    if len(paper_id) > MAX_PAPER_ID_CHARS:
+    paper_id = parse_arxiv_id(value)
+    if paper_id is None or len(paper_id) > MAX_PAPER_ID_CHARS:
         return None
-    return paper_id if is_valid_arxiv_id(paper_id) else None
+    return paper_id
 
 
 def _bounded_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
