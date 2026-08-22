@@ -33,6 +33,12 @@ _MACRO_DEF_RE = re.compile(
     r"\s*(?:{\\([A-Za-z@]+)}|\\([A-Za-z@]+))"
     r"(?:\[(\d+)\])?(?:\[[^{}]*\])?"
 )
+_DEF_MACRO_RE = re.compile(r"\\(?:g)?def\s*\\([A-Za-z@]+)")
+_TITLE_STYLE_RE = re.compile(
+    r"\\(?:textsc|textrm|textsf|texttt|textit|textbf|emph|underline|"
+    r"mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}"
+)
+_XSPACE_RE = re.compile(r"\\xspace(?![A-Za-z@])")
 
 _INCLUDE_OR_SECTION_RE = re.compile(
     r"\\(?:subimport|subinputfrom|subincludefrom|import|inputfrom|"
@@ -110,8 +116,43 @@ def _skip_ws(source: str, index: int) -> int:
     return index
 
 
-def _plain_section_title(raw: str) -> str:
-    """Prefer the text argument of \\texorpdfstring{pdf}{text} when present."""
+def _normalize_heading(value: str) -> str:
+    """Casefold and collapse whitespace for human title matching."""
+    return re.sub(r"\s+", " ", value.strip()).casefold()
+
+
+def _strip_title_markup(title: str) -> str:
+    """Unwrap common text-style commands left after simple macro expansion."""
+    title = _XSPACE_RE.sub("", title)
+    for _ in range(MAX_MACRO_ROUNDS):
+        updated = _TITLE_STYLE_RE.sub(r"\1", title)
+        if updated == title:
+            break
+        title = updated
+    # Drop empty groups often left after macros written as \\name{}
+    title = title.replace("{}", "")
+    return title
+
+
+def _expand_title_macros(title: str, macros: dict[str, tuple[int, str]]) -> str:
+    """Expand simple macros inside a section title (not only include wrappers)."""
+    if not macros:
+        return title
+    # Prefer 0-arg macros; fall back to all collected macros if needed.
+    simple = {name: spec for name, spec in macros.items() if spec[0] == 0}
+    expandable = simple or macros
+    for _ in range(MAX_MACRO_ROUNDS):
+        masked = _mask_tex_comments(title)
+        title, changed = _expand_macros_once(title, masked, expandable)
+        if not changed:
+            break
+    return title
+
+
+def _plain_section_title(
+    raw: str, macros: dict[str, tuple[int, str]] | None = None
+) -> str:
+    """Prefer texorpdfstring text; expand simple macros; strip style markup."""
     title = raw.strip()
     prefix = "\\texorpdfstring"
     if title.startswith(prefix):
@@ -121,6 +162,9 @@ def _plain_section_title(raw: str) -> str:
             second = _balanced_arg(title, _skip_ws(title, first[1]))
             if second is not None:
                 title = second[0].strip()
+    if macros:
+        title = _expand_title_macros(title, macros)
+    title = _strip_title_markup(title)
     title = re.sub(r"\s+", " ", title).strip()
     return title[:MAX_SECTION_TITLE_CHARS]
 
@@ -135,6 +179,16 @@ def _collect_macros(text: str, masked: str) -> dict[str, tuple[int, str]]:
         if extracted is None:
             continue
         macros[name] = (nargs, extracted[0])
+    for match in _DEF_MACRO_RE.finditer(masked):
+        name = match.group(1)
+        body_start = _skip_ws(masked, match.end())
+        # Skip parameterized \\def\\name#1{...}; only simple replacements.
+        if body_start < len(masked) and masked[body_start] == "#":
+            continue
+        extracted = _balanced_arg(text, body_start)
+        if extracted is None:
+            continue
+        macros.setdefault(name, (0, extracted[0]))
     return macros
 
 
@@ -320,7 +374,9 @@ def _parse_sections(source: str) -> list[LatexSection]:
     raw: list[tuple[int, str, str, int]] = []
     levels = {"section": 1, "subsection": 2, "subsubsection": 3}
     counters = [0, 0, 0]
-    masked = _mask_macro_definitions(_mask_tex_comments(source))
+    comment_masked = _mask_tex_comments(source)
+    macros = _collect_macros(source, comment_masked)
+    masked = _mask_macro_definitions(comment_masked)
     for match in _SECTION_CMD_RE.finditer(masked):
         if len(raw) >= MAX_SECTION_COUNT:
             raise SourceArchiveLimitError("LaTeX source contains too many sections")
@@ -329,10 +385,9 @@ def _parse_sections(source: str) -> list[LatexSection]:
             fallback = _SECTION_RE.match(masked[match.start() :])
             if fallback is None:
                 continue
-            title = re.sub(r"\s+", " ", fallback.group(2)).strip()
-            title = title[:MAX_SECTION_TITLE_CHARS]
+            title = _plain_section_title(fallback.group(2), macros)
         else:
-            title = _plain_section_title(extracted[0])
+            title = _plain_section_title(extracted[0], macros)
         if not title:
             continue
         level = levels[match.group(1)]
@@ -353,14 +408,36 @@ def _parse_sections(source: str) -> list[LatexSection]:
     return sections
 
 
+def _find_section(
+    sections: list[LatexSection],
+    section_id: str,
+    macros: dict[str, tuple[int, str]] | None = None,
+) -> LatexSection | None:
+    """Match by section id or normalized title (expanded and raw forms)."""
+    raw = section_id.strip()
+    if not raw:
+        return None
+    id_needle = raw.casefold()
+    title_needle = _normalize_heading(raw)
+    expanded_needle = (
+        _normalize_heading(_plain_section_title(raw, macros)) if macros else None
+    )
+    for section in sections:
+        if section.section_id.casefold() == id_needle:
+            return section
+        normalized_title = _normalize_heading(section.title)
+        if normalized_title == title_needle:
+            return section
+        if expanded_needle and normalized_title == expanded_needle:
+            return section
+    return None
+
+
 def _extract_section(
     source: str, sections: list[LatexSection], section_id: str
 ) -> str | None:
-    needle = section_id.strip().casefold()
-    for section in sections:
-        if (
-            section.section_id.casefold() == needle
-            or section.title.casefold() == needle
-        ):
-            return source[section.start : section.end].rstrip()
-    return None
+    macros = _collect_macros(source, _mask_tex_comments(source))
+    section = _find_section(sections, section_id, macros)
+    if section is None:
+        return None
+    return source[section.start : section.end].rstrip()
