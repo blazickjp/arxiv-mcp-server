@@ -1,6 +1,5 @@
 """Search functionality for the arXiv MCP server."""
 
-import arxiv
 import json
 import logging
 import httpx
@@ -12,8 +11,8 @@ from datetime import datetime, timezone
 from dateutil import parser
 import mcp.types as types
 from mcp.types import ToolAnnotations
-from ..config import Settings, get_arxiv_client
-from ..arxiv_api import ARXIV_RATE_LIMITER, canonical_pdf_url
+from ..config import Settings
+from ..arxiv_api import ARXIV_RATE_LIMITER
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -539,26 +538,13 @@ def _optimize_query(query: str) -> str:
     return query
 
 
-def _process_paper(paper: arxiv.Result) -> Dict[str, Any]:
-    """Process paper information with resource URI."""
-    return {
-        "id": paper.get_short_id(),
-        "title": paper.title,
-        "authors": [author.name for author in paper.authors],
-        "abstract": "[EXTERNAL CONTENT] " + paper.summary,
-        "categories": paper.categories,
-        "published": paper.published.isoformat(),
-        "url": canonical_pdf_url(paper),
-        "resource_uri": f"arxiv://{paper.get_short_id()}",
-    }
-
-
 async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle paper search requests with improved arXiv API integration.
+    """Handle paper search requests via the arXiv Atom API.
 
-    Uses raw HTTP requests when date filtering is requested to avoid URL encoding
-    issues with the arxiv Python package. Falls back to the arxiv package for
-    non-date queries for better compatibility.
+    Always uses raw HTTP so OpenSearch ``totalResults`` (corpus hit count)
+    is available for every query — including those without date filters
+    (see #189). Raw requests also avoid the arxiv package URL-encoding
+    bug that breaks ``submittedDate`` ranges.
     """
     try:
         max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
@@ -586,134 +572,37 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 )
             ]
 
-        # Use raw HTTP API when date filtering is requested
-        # This bypasses the arxiv package's URL encoding which breaks date syntax
-        if date_from_arg or date_to_arg:
-            logger.debug(
-                f"Date filtering requested - using raw API: {date_from_arg} to {date_to_arg}"
+        try:
+            optimized_query = _optimize_query(base_query) if base_query.strip() else ""
+            results, total_results = await _raw_arxiv_search(
+                query=optimized_query,
+                max_results=max_results,
+                sort_by=sort_by_arg,
+                date_from=date_from_arg,
+                date_to=date_to_arg,
+                categories=categories,
+                start=start,
             )
 
-            try:
-                optimized_query = (
-                    _optimize_query(base_query) if base_query.strip() else ""
-                )
-                results, total_results = await _raw_arxiv_search(
-                    query=optimized_query,
-                    max_results=max_results,
-                    sort_by=sort_by_arg,
-                    date_from=date_from_arg,
-                    date_to=date_to_arg,
-                    categories=categories,
-                    start=start,
-                )
+            logger.info(f"Search completed: {len(results)} results returned")
+            response_data = _build_search_response(
+                results, total_results=total_results, start=start
+            )
 
-                logger.info(
-                    f"Raw API search completed: {len(results)} results returned"
-                )
-                response_data = _build_search_response(
-                    results, total_results=total_results, start=start
-                )
-
-                return [
-                    types.TextContent(
-                        type="text", text=json.dumps(response_data, indent=2)
-                    )
-                ]
-
-            except httpx.HTTPStatusError as e:
-                logger.error(f"arXiv API HTTP error: {e}")
-                return [
-                    types.TextContent(
-                        type="text", text=f"Error: arXiv API HTTP error - {str(e)}"
-                    )
-                ]
-            except ValueError as e:
-                return [types.TextContent(type="text", text=f"Error: {str(e)}")]
-
-        # For non-date queries, use the shared arxiv client (lazy, avoids eager import overhead)
-        client = get_arxiv_client()
-
-        # Build query components
-        query_parts = []
-
-        # Add base query with optimization
-        if base_query.strip():
-            optimized_query = _optimize_query(base_query)
-            query_parts.append(_scope_user_query(optimized_query))
-            if optimized_query != base_query:
-                logger.debug(f"Optimized query: '{base_query}' -> '{optimized_query}'")
-
-        # Add category filtering
-        if categories:
-            category_filter = " OR ".join(f"cat:{cat}" for cat in categories)
-            query_parts.append(f"({category_filter})")
-            logger.debug(f"Added category filter: {category_filter}")
-
-        # Combine query parts
-        if not query_parts:
             return [
-                types.TextContent(
-                    type="text", text="Error: No search criteria provided"
-                )
+                types.TextContent(type="text", text=json.dumps(response_data, indent=2))
             ]
 
-        # Combine query parts - arXiv uses space for AND by default
-        final_query = " ".join(query_parts)
-        logger.debug(f"Final arXiv query: {final_query}")
-
-        # Determine sort method
-        if sort_by_arg == "date":
-            sort_criterion = arxiv.SortCriterion.SubmittedDate
-            logger.debug("Using date sorting (newest first)")
-        else:
-            sort_criterion = arxiv.SortCriterion.Relevance
-            logger.debug("Using relevance sorting (most relevant first)")
-
-        # Request one extra hit so has_more is real, not a page-size guess.
-        # Client.results(offset=start) yields up to (max_results - offset)
-        # papers, so bump Search.max_results by start to keep the page size.
-        fetch_limit = max_results + 1
-        search = arxiv.Search(
-            query=final_query,
-            max_results=start + fetch_limit,
-            sort_by=sort_criterion,
-        )
-
-        def fetch_results() -> List[Dict[str, Any]]:
-            client.page_size = fetch_limit
-            results = []
-            for paper in client.results(search, offset=start):
-                results.append(_process_paper(paper))
-                if len(results) >= fetch_limit:
-                    break
-            return results
-
-        try:
-            fetched = await asyncio.to_thread(
-                ARXIV_RATE_LIMITER.run_sync, fetch_results
-            )
-        except arxiv.ArxivError as e:
-            if "429" in str(e) or "rate" in str(e).lower() or "503" in str(e):
-                logger.warning(f"arXiv rate limited — not retrying: {e}")
-                raise RuntimeError(
-                    "arXiv is rate limiting this IP. Please wait 60 seconds before retrying."
+        except httpx.HTTPStatusError as e:
+            logger.error(f"arXiv API HTTP error: {e}")
+            return [
+                types.TextContent(
+                    type="text", text=f"Error: arXiv API HTTP error - {str(e)}"
                 )
-            raise
+            ]
+        except ValueError as e:
+            return [types.TextContent(type="text", text=f"Error: {str(e)}")]
 
-        has_more = len(fetched) > max_results
-        results = fetched[:max_results]
-        logger.info(f"Search completed: {len(results)} results returned")
-        response_data = _build_search_response(results, has_more=has_more, start=start)
-
-        return [
-            types.TextContent(type="text", text=json.dumps(response_data, indent=2))
-        ]
-
-    except arxiv.ArxivError as e:
-        logger.error(f"ArXiv API error: {e}")
-        return [
-            types.TextContent(type="text", text=f"Error: ArXiv API error - {str(e)}")
-        ]
     except Exception as e:
         logger.error(f"Unexpected search error: {e}")
         return [types.TextContent(type="text", text=f"Error: {str(e)}")]

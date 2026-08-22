@@ -27,17 +27,34 @@ def disable_request_spacing_for_search_unit_tests(monkeypatch):
     monkeypatch.setattr(config, "_arxiv_client", None)
 
 
+def _mock_httpx_response(xml_text: str):
+    """Patch httpx.AsyncClient to return an Atom feed body."""
+    mock_response = MagicMock()
+    mock_response.text = xml_text
+    mock_response.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    return mock_response, mock_client
+
+
 @pytest.mark.asyncio
-async def test_basic_search(mock_client):
-    """Test basic paper search functionality."""
-    with patch("arxiv.Client", return_value=mock_client):
+async def test_basic_search():
+    """Test basic paper search includes OpenSearch total_results (#189)."""
+    xml = _atom_feed_with_totals(entry_count=1, total_results=1)
+    # Use a fixed id matching historical fixture expectations where possible.
+    xml = xml.replace("2301.00001", "2103.12345").replace("Test Paper 1", "Test Paper")
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test query", "max_results": 1})
 
         assert len(result) == 1
         content = json.loads(result[0].text)
         assert content["returned"] == 1
         assert content["start"] == 0
-        assert "total_results" not in content
+        assert content["total_results"] == 1
         assert content["has_more"] is False
         assert content["next_start"] is None
         paper = content["papers"][0]
@@ -47,29 +64,53 @@ async def test_basic_search(mock_client):
 
 
 @pytest.mark.asyncio
-async def test_package_search_uses_process_wide_rate_limiter(mock_client, mocker):
-    """The arxiv package path must share the same gate as raw API requests."""
-    mocker.patch.object(search_module, "get_arxiv_client", return_value=mock_client)
-    run_sync = mocker.patch.object(
+async def test_search_uses_process_wide_rate_limiter(mocker):
+    """All search_papers requests share the process-wide arXiv gate."""
+    xml = _atom_feed_with_totals(entry_count=1, total_results=1)
+    _, mock_client = _mock_httpx_response(xml)
+
+    async def run_async(operation):
+        return await operation()
+
+    mocked = mocker.patch.object(
         search_module.ARXIV_RATE_LIMITER,
-        "run_sync",
-        side_effect=lambda operation: operation(),
+        "run_async",
+        side_effect=run_async,
     )
 
-    await handle_search({"query": "test query", "max_results": 1})
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        await handle_search({"query": "test query", "max_results": 1})
 
-    run_sync.assert_called_once()
+    mocked.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_search_with_categories(mock_client):
-    """Test paper search with category filtering."""
-    with patch("arxiv.Client", return_value=mock_client):
+async def test_search_with_categories():
+    """Test paper search with category filtering via raw Atom API."""
+    xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:arxiv=\"http://arxiv.org/schemas/atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">
+        <opensearch:totalResults>1</opensearch:totalResults>
+        <entry>
+            <id>http://arxiv.org/abs/2103.12345v1</id>
+            <title>Test Paper</title>
+            <summary>Test abstract</summary>
+            <published>2023-01-01T00:00:00Z</published>
+            <author><name>John Doe</name></author>
+            <arxiv:primary_category term=\"cs.AI\"/>
+            <category term=\"cs.AI\"/>
+            <category term=\"cs.LG\"/>
+            <link title=\"pdf\" href=\"http://arxiv.org/pdf/2103.12345v1\"/>
+        </entry>
+    </feed>"""
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search(
             {"query": "test query", "categories": ["cs.AI", "cs.LG"], "max_results": 1}
         )
 
         content = json.loads(result[0].text)
+        assert content["total_results"] == 1
         assert content["papers"][0]["categories"] == ["cs.AI", "cs.LG"]
 
 
@@ -210,109 +251,138 @@ async def test_raw_arxiv_search_builds_correct_url():
 
 
 @pytest.mark.asyncio
-async def test_search_with_invalid_categories(mock_client):
+async def test_search_with_invalid_categories():
     """Test search with invalid categories."""
-    with patch("arxiv.Client", return_value=mock_client):
-        result = await handle_search(
-            {
-                "query": "test query",
-                "categories": ["invalid.category"],
-                "max_results": 1,
-            }
-        )
+    result = await handle_search(
+        {
+            "query": "test query",
+            "categories": ["invalid.category"],
+            "max_results": 1,
+        }
+    )
 
-        assert "Error: Invalid category" in result[0].text
+    assert "Error: Invalid category" in result[0].text
 
 
 @pytest.mark.asyncio
-async def test_search_empty_query(mock_client):
+async def test_search_empty_query():
     """Test search with empty query but categories."""
-    with patch("arxiv.Client", return_value=mock_client):
+    xml = _atom_feed_with_totals(entry_count=1, total_results=7)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search(
             {"query": "", "categories": ["cs.AI"], "max_results": 1}
         )
 
-        # Should still work with just categories
         content = json.loads(result[0].text)
         assert "papers" in content
+        assert content["total_results"] == 7
 
 
 @pytest.mark.asyncio
-async def test_search_arxiv_error(mock_client):
-    """Test handling of arXiv API errors."""
-    import arxiv
+async def test_search_arxiv_http_error():
+    """Test handling of arXiv HTTP API errors."""
+    import httpx
 
-    # Create proper ArxivError with required parameters
-    error = arxiv.ArxivError("http://example.com", retry=3, message="API Error")
-    mock_client.results.side_effect = error
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    with patch(
-        "arxiv_mcp_server.tools.search.get_arxiv_client", return_value=mock_client
-    ):
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=error)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test", "max_results": 1})
 
-        assert "ArXiv API error" in result[0].text
+        assert "arXiv API HTTP error" in result[0].text
 
 
 @pytest.mark.asyncio
-async def test_search_max_results_limiting(mock_client):
+async def test_search_max_results_limiting():
     """Test that max_results is properly limited."""
-    with patch("arxiv.Client", return_value=mock_client):
-        # Test that very large max_results gets capped
+    xml = _atom_feed_with_totals(entry_count=1, total_results=50)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client) as mock_cls:
         result = await handle_search({"query": "test", "max_results": 1000})
 
-        # Should not fail and should be limited by settings.MAX_RESULTS
         content = json.loads(result[0].text)
         assert "papers" in content
+        assert content["total_results"] == 50
+        from urllib.parse import parse_qs, urlparse
+
+        url = mock_client.get.call_args[0][0]
+        params = parse_qs(urlparse(url).query)
+        # Cap is settings.MAX_RESULTS (50)
+        assert int(params["max_results"][0]) <= 50
 
 
 @pytest.mark.asyncio
-async def test_search_reuses_client_and_updates_page_size_inside_gate(
-    mock_client, mock_paper, monkeypatch
-):
-    """Varying result limits must reuse one client without stale page sizes."""
-    from arxiv_mcp_server import config
+async def test_search_forwards_varying_max_results_to_arxiv_api():
+    """Varying max_results must be forwarded on the raw Atom query URL."""
+    xml = _atom_feed_with_totals(entry_count=1, total_results=100)
+    _, mock_client = _mock_httpx_response(xml)
+    observed = []
 
-    monkeypatch.setattr(config, "_arxiv_client", None)
-    observed_page_sizes = []
+    async def capture_get(url, **kwargs):
+        from urllib.parse import parse_qs, urlparse
 
-    def results(_search, offset=0):
-        observed_page_sizes.append(mock_client.page_size)
-        return [mock_paper]
+        observed.append(int(parse_qs(urlparse(url).query)["max_results"][0]))
+        resp = MagicMock()
+        resp.text = xml
+        resp.raise_for_status = MagicMock()
+        return resp
 
-    mock_client.page_size = 100
-    mock_client.results.side_effect = results
-    with patch("arxiv.Client", return_value=mock_client) as mock_client_class:
+    mock_client.get = AsyncMock(side_effect=capture_get)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         await handle_search({"query": "first", "max_results": 5})
         await handle_search({"query": "second", "max_results": 7})
 
-    mock_client_class.assert_called_once_with()
-    # Client path requests max_results+1 so has_more is not a page-size guess.
-    assert observed_page_sizes == [6, 8]
+    assert observed == [5, 7]
 
 
 @pytest.mark.asyncio
-async def test_search_sort_by_relevance(mock_client):
+async def test_search_sort_by_relevance():
     """Test search with relevance sorting (default)."""
-    with patch("arxiv.Client", return_value=mock_client):
+    xml = _atom_feed_with_totals(entry_count=1, total_results=3)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test", "sort_by": "relevance"})
 
         content = json.loads(result[0].text)
         assert "papers" in content
+        assert content["total_results"] == 3
+        from urllib.parse import parse_qs, urlparse
+
+        url = mock_client.get.call_args[0][0]
+        assert parse_qs(urlparse(url).query)["sortBy"] == ["relevance"]
 
 
 @pytest.mark.asyncio
-async def test_search_sort_by_date(mock_client):
+async def test_search_sort_by_date():
     """Test search with date sorting."""
-    with patch("arxiv.Client", return_value=mock_client):
+    xml = _atom_feed_with_totals(entry_count=1, total_results=3)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test", "sort_by": "date"})
 
         content = json.loads(result[0].text)
         assert "papers" in content
+        assert content["total_results"] == 3
+        from urllib.parse import parse_qs, urlparse
+
+        url = mock_client.get.call_args[0][0]
+        assert parse_qs(urlparse(url).query)["sortBy"] == ["submittedDate"]
 
 
 @pytest.mark.asyncio
-async def test_search_no_query_optimization(mock_client):
+async def test_search_no_query_optimization():
     """Test that queries are not automatically modified."""
     from arxiv_mcp_server.tools.search import _optimize_query
 
@@ -474,29 +544,21 @@ async def test_search_reports_feed_total_results_not_page_size():
 
 
 @pytest.mark.asyncio
-async def test_client_path_has_more_from_extra_fetched_paper(mock_paper):
-    """Without Atom totals, the client path uses max_results+1 to set has_more."""
-    extra = MagicMock()
-    extra.get_short_id.return_value = "2103.99999"
-    extra.title = "Extra Paper"
-    extra.authors = mock_paper.authors
-    extra.summary = "Extra abstract"
-    extra.categories = ["cs.LG"]
-    extra.published = mock_paper.published
-    extra.pdf_url = "https://arxiv.org/pdf/2103.99999"
+async def test_search_includes_total_results_without_date_filters():
+    """Issue #189: total_results present even when date_from/date_to are absent."""
+    xml = _atom_feed_with_totals(entry_count=1, total_results=4142)
+    xml = xml.replace("2301.00001", "2103.12345")
+    _, mock_client = _mock_httpx_response(xml)
 
-    client = MagicMock()
-    client.results.return_value = [mock_paper, extra]
-
-    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test query", "max_results": 1})
 
     content = json.loads(result[0].text)
     assert content["returned"] == 1
     assert content["start"] == 0
+    assert content["total_results"] == 4142
     assert content["has_more"] is True
     assert content["next_start"] == 1
-    assert "total_results" not in content
     assert len(content["papers"]) == 1
     assert content["papers"][0]["id"] == "2103.12345"
 
@@ -586,49 +648,41 @@ async def test_raw_search_end_of_results_clears_next_start():
 
 
 @pytest.mark.asyncio
-async def test_client_path_start_offset_page_two(mock_paper):
-    """Client path must pass offset=start and return next_start for page 2."""
-    papers = []
-    for i in range(3):
-        p = MagicMock()
-        p.get_short_id.return_value = f"2103.1000{i}"
-        p.title = f"Paper {i}"
-        p.authors = mock_paper.authors
-        p.summary = f"Abstract {i}"
-        p.categories = ["cs.LG"]
-        p.published = mock_paper.published
-        p.pdf_url = f"https://arxiv.org/pdf/2103.1000{i}"
-        papers.append(p)
+async def test_search_start_offset_page_two_without_dates():
+    """Without dates, start is forwarded and total_results drives next_start."""
+    xml = _atom_feed_with_totals(entry_count=2, total_results=100)
+    # Rewrite ids to stable values
+    xml = xml.replace("2301.00001", "2103.10000").replace("2301.00002", "2103.10001")
+    _, mock_client = _mock_httpx_response(xml)
 
-    client = MagicMock()
-    # max_results=2 requests fetch_limit=3; 3 papers => has_more
-    client.results.return_value = papers
-
-    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search(
             {"query": "test query", "max_results": 2, "start": 10}
         )
 
-    args, kwargs = client.results.call_args
-    assert kwargs.get("offset", args[1] if len(args) > 1 else None) == 10
-    search_arg = args[0]
-    assert search_arg.max_results == 13  # start + max_results + 1
+        from urllib.parse import parse_qs, urlparse
+
+        url = mock_client.get.call_args[0][0]
+        params = parse_qs(urlparse(url).query)
+        assert params["start"] == ["10"]
+        assert params["max_results"] == ["2"]
 
     content = json.loads(result[0].text)
     assert content["start"] == 10
     assert content["returned"] == 2
+    assert content["total_results"] == 100
     assert content["has_more"] is True
     assert content["next_start"] == 12
     assert content["papers"][0]["id"] == "2103.10000"
 
 
 @pytest.mark.asyncio
-async def test_client_path_end_of_results_no_next_start(mock_paper):
-    """Client path end page: fewer than max_results => next_start null."""
-    client = MagicMock()
-    client.results.return_value = [mock_paper]  # only one left
+async def test_search_end_of_results_no_next_start_without_dates():
+    """Last page without dates: has_more false and next_start null."""
+    xml = _atom_feed_with_totals(entry_count=1, total_results=21)
+    _, mock_client = _mock_httpx_response(xml)
 
-    with patch("arxiv_mcp_server.tools.search.get_arxiv_client", return_value=client):
+    with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search(
             {"query": "test query", "max_results": 5, "start": 20}
         )
@@ -636,6 +690,7 @@ async def test_client_path_end_of_results_no_next_start(mock_paper):
     content = json.loads(result[0].text)
     assert content["start"] == 20
     assert content["returned"] == 1
+    assert content["total_results"] == 21
     assert content["has_more"] is False
     assert content["next_start"] is None
 
