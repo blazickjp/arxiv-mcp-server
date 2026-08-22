@@ -13,7 +13,6 @@ from arxiv_mcp_server.tools.download import (
     handle_download,
 )
 
-
 ARXIV_CHROME_FIXTURE = """
 <html>
   <head><title>Attention Is All You Need</title></head>
