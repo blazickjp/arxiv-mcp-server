@@ -394,103 +394,63 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 search_tool = types.Tool(
     name="search_papers",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
-    description="""Search for papers on arXiv with advanced filtering and query optimization.
-
-QUERY CONSTRUCTION GUIDELINES:
-- Use QUOTED PHRASES for exact matches: "multi-agent systems", "neural networks", "machine learning"
-- Combine related concepts with OR: "AI agents" OR "software agents" OR "intelligent agents"  
-- Use field-specific searches for precision:
-  - ti:"exact title phrase" - search in titles only
-  - au:"author name" - search by author
-  - abs:"keyword" - search in abstracts only
-- Use ANDNOT to exclude unwanted results: "machine learning" ANDNOT "survey"
-- For best results, use 2-4 core concepts rather than long keyword lists
-
-ADVANCED SEARCH PATTERNS:
-- Field + phrase: ti:"transformer architecture" for papers with exact title phrase
-- Multiple fields: au:"Smith" AND ti:"quantum" for author Smith's quantum papers  
-- Exclusions: "deep learning" ANDNOT ("survey" OR "review") to exclude survey papers
-- Broad + narrow: "artificial intelligence" AND (robotics OR "computer vision")
-
-CATEGORY FILTERING (highly recommended for relevance):
-Computer Science:
-- cs.AI: Artificial Intelligence
-- cs.LG: Machine Learning
-- cs.CL: Computation and Language (NLP)
-- cs.CV: Computer Vision
-- cs.MA: Multi-Agent Systems
-- cs.RO: Robotics
-- cs.NE: Neural and Evolutionary Computing
-- cs.IR: Information Retrieval
-- cs.HC: Human-Computer Interaction
-- cs.CR: Cryptography and Security
-- cs.DB: Databases
-Statistics & Math:
-- stat.ML: Machine Learning (Statistics)
-- stat.AP: Applications
-- math.OC: Optimization and Control
-- math.ST: Statistics Theory
-Physics & Other:
-- quant-ph: Quantum Physics
-- eess.SP: Signal Processing
-- eess.AS: Audio and Speech Processing
-- physics.data-an: Data Analysis and Statistics
-
-EXAMPLES OF EFFECTIVE QUERIES:
-- ti:"reinforcement learning" with categories: ["cs.LG", "cs.AI"] - for RL papers by title
-- au:"Hinton" AND "deep learning" with categories: ["cs.LG"] - for Hinton's deep learning work
-- "multi-agent" ANDNOT "survey" with categories: ["cs.MA"] - exclude survey papers
-- abs:"transformer" AND ti:"attention" with categories: ["cs.CL"] - attention papers with transformer abstracts
-
-DATE FILTERING: Use YYYY-MM-DD format for historical research:
-- date_to: "2015-12-31" - for foundational/classic work (pre-2016)
-- date_from: "2020-01-01" - for recent developments (post-2020)
-- Both together for specific time periods
-
-RESULT QUALITY: Default sort is RELEVANCE (most pertinent results first). Use sort_by: "date" to get newest papers first.
-Choose relevance for focused topic searches; choose date for monitoring recent developments.
-Each response reports total_results (arXiv corpus hit count, not page size), returned (papers in this page), has_more, start, and next_start (use start=next_start to fetch the next page).
-
-RATE LIMITING: arXiv enforces a 3-second minimum between requests. This server handles that automatically.
-If you see a rate limit error, wait 60 seconds before retrying — do not call the tool repeatedly in a loop.
-
-TIPS FOR FOUNDATIONAL RESEARCH:
-- Use date_to: "2010-12-31" to find classic papers on BDI, SOAR, ACT-R
-- Combine with field searches: ti:"BDI" AND abs:"belief desire intention"  
-- Try author searches: au:"Rao" AND "BDI" for Anand Rao's foundational BDI work""",
+    description=(
+        "Search arXiv by query with optional categories, date range, sort, and pagination.\n\n"
+        "Query: prefer quoted phrases; field prefixes ti:/au:/abs:/cat:; AND/OR/ANDNOT. "
+        "Unprefixed terms match title+abstract (not authors). "
+        "Use categories for relevance (e.g. cs.AI, cs.LG, cs.CL, cs.CV, cs.MA, cs.RO, "
+        "stat.ML, quant-ph). Full category catalog and worked examples: README "
+        "'search_papers query guide'.\n\n"
+        "Dates: YYYY-MM-DD via date_from/date_to. sort_by: relevance (default) or date "
+        "(newest first). max_results default 10 (cap 50). start default 0; responses "
+        "include total_results (corpus hits), returned, has_more, next_start.\n\n"
+        "arXiv enforces ~3s between requests (handled server-side). On rate-limit "
+        "errors wait ~60s before retrying."
+    ),
     inputSchema={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": 'Search query using quoted phrases for exact matches (e.g., \'"machine learning" OR "deep learning"\') or specific technical terms. Avoid overly broad or generic terms.',
+                "description": (
+                    "arXiv query string. Prefer quoted phrases and ti:/au:/abs:/cat: "
+                    "field prefixes; AND/OR/ANDNOT supported."
+                ),
             },
             "max_results": {
                 "type": "integer",
-                "description": "Maximum number of results to return (default: 10, max: 50). Use 15-20 for comprehensive searches.",
+                "description": "Maximum results to return (default: 10, max: 50).",
             },
             "start": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Zero-based offset into the arXiv result set (default: 0). Pass next_start from a previous response to fetch the next page.",
+                "description": (
+                    "Zero-based result offset (default: 0). Pass next_start from a "
+                    "previous response to fetch the next page."
+                ),
             },
             "date_from": {
                 "type": "string",
-                "description": "Start date for papers (YYYY-MM-DD format). Use to find recent work, e.g., '2023-01-01' for last 2 years.",
+                "description": "Inclusive start date (YYYY-MM-DD).",
             },
             "date_to": {
                 "type": "string",
-                "description": "End date for papers (YYYY-MM-DD format). Use with date_from to find historical work, e.g., '2020-12-31' for older research.",
+                "description": "Inclusive end date (YYYY-MM-DD).",
             },
             "categories": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Strongly recommended: arXiv categories to focus search (e.g., ['cs.AI', 'cs.MA'] for agent research, ['cs.LG'] for ML, ['cs.CL'] for NLP, ['cs.CV'] for vision). Greatly improves relevance.",
+                "description": (
+                    "arXiv category filters (e.g. ['cs.LG', 'cs.AI']). Strongly "
+                    "improves relevance."
+                ),
             },
             "sort_by": {
                 "type": "string",
                 "enum": ["relevance", "date"],
-                "description": "Sort results by 'relevance' (most relevant first, default) or 'date' (newest first). Use 'relevance' for focused searches, 'date' for recent developments.",
+                "description": (
+                    "Sort by 'relevance' (default) or 'date' (newest first)."
+                ),
             },
         },
         "required": ["query"],
