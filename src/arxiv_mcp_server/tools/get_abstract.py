@@ -18,10 +18,10 @@ abstract_tool = types.Tool(
     name="get_abstract",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
-        "Fetch the abstract and metadata of an arXiv paper by ID, WITHOUT downloading the full paper. "
-        "Use this before download_paper to assess relevance and save tokens. "
-        "Returns: title, authors, abstract, categories, published date, and PDF URL. "
-        "Workflow tip: search_papers -> get_abstract (check relevance) -> download_paper (if needed) -> read_paper."
+        "Fetch abstract and metadata by arXiv ID without downloading the paper. "
+        "Use before download_paper to assess relevance. Returns title, authors, "
+        "abstract, categories, published date, and PDF URL. After compact search, "
+        "use for one full abstract; skip if search used abstract_mode=full."
     ),
     inputSchema={
         "type": "object",

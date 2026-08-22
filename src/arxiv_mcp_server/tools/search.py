@@ -17,6 +17,14 @@ from ..arxiv_api import ARXIV_RATE_LIMITER
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
 
+# Tool defaults (#128): compact pages by default.
+DEFAULT_MAX_RESULTS = 5
+DEFAULT_ABSTRACT_MODE = "snippet"
+ABSTRACT_SNIPPET_CHARS = 280
+ABSTRACT_MODES = ("none", "snippet", "full")
+_ABSTRACT_TRUNCATION_MARK = "… [truncated]"
+_EXTERNAL_CONTENT_PREFIX = "[EXTERNAL CONTENT] "
+
 ARXIV_HEADERS = {
     "User-Agent": (
         f"{settings.APP_NAME}/{settings.APP_VERSION} "
@@ -176,7 +184,7 @@ def build_arxiv_search_query(
 
 def build_arxiv_search_url(
     query: str,
-    max_results: int = 10,
+    max_results: int = DEFAULT_MAX_RESULTS,
     sort_by: str = "relevance",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -209,7 +217,7 @@ def build_arxiv_search_url(
 
 async def _raw_arxiv_search(
     query: str,
-    max_results: int = 10,
+    max_results: int = DEFAULT_MAX_RESULTS,
     sort_by: str = "relevance",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -268,24 +276,80 @@ def _parse_opensearch_total_results(xml_text: str) -> Optional[int]:
         return None
 
 
+def _normalize_abstract_mode(value: Any) -> str:
+    """Return a valid abstract_mode or raise ValueError."""
+    if value is None:
+        return DEFAULT_ABSTRACT_MODE
+    if not isinstance(value, str):
+        raise ValueError(
+            "abstract_mode must be one of: none, snippet, full "
+            f"(got {type(value).__name__})"
+        )
+    mode = value.strip().lower()
+    if mode not in ABSTRACT_MODES:
+        raise ValueError(
+            f"abstract_mode must be one of: none, snippet, full (got {value!r})"
+        )
+    return mode
+
+
+def _snippet_abstract(abstract: str, max_chars: int = ABSTRACT_SNIPPET_CHARS) -> str:
+    """Return a deterministic bounded abstract snippet, marked when truncated."""
+    if abstract.startswith(_EXTERNAL_CONTENT_PREFIX):
+        prefix = _EXTERNAL_CONTENT_PREFIX
+        body = abstract[len(_EXTERNAL_CONTENT_PREFIX) :]
+    else:
+        prefix = ""
+        body = abstract
+
+    if len(body) <= max_chars:
+        return abstract
+
+    # Fixed-length slice (no word-boundary heuristics) for stable output.
+    return prefix + body[:max_chars].rstrip() + _ABSTRACT_TRUNCATION_MARK
+
+
+def _apply_abstract_mode(
+    papers: List[Dict[str, Any]], abstract_mode: str
+) -> List[Dict[str, Any]]:
+    """Project paper dicts according to abstract_mode without mutating inputs."""
+    mode = _normalize_abstract_mode(abstract_mode)
+    projected: List[Dict[str, Any]] = []
+    for paper in papers:
+        item = dict(paper)
+        if mode == "none":
+            item.pop("abstract", None)
+        elif mode == "snippet":
+            abstract = item.get("abstract")
+            if isinstance(abstract, str):
+                item["abstract"] = _snippet_abstract(abstract)
+        # mode == "full": keep abstract as parsed
+        projected.append(item)
+    return projected
+
+
 def _build_search_response(
     papers: List[Dict[str, Any]],
     *,
     total_results: Optional[int] = None,
     has_more: Optional[bool] = None,
     start: int = 0,
+    abstract_mode: str = DEFAULT_ABSTRACT_MODE,
 ) -> Dict[str, Any]:
     """Assemble search JSON. Never report page size as total_results.
 
     Pagination mirrors read_paper / content helpers: ``start`` is the
     zero-based offset for this page and ``next_start`` is set when more
-    results remain (otherwise None).
+    results remain (otherwise None). ``abstract_mode`` is echoed so
+    clients can continue pagination with the same projection.
     """
     returned = len(papers)
     start = max(0, int(start))
+    mode = _normalize_abstract_mode(abstract_mode)
     response: Dict[str, Any] = {
         "returned": returned,
         "start": start,
+        "abstract_mode": mode,
         "papers": papers,
     }
     if total_results is not None:
@@ -336,7 +400,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
             # Abstract/Summary
             summary_elem = entry.find("atom:summary", ARXIV_NS)
-            abstract = "[EXTERNAL CONTENT] " + (
+            abstract = _EXTERNAL_CONTENT_PREFIX + (
                 summary_elem.text.strip().replace("\n", " ")
                 if summary_elem is not None and summary_elem.text
                 else ""
@@ -396,16 +460,16 @@ search_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Search arXiv by query with optional categories, date range, sort, and pagination.\n\n"
-        "Query: prefer quoted phrases; field prefixes ti:/au:/abs:/cat:; AND/OR/ANDNOT. "
+        "Query: prefer quoted phrases; ti:/au:/abs:/cat:; AND/OR/ANDNOT. "
         "Unprefixed terms match title+abstract (not authors). "
-        "Use categories for relevance (e.g. cs.AI, cs.LG, cs.CL, cs.CV, cs.MA, cs.RO, "
-        "stat.ML, quant-ph). Full category catalog and worked examples: README "
-        "'search_papers query guide'.\n\n"
-        "Dates: YYYY-MM-DD via date_from/date_to. sort_by: relevance (default) or date "
-        "(newest first). max_results default 10 (cap 50). start default 0; responses "
-        "include total_results (corpus hits), returned, has_more, next_start.\n\n"
-        "arXiv enforces ~3s between requests (handled server-side). On rate-limit "
-        "errors wait ~60s before retrying."
+        "Use categories (cs.AI, cs.LG, cs.CL, cs.CV, cs.MA, cs.RO, stat.ML, quant-ph). "
+        "Catalog/examples: README 'search_papers query guide'.\n\n"
+        "Dates YYYY-MM-DD (date_from/date_to). sort_by relevance|date. "
+        "max_results default 5 (cap 50). abstract_mode none|snippet|full (default snippet). "
+        "start default 0; response: total_results, returned, has_more, next_start, "
+        "abstract_mode. Pass next_start with same abstract_mode. "
+        "Use get_abstract after compact search — not after abstract_mode=full.\n\n"
+        "arXiv ~3s between requests (server-side). On rate-limit wait ~60s."
     ),
     inputSchema={
         "type": "object",
@@ -419,7 +483,7 @@ search_tool = types.Tool(
             },
             "max_results": {
                 "type": "integer",
-                "description": "Maximum results to return (default: 10, max: 50).",
+                "description": "Maximum results to return (default: 5, max: 50).",
             },
             "start": {
                 "type": "integer",
@@ -427,6 +491,14 @@ search_tool = types.Tool(
                 "description": (
                     "Zero-based result offset (default: 0). Pass next_start from a "
                     "previous response to fetch the next page."
+                ),
+            },
+            "abstract_mode": {
+                "type": "string",
+                "enum": ["none", "snippet", "full"],
+                "description": (
+                    "Abstract projection (default snippet ~280 chars, marked if "
+                    "truncated; full=complete; none=omit)."
                 ),
             },
             "date_from": {
@@ -508,12 +580,21 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
     bug that breaks ``submittedDate`` ranges.
     """
     try:
-        max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
+        max_results = min(
+            int(arguments.get("max_results", DEFAULT_MAX_RESULTS)),
+            settings.MAX_RESULTS,
+        )
         start_arg = arguments.get("start", 0)
         try:
             start = max(0, int(start_arg))
         except (TypeError, ValueError):
             start = 0
+        try:
+            abstract_mode = _normalize_abstract_mode(
+                arguments.get("abstract_mode", DEFAULT_ABSTRACT_MODE)
+            )
+        except ValueError as e:
+            return [types.TextContent(type="text", text=f"Error: {str(e)}")]
         base_query = arguments["query"]
         date_from_arg = arguments.get("date_from")
         date_to_arg = arguments.get("date_to")
@@ -521,7 +602,12 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
         sort_by_arg = arguments.get("sort_by", "relevance")
 
         logger.debug(
-            f"Starting search with query: '{base_query}', max_results: {max_results}, start: {start}"
+            "Starting search with query: %r, max_results: %s, start: %s, "
+            "abstract_mode: %s",
+            base_query,
+            max_results,
+            start,
+            abstract_mode,
         )
 
         # Validate categories if provided
@@ -544,10 +630,14 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 categories=categories,
                 start=start,
             )
+            results = _apply_abstract_mode(results, abstract_mode)
 
             logger.info(f"Search completed: {len(results)} results returned")
             response_data = _build_search_response(
-                results, total_results=total_results, start=start
+                results,
+                total_results=total_results,
+                start=start,
+                abstract_mode=abstract_mode,
             )
 
             return [

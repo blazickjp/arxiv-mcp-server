@@ -6,11 +6,17 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from arxiv_mcp_server.tools import handle_search
 from arxiv_mcp_server.tools import search as search_module
 from arxiv_mcp_server.tools.search import (
+    DEFAULT_ABSTRACT_MODE,
+    DEFAULT_MAX_RESULTS,
+    ABSTRACT_SNIPPET_CHARS,
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
     _parse_opensearch_total_results,
     _build_search_response,
+    _apply_abstract_mode,
+    _snippet_abstract,
+    _normalize_abstract_mode,
     _scope_user_query,
     build_arxiv_search_query,
     build_arxiv_search_url,
@@ -703,3 +709,340 @@ def test_search_tool_schema_includes_start():
     assert "start" in props
     assert props["start"]["type"] == "integer"
     assert props["start"]["minimum"] == 0
+
+
+def test_search_tool_schema_includes_abstract_mode_and_defaults():
+    """Tool schema documents compact defaults and abstract_mode (#128)."""
+    from arxiv_mcp_server.tools.search import search_tool
+
+    props = search_tool.inputSchema["properties"]
+    assert "abstract_mode" in props
+    assert props["abstract_mode"]["enum"] == ["none", "snippet", "full"]
+    assert "default: 5" in props["max_results"]["description"]
+    assert "snippet" in props["abstract_mode"]["description"].lower()
+    assert DEFAULT_MAX_RESULTS == 5
+    assert DEFAULT_ABSTRACT_MODE == "snippet"
+    assert ABSTRACT_SNIPPET_CHARS == 280
+    desc = search_tool.description
+    assert "max_results default 5" in desc
+    assert "abstract_mode" in desc
+    # Do not push agents to get_abstract after a full-abstract search.
+    assert "not after abstract_mode=full" in desc  # avoid redundant get_abstract
+
+
+def test_normalize_abstract_mode_defaults_and_rejects_invalid():
+    assert _normalize_abstract_mode(None) == "snippet"
+    assert _normalize_abstract_mode("FULL") == "full"
+    assert _normalize_abstract_mode(" None ") == "none"
+    try:
+        _normalize_abstract_mode("summary")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "abstract_mode" in str(e)
+
+
+def test_snippet_abstract_is_deterministic_bounded_and_marked():
+    """Snippets are fixed-length, stable, and marked when truncated."""
+    body = "A" * (ABSTRACT_SNIPPET_CHARS + 50)
+    full = "[EXTERNAL CONTENT] " + body
+    snip_a = _snippet_abstract(full)
+    snip_b = _snippet_abstract(full)
+    assert snip_a == snip_b
+    assert snip_a.startswith("[EXTERNAL CONTENT] ")
+    assert snip_a.endswith("… [truncated]")
+    # Body contribution before marker is exactly ABSTRACT_SNIPPET_CHARS (rstrip no-op on A's).
+    without_prefix = snip_a[len("[EXTERNAL CONTENT] ") :]
+    assert without_prefix[:ABSTRACT_SNIPPET_CHARS] == "A" * ABSTRACT_SNIPPET_CHARS
+    assert len(without_prefix) == ABSTRACT_SNIPPET_CHARS + len("… [truncated]")
+
+    short = "[EXTERNAL CONTENT] Short abstract."
+    assert _snippet_abstract(short) == short
+    assert "truncated" not in _snippet_abstract(short)
+
+
+def test_apply_abstract_mode_none_snippet_full():
+    long_body = "Word " * 200
+    papers = [
+        {
+            "id": "2301.00001",
+            "title": "T",
+            "authors": ["A"],
+            "abstract": "[EXTERNAL CONTENT] " + long_body,
+            "categories": ["cs.AI"],
+        }
+    ]
+    none_papers = _apply_abstract_mode(papers, "none")
+    assert "abstract" not in none_papers[0]
+    assert none_papers[0]["title"] == "T"
+
+    snip_papers = _apply_abstract_mode(papers, "snippet")
+    assert snip_papers[0]["abstract"].endswith("… [truncated]")
+    assert len(snip_papers[0]["abstract"]) < len(papers[0]["abstract"])
+
+    full_papers = _apply_abstract_mode(papers, "full")
+    assert full_papers[0]["abstract"] == papers[0]["abstract"]
+    # Inputs must not be mutated
+    assert "abstract" in papers[0]
+
+
+@pytest.mark.asyncio
+async def test_search_defaults_to_five_compact_snippets():
+    """Omitting max_results/abstract_mode yields ≤5 snippet results (#128)."""
+    long_summary = "Z" * (ABSTRACT_SNIPPET_CHARS + 40)
+    entries = []
+    for i in range(5):
+        n = i + 1
+        entries.append(f"""
+        <entry>
+            <id>http://arxiv.org/abs/2301.0000{n}v1</id>
+            <title>Test Paper {n}</title>
+            <summary>{long_summary}</summary>
+            <published>2023-01-0{n}T00:00:00Z</published>
+            <author><name>Test Author</name></author>
+            <arxiv:primary_category term="cs.AI"/>
+            <link title="pdf" href="http://arxiv.org/pdf/2301.0000{n}v1"/>
+        </entry>""")
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom"
+          xmlns:arxiv="http://arxiv.org/schemas/atom"
+          xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+        <opensearch:totalResults>42</opensearch:totalResults>
+        {''.join(entries)}
+    </feed>"""
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search({"query": "transformers"})
+
+    from urllib.parse import parse_qs, urlparse
+
+    url = mock_client.get.call_args[0][0]
+    params = parse_qs(urlparse(url).query)
+    assert params["max_results"] == ["5"]
+    assert params["start"] == ["0"]
+
+    content = json.loads(result[0].text)
+    assert content["returned"] == 5
+    assert content["abstract_mode"] == "snippet"
+    assert content["total_results"] == 42
+    assert content["has_more"] is True
+    assert content["next_start"] == 5
+    assert len(content["papers"]) == 5
+    for paper in content["papers"]:
+        assert paper["abstract"].endswith("… [truncated]")
+        assert "title" in paper and "authors" in paper
+
+
+@pytest.mark.asyncio
+async def test_search_abstract_mode_none_omits_abstracts():
+    xml = _atom_feed_with_totals(entry_count=2, total_results=2)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search(
+            {"query": "test", "max_results": 2, "abstract_mode": "none"}
+        )
+
+    content = json.loads(result[0].text)
+    assert content["abstract_mode"] == "none"
+    assert content["returned"] == 2
+    for paper in content["papers"]:
+        assert "abstract" not in paper
+        assert paper["title"]
+        assert paper["authors"]
+
+
+@pytest.mark.asyncio
+async def test_search_abstract_mode_full_keeps_complete_abstract():
+    long_summary = "Complete abstract body. " * 30
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom"
+          xmlns:arxiv="http://arxiv.org/schemas/atom"
+          xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+        <opensearch:totalResults>1</opensearch:totalResults>
+        <entry>
+            <id>http://arxiv.org/abs/2301.00001v1</id>
+            <title>Full Mode Paper</title>
+            <summary>{long_summary}</summary>
+            <published>2023-01-01T00:00:00Z</published>
+            <author><name>Test Author</name></author>
+            <arxiv:primary_category term="cs.AI"/>
+            <link title="pdf" href="http://arxiv.org/pdf/2301.00001v1"/>
+        </entry>
+    </feed>"""
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search(
+            {"query": "test", "max_results": 1, "abstract_mode": "full"}
+        )
+
+    content = json.loads(result[0].text)
+    assert content["abstract_mode"] == "full"
+    abstract = content["papers"][0]["abstract"]
+    assert abstract.startswith("[EXTERNAL CONTENT] ")
+    assert "truncated" not in abstract
+    assert long_summary.strip().replace("\n", " ")[:40] in abstract.replace("\n", " ")
+
+
+@pytest.mark.asyncio
+async def test_search_legacy_explicit_max_results_and_full_abstract():
+    """Explicit legacy-style args still work (max_results=10, abstract_mode=full)."""
+    xml = _atom_feed_with_totals(entry_count=3, total_results=3)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search(
+            {
+                "query": "legacy",
+                "max_results": 10,
+                "abstract_mode": "full",
+            }
+        )
+
+    from urllib.parse import parse_qs, urlparse
+
+    url = mock_client.get.call_args[0][0]
+    params = parse_qs(urlparse(url).query)
+    assert params["max_results"] == ["10"]
+
+    content = json.loads(result[0].text)
+    assert content["abstract_mode"] == "full"
+    assert content["returned"] == 3
+    assert content["papers"][0]["abstract"].startswith("[EXTERNAL CONTENT] ")
+
+
+@pytest.mark.asyncio
+async def test_search_continuation_preserves_abstract_mode_and_offset():
+    """Page 2 via next_start does not skip/dupe under a stable feed (#128/#186)."""
+    xml_page1 = _atom_feed_with_totals(entry_count=2, total_results=5)
+    xml_page1 = xml_page1.replace("2301.00001", "2103.10001").replace(
+        "2301.00002", "2103.10002"
+    )
+    xml_page2 = _atom_feed_with_totals(entry_count=2, total_results=5)
+    xml_page2 = xml_page2.replace("2301.00001", "2103.10003").replace(
+        "2301.00002", "2103.10004"
+    )
+    xml_page3 = _atom_feed_with_totals(entry_count=1, total_results=5)
+    xml_page3 = xml_page3.replace("2301.00001", "2103.10005")
+
+    pages = [xml_page1, xml_page2, xml_page3]
+    observed_starts = []
+
+    mock_client = AsyncMock()
+
+    async def capture_get(url, **kwargs):
+        from urllib.parse import parse_qs, urlparse
+
+        params = parse_qs(urlparse(url).query)
+        start = int(params["start"][0])
+        observed_starts.append(start)
+        resp = MagicMock()
+        resp.text = pages[len(observed_starts) - 1]
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    mock_client.get = AsyncMock(side_effect=capture_get)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        page1 = json.loads(
+            (
+                await handle_search(
+                    {
+                        "query": "page",
+                        "max_results": 2,
+                        "abstract_mode": "none",
+                    }
+                )
+            )[0].text
+        )
+        assert page1["start"] == 0
+        assert page1["next_start"] == 2
+        assert page1["abstract_mode"] == "none"
+        ids1 = [p["id"] for p in page1["papers"]]
+
+        page2 = json.loads(
+            (
+                await handle_search(
+                    {
+                        "query": "page",
+                        "max_results": 2,
+                        "start": page1["next_start"],
+                        "abstract_mode": page1["abstract_mode"],
+                    }
+                )
+            )[0].text
+        )
+        assert page2["start"] == 2
+        assert page2["next_start"] == 4
+        ids2 = [p["id"] for p in page2["papers"]]
+
+        page3 = json.loads(
+            (
+                await handle_search(
+                    {
+                        "query": "page",
+                        "max_results": 2,
+                        "start": page2["next_start"],
+                        "abstract_mode": "none",
+                    }
+                )
+            )[0].text
+        )
+        assert page3["start"] == 4
+        assert page3["has_more"] is False
+        assert page3["next_start"] is None
+        ids3 = [p["id"] for p in page3["papers"]]
+
+    assert observed_starts == [0, 2, 4]
+    all_ids = ids1 + ids2 + ids3
+    assert all_ids == [
+        "2103.10001",
+        "2103.10002",
+        "2103.10003",
+        "2103.10004",
+        "2103.10005",
+    ]
+    assert len(all_ids) == len(set(all_ids))
+
+
+@pytest.mark.asyncio
+async def test_search_empty_page_past_end():
+    """Empty upstream page: returned=0, has_more false, next_start null."""
+    xml = _atom_feed_with_totals(entry_count=0, total_results=10)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search(
+            {
+                "query": "empty",
+                "max_results": 5,
+                "start": 50,
+                "abstract_mode": "snippet",
+            }
+        )
+
+    content = json.loads(result[0].text)
+    assert content["start"] == 50
+    assert content["returned"] == 0
+    assert content["papers"] == []
+    assert content["total_results"] == 10
+    assert content["has_more"] is False
+    assert content["next_start"] is None
+    assert content["abstract_mode"] == "snippet"
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_abstract_mode_errors():
+    result = await handle_search({"query": "x", "abstract_mode": "brief"})
+    assert "Error:" in result[0].text
+    assert "abstract_mode" in result[0].text
+
+
+def test_build_search_response_echoes_abstract_mode():
+    papers = [{"id": "1"}]
+    payload = _build_search_response(papers, total_results=1, abstract_mode="full")
+    assert payload["abstract_mode"] == "full"
+    assert payload["next_start"] is None
