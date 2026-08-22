@@ -253,7 +253,7 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
                 continue
 
             last_checked = topic.get("last_checked")
-            search_results = await _raw_arxiv_search(
+            search_results, _total = await _raw_arxiv_search(
                 query=topic_query,
                 max_results=min(
                     int(topic.get("max_results", 10)), settings.MAX_RESULTS
