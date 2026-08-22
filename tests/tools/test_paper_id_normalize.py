@@ -36,9 +36,14 @@ def _mock_rate_limited_get(xml_text: str):
 
 
 def _paper(
-    pid, title, authors, published="2017-06-12T00:00:00Z", categories=("cs.CL",)
+    pid,
+    title,
+    authors,
+    published="2017-06-12T00:00:00Z",
+    categories=("cs.CL",),
+    versioned_id=None,
 ):
-    return {
+    entry = {
         "id": pid,
         "title": title,
         "authors": list(authors),
@@ -48,14 +53,36 @@ def _paper(
         "url": f"https://arxiv.org/pdf/{pid}",
         "resource_uri": f"arxiv://{pid}",
     }
+    if versioned_id is not None:
+        entry["versioned_id"] = versioned_id
+    return entry
 
 
 def _stub_metadata(monkeypatch, papers, recorder=None):
+    """Patch _fetch_metadata to mirror versioned + bare→latest indexing (#212)."""
+
     async def _fake(ids):
         if recorder is not None:
             recorder.extend(ids)
         bases = {ec._base_id(i) for i in ids}
-        return {p["id"]: p for p in papers if p["id"] in bases}
+        matching = [p for p in papers if p["id"] in bases]
+        by_key = {}
+        latest_by_bare = {}
+        for p in matching:
+            versioned = p.get("versioned_id") or p["id"]
+            by_key[versioned] = p
+            existing = latest_by_bare.get(p["id"])
+            if existing is None:
+                latest_by_bare[p["id"]] = p
+            else:
+                from arxiv_mcp_server.tools.arxiv_ids import arxiv_version_number
+
+                if arxiv_version_number(versioned) > arxiv_version_number(
+                    existing.get("versioned_id") or ""
+                ):
+                    latest_by_bare[p["id"]] = p
+        by_key.update(latest_by_bare)
+        return by_key
 
     monkeypatch.setattr(ec, "_fetch_metadata", _fake)
 
@@ -184,7 +211,14 @@ async def test_export_citations_normalizes_wrappers(monkeypatch):
     requested = []
     _stub_metadata(
         monkeypatch,
-        [_paper("1706.03762", "Attention", ["Ashish Vaswani"])],
+        [
+            _paper(
+                "1706.03762",
+                "Attention",
+                ["Ashish Vaswani"],
+                versioned_id="1706.03762v7",
+            )
+        ],
         recorder=requested,
     )
     payload = await _run(
