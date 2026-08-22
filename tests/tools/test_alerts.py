@@ -194,6 +194,65 @@ async def test_unwatch_topic_removes_watch_and_errors_when_missing(alerts_test_e
     assert "not found" in missing["message"].lower()
 
 
+@pytest.mark.asyncio
+async def test_check_alerts_unknown_topic_returns_not_found(
+    monkeypatch, alerts_test_env
+):
+    """Regression #221: unknown topic must error, not silent empty success."""
+
+    async def _fail_search(**kwargs):
+        raise AssertionError("check_alerts must not search when watch is missing")
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _fail_search)
+
+    await alerts_module.handle_watch_topic({"topic": "real"})
+
+    missing = json.loads(
+        (await alerts_module.handle_check_alerts({"topic": "definitely-missing"}))[
+            0
+        ].text
+    )
+    assert missing["status"] == "error"
+    assert "not found" in missing["message"].lower()
+    assert "definitely-missing" in missing["message"]
+    assert "checked_topics" not in missing
+    assert "alerts" not in missing
+
+    # Existing watch must still be intact (no save / mutate on not-found).
+    listed = json.loads((await alerts_module.handle_list_watches({}))[0].text)
+    assert listed["watch_count"] == 1
+    assert listed["watches"][0]["topic"] == "real"
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_omit_topic_empty_watches_still_success(alerts_test_env):
+    """Omitting topic with no watches remains empty success (check-all unchanged)."""
+    result = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert result["status"] == "success"
+    assert result["checked_topics"] == 0
+    assert result["alerts"] == []
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_known_topic_still_succeeds(monkeypatch, alerts_test_env):
+    """A matching topic still returns success with alerts (possibly empty)."""
+
+    async def _mock_empty(**kwargs):
+        return ([], 0)
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_empty)
+
+    await alerts_module.handle_watch_topic({"topic": "real", "max_results": 5})
+    result = json.loads(
+        (await alerts_module.handle_check_alerts({"topic": "real"}))[0].text
+    )
+    assert result["status"] == "success"
+    assert result["checked_topics"] == 1
+    assert len(result["alerts"]) == 1
+    assert result["alerts"][0]["topic"] == "real"
+    assert result["alerts"][0]["new_paper_count"] == 0
+
+
 def test_list_and_unwatch_tool_annotations():
     """list_watches is read-only; unwatch_topic is a write."""
     assert alerts_module.list_watches_tool.annotations.readOnlyHint is True
