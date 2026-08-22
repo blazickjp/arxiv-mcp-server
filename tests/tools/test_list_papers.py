@@ -61,12 +61,12 @@ async def test_list_papers_returns_local_metadata(storage):
 
     assert payload["total_papers"] == 2
     by_id = {paper["id"]: paper for paper in payload["papers"]}
-    assert by_id["1706.03762"] == {
-        "id": "1706.03762",
-        "title": "Attention Is All You Need",
-        "authors": ["Ashish Vaswani", "Noam Shazeer"],
-        "published": "2017-06-12T17:57:34Z",
-    }
+    assert by_id["1706.03762"]["id"] == "1706.03762"
+    assert by_id["1706.03762"]["title"] == "Attention Is All You Need"
+    assert by_id["1706.03762"]["authors"] == ["Ashish Vaswani", "Noam Shazeer"]
+    assert by_id["1706.03762"]["published"] == "2017-06-12T17:57:34Z"
+    assert by_id["1706.03762"]["arxiv_version"] is None
+    assert by_id["1706.03762"]["versioned_id"] is None
     assert by_id["2608.18261"]["authors"] == ["Ada Lovelace"]
 
 
@@ -108,6 +108,8 @@ async def test_list_papers_uses_markdown_title_without_network(storage, mocker):
             "title": "Cached Title",
             "authors": [],
             "published": None,
+            "arxiv_version": None,
+            "versioned_id": None,
         }
     ]
     httpx_get.assert_not_called()

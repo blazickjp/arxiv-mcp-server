@@ -28,7 +28,8 @@ list_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "List all papers that have been downloaded and stored locally via download_paper. "
-        "Returns id, title, authors, and published from local metadata — no live re-fetch. "
+        "Returns id, title, authors, published, and arxiv_version/versioned_id "
+        "from local metadata — no live re-fetch. "
         "Set compact=true to return arXiv IDs only. "
         "Returns an empty list if no papers have been downloaded yet. "
         "Workflow: search_papers -> download_paper -> list_papers -> read_paper."
@@ -40,7 +41,7 @@ list_tool = types.Tool(
                 "type": "boolean",
                 "description": (
                     "If true, return arXiv IDs only. Default is full local metadata "
-                    "(id, title, authors, published)."
+                    "(id, title, authors, published, arxiv_version, versioned_id)."
                 ),
             }
         },
@@ -216,6 +217,30 @@ def _title_from_markdown(paper_id: str) -> Optional[str]:
     return None
 
 
+def _version_fields_for_stem(
+    stem: str, data: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Return arxiv_version / versioned_id for a stored stem when known."""
+    bare = bare_arxiv_id(stem)
+    version = None
+    if isinstance(data, dict):
+        raw = data.get("arxiv_version")
+        if isinstance(raw, str) and raw.strip():
+            normalized = raw.strip().lower()
+            if not normalized.startswith("v"):
+                normalized = f"v{normalized}"
+            if normalized[1:].isdigit():
+                version = normalized
+    if version is None:
+        version = _sidecar_arxiv_version(stem) or arxiv_version_suffix(stem)
+    fields: Dict[str, Any] = {"arxiv_version": version}
+    if version:
+        fields["versioned_id"] = f"{bare}{version}"
+    else:
+        fields["versioned_id"] = None
+    return fields
+
+
 def load_paper_metadata(paper_id: str) -> Dict[str, Any]:
     """Load local metadata for a stored paper without hitting the network."""
     bare = bare_arxiv_id(paper_id)
@@ -231,18 +256,22 @@ def load_paper_metadata(paper_id: str) -> Dict[str, Any]:
                 authors = data.get("authors") or []
                 if not isinstance(authors, list):
                     authors = []
-                return {
+                payload = {
                     "id": bare,
                     "title": data.get("title") or None,
                     "authors": [str(author) for author in authors],
                     "published": data.get("published") or None,
                 }
-    return {
+                payload.update(_version_fields_for_stem(stem, data))
+                return payload
+    payload = {
         "id": bare,
         "title": _title_from_markdown(stem),
         "authors": [],
         "published": None,
     }
+    payload.update(_version_fields_for_stem(stem))
+    return payload
 
 
 async def handle_list_papers(
