@@ -333,9 +333,11 @@ def test_parse_bare_arxiv_html_titles():
     intro = next(s for s in sections if s.title == "Introduction")
     body = BARE_HTML_PAPER[intro.start : intro.end]
     assert "Recurrent neural networks" in body
-    assert "Background" in body  # heading line included in span start
+    assert body.lstrip().startswith("Introduction")
     # Sibling boundary: Results text should not leak into Introduction.
     assert "WMT 2014" not in body
+    bg = next(s for s in sections if s.title == "Background")
+    assert BARE_HTML_PAPER[bg.start : bg.end].lstrip().startswith("Background")
 
 
 def test_parse_numbered_headings():
