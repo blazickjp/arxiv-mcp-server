@@ -34,6 +34,86 @@ async def test_watch_topic_persists_topic(alerts_test_env):
 
 
 @pytest.mark.asyncio
+async def test_watch_topic_update_omitted_categories_preserved(alerts_test_env):
+    """Regression #222: update with only max_results must keep categories."""
+    create = await alerts_module.handle_watch_topic(
+        {
+            "topic": "wipe-demo",
+            "categories": ["cs.LG", "cs.AI"],
+            "max_results": 3,
+        }
+    )
+    created = json.loads(create[0].text)["topic"]
+    assert created["categories"] == ["cs.LG", "cs.AI"]
+    assert created["max_results"] == 3
+
+    # Simulate a prior check so last_checked is set and must be preserved.
+    payload = alerts_module._load_watches()
+    payload["topics"][0]["last_checked"] = "2024-06-01T00:00:00+00:00"
+    alerts_module._save_watches(payload)
+
+    update = await alerts_module.handle_watch_topic(
+        {"topic": "wipe-demo", "max_results": 7}
+    )
+    updated = json.loads(update[0].text)["topic"]
+    assert updated["categories"] == ["cs.LG", "cs.AI"]
+    assert updated["max_results"] == 7
+    assert updated["last_checked"] == "2024-06-01T00:00:00+00:00"
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["categories"] == ["cs.LG", "cs.AI"]
+    assert stored["max_results"] == 7
+    assert stored["last_checked"] == "2024-06-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_update_explicit_empty_categories_clears(alerts_test_env):
+    """Regression #222: explicit categories=[] still clears on update."""
+    await alerts_module.handle_watch_topic(
+        {
+            "topic": "wipe-demo",
+            "categories": ["cs.LG", "cs.AI"],
+            "max_results": 3,
+        }
+    )
+    update = await alerts_module.handle_watch_topic(
+        {"topic": "wipe-demo", "categories": [], "max_results": 7}
+    )
+    updated = json.loads(update[0].text)["topic"]
+    assert updated["categories"] == []
+    assert updated["max_results"] == 7
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["categories"] == []
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_update_explicit_categories_replaces(alerts_test_env):
+    """Regression #222: passing a new categories list replaces stored filters."""
+    await alerts_module.handle_watch_topic(
+        {"topic": "wipe-demo", "categories": ["cs.LG"], "max_results": 3}
+    )
+    update = await alerts_module.handle_watch_topic(
+        {"topic": "wipe-demo", "categories": ["cs.AI", "stat.ML"]}
+    )
+    updated = json.loads(update[0].text)["topic"]
+    assert updated["categories"] == ["cs.AI", "stat.ML"]
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["categories"] == ["cs.AI", "stat.ML"]
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_create_without_categories_defaults_empty(alerts_test_env):
+    """Create path unchanged: omitted categories still defaults to []."""
+    response = await alerts_module.handle_watch_topic({"topic": "fresh-topic"})
+    payload = json.loads(response[0].text)
+    assert payload["topic"]["categories"] == []
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["categories"] == []
+
+
+@pytest.mark.asyncio
 async def test_check_alerts_returns_new_papers(monkeypatch, alerts_test_env):
     """check_alerts should return new papers and update last_checked."""
 
