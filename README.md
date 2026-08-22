@@ -201,6 +201,52 @@ The server currently exposes 16 tools.
 | `semantic_search` | Search downloaded papers by semantic similarity | Requires `[pro]` |
 | `reindex` | Rebuild the local semantic index | Requires `[pro]` |
 
+### search_papers query guide
+
+Tool schemas stay short on purpose. Use this section (not the always-loaded MCP description) for query tutorials, category catalogs, and workflow examples.
+
+**Query construction**
+
+- Use quoted phrases for exact matches: `"multi-agent systems"`, `"neural networks"`
+- Combine related concepts with OR: `"AI agents" OR "software agents"`
+- Field-specific searches: `ti:"exact title phrase"`, `au:"author name"`, `abs:"keyword"`, `cat:cs.LG`
+- Exclude with ANDNOT: `"machine learning" ANDNOT "survey"`
+- Prefer 2–4 core concepts over long keyword lists
+
+**Advanced patterns**
+
+- Field + phrase: `ti:"transformer architecture"`
+- Multiple fields: `au:"Smith" AND ti:"quantum"`
+- Exclusions: `"deep learning" ANDNOT ("survey" OR "review")`
+- Broad + narrow: `"artificial intelligence" AND (robotics OR "computer vision")`
+
+**Category filtering** (recommended for relevance)
+
+Computer Science: `cs.AI` (AI), `cs.LG` (ML), `cs.CL` (NLP), `cs.CV` (vision), `cs.MA` (multi-agent), `cs.RO` (robotics), `cs.NE` (neural/evolutionary), `cs.IR` (IR), `cs.HC` (HCI), `cs.CR` (security), `cs.DB` (databases)
+
+Statistics & Math: `stat.ML`, `stat.AP`, `math.OC`, `math.ST`
+
+Physics & other: `quant-ph`, `eess.SP`, `eess.AS`, `physics.data-an`
+
+**Effective examples**
+
+- `ti:"reinforcement learning"` with `categories: ["cs.LG", "cs.AI"]`
+- `au:"Hinton" AND "deep learning"` with `categories: ["cs.LG"]`
+- `"multi-agent" ANDNOT "survey"` with `categories: ["cs.MA"]`
+- `abs:"transformer" AND ti:"attention"` with `categories: ["cs.CL"]`
+
+**Dates and sorting**
+
+- Dates use `YYYY-MM-DD` (`date_from` / `date_to`)
+- Default `sort_by` is `relevance`; use `date` for newest-first monitoring
+- Foundational work: `date_to: "2010-12-31"` with title/abstract field searches
+
+**Pagination and rate limits**
+
+- Responses report `total_results` (corpus hits), `returned`, `has_more`, `start`, and `next_start`
+- Pass `start=next_start` for the next page
+- arXiv enforces ~3 seconds between requests (handled server-side); on rate-limit errors wait ~60s
+
 ### Search and inspect a paper
 
 Ask your MCP client to call `search_papers` with:
