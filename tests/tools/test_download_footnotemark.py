@@ -23,7 +23,7 @@ FOOTNOTEMARK_HTML = """
 
 def test_extractor_version_bumped_for_footnotemark_fix():
     """#175 auto-invalidates old Attention caches after this extractor change."""
-    assert EXTRACTOR_VERSION >= 3
+    assert EXTRACTOR_VERSION >= 4
 
 
 def test_html_to_text_drops_footnotemark_and_permission_line():

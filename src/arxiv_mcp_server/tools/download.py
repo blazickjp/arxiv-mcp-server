@@ -126,7 +126,7 @@ settings = Settings()
 
 # Bump when HTML extraction changes so cached markdown is treated as stale
 # and re-downloaded without requiring the caller to pass force=true.
-EXTRACTOR_VERSION = 3
+EXTRACTOR_VERSION = 4
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,9 @@ class _ArticleTextExtractor(HTMLParser):
       - Skip script/style/nav/header/footer plus arXiv UI widgets.
       - Skip author-note chrome (Thanks/ORCID/affiliation/email blocks).
       - Skip footnotemark markers (class, role, or the literal token).
-      - Skip license/permission one-liners that appear before the title.
+      - Skip license/permission one-liners and ICML/LaTeX page-layout
+        style warnings (marginparsep and similar) that appear before the
+        title.
       - Keep math once: prefer ``alttext``, otherwise MathML without TeX
         ``<annotation>`` duplicates.
     """
@@ -188,6 +190,17 @@ class _ArticleTextExtractor(HTMLParser):
         "permission to reproduce",
         "hereby grants permission",
         "tables and figures in this paper solely for use",
+    )
+    # ICML/LaTeX page-layout warnings that latexml dumps before the title.
+    STYLE_WARNING_MARKERS = (
+        "marginparsep has been altered",
+        "topmargin has been altered",
+        "marginparpush has been altered",
+        "page layout violates the icml style",
+        "please do not change the page layout",
+        "packages like geometry",
+        "reliably undo arbitrary changes to the style",
+        "layout-changing commands",
     )
     SKIP_IDS = {
         "modal-form",
@@ -235,16 +248,19 @@ class _ArticleTextExtractor(HTMLParser):
         elem_id = attr_map.get("id") or ""
         return elem_id in self.SKIP_IDS
 
-    def _is_permission_boilerplate(self, text: str) -> bool:
+    def _is_pre_title_chrome(self, text: str) -> bool:
+        """True for permission/license lines or ICML style warnings."""
         lowered = text.lower()
-        return any(marker in lowered for marker in self.PERMISSION_MARKERS)
+        if any(marker in lowered for marker in self.PERMISSION_MARKERS):
+            return True
+        return any(marker in lowered for marker in self.STYLE_WARNING_MARKERS)
 
     def _emit(self, text: str) -> None:
         if self._skip_depth or not text:
             return
         if self.FOOTNOTEMARK_TOKEN in text.lower():
             return
-        if not self._seen_title and self._is_permission_boilerplate(text):
+        if not self._seen_title and self._is_pre_title_chrome(text):
             return
         if self._article_depth > 0:
             self._article_chunks.append(text)
