@@ -38,18 +38,22 @@ async def test_check_alerts_returns_new_papers(monkeypatch, alerts_test_env):
     """check_alerts should return new papers and update last_checked."""
 
     async def _mock_raw_search(**kwargs):
-        return [
-            {
-                "id": "2501.00001",
-                "title": "New Paper",
-                "authors": ["A"],
-                "abstract": "x",
-                "categories": ["cs.AI"],
-                "published": "2025-01-01T00:00:00Z",
-                "url": "https://arxiv.org/pdf/2501.00001",
-                "resource_uri": "arxiv://2501.00001",
-            }
-        ]
+        # Mirrors post-#189 _raw_arxiv_search: (papers, total_results)
+        return (
+            [
+                {
+                    "id": "2501.00001",
+                    "title": "New Paper",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.AI"],
+                    "published": "2025-01-01T00:00:00Z",
+                    "url": "https://arxiv.org/pdf/2501.00001",
+                    "resource_uri": "arxiv://2501.00001",
+                }
+            ],
+            1,
+        )
 
     monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_raw_search)
 
@@ -67,19 +71,52 @@ async def test_check_alerts_returns_new_papers(monkeypatch, alerts_test_env):
 
 
 @pytest.mark.asyncio
+async def test_check_alerts_unpacks_raw_search_tuple(monkeypatch, alerts_test_env):
+    """Regression #193: _raw_arxiv_search returns (papers, total); must unpack."""
+
+    async def _mock_tuple(**kwargs):
+        return (
+            [
+                {
+                    "id": "2501.00099",
+                    "title": "Tuple Paper",
+                    "authors": ["B"],
+                    "abstract": "y",
+                    "categories": ["cs.LG"],
+                    "published": "2025-02-01T00:00:00Z",
+                    "url": "https://arxiv.org/pdf/2501.00099",
+                    "resource_uri": "arxiv://2501.00099",
+                }
+            ],
+            42,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_tuple)
+    await alerts_module.handle_watch_topic({"topic": "moe"})
+    response = await alerts_module.handle_check_alerts({})
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert payload["alerts"][0]["new_paper_count"] == 1
+    assert payload["alerts"][0]["new_papers"][0]["id"] == "2501.00099"
+
+
+@pytest.mark.asyncio
 async def test_check_alerts_handles_partial_paper_fields(monkeypatch, alerts_test_env):
     """check_alerts must not raise KeyError when a paper entry is missing optional fields."""
 
     async def _mock_partial(**kwargs):
-        return [
-            {
-                "id": "2501.00002",
-                "title": "Sparse Paper",
-                # "authors", "abstract", "url", "resource_uri" intentionally absent
-                "categories": ["cs.AI"],
-                "published": "2025-01-01T00:00:00Z",
-            }
-        ]
+        return (
+            [
+                {
+                    "id": "2501.00002",
+                    "title": "Sparse Paper",
+                    # "authors", "abstract", "url", "resource_uri" intentionally absent
+                    "categories": ["cs.AI"],
+                    "published": "2025-01-01T00:00:00Z",
+                }
+            ],
+            1,
+        )
 
     monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_partial)
 
