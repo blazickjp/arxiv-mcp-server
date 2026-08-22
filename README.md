@@ -180,7 +180,7 @@ Direct MCP installation is the shortest path. Install the plugin when you also w
 
 ## Tools
 
-The server currently exposes 16 tools.
+The server currently exposes 19 tools.
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -189,6 +189,9 @@ The server currently exposes 16 tools.
 | `download_paper` | Download and convert a paper to local Markdown | HTML first; PDF fallback uses `[pdf]`; `force=true` re-fetches; content bounded to 12,000 chars by default |
 | `list_papers` | List papers stored locally | Returns id, title, authors, published; `compact` for IDs only |
 | `read_paper` | Read locally stored paper content | Bounded to 12,000 chars by default; supports `start`/`max_chars`/`return_full_text` |
+| `get_paper_outline` | Paginated markdown heading outline | Stable hierarchical section IDs |
+| `read_paper_section` | Read one bounded markdown section | By outline ID or unique title |
+| `search_paper_text` | Bounded passage search in a paper | Source offsets; no Torch required |
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
