@@ -13,7 +13,12 @@ from mcp.types import ToolAnnotations
 from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
-from .arxiv_ids import parse_arxiv_id
+from .arxiv_ids import (
+    arxiv_version_suffix,
+    bare_arxiv_id,
+    parse_arxiv_id,
+)
+from .list_papers import resolve_stored_stem
 from .list_papers import save_paper_metadata
 from .search import ARXIV_API_URL, ARXIV_NS, _rate_limited_get
 import logging
@@ -370,6 +375,74 @@ def _is_fresh_cache(paper_id: str) -> bool:
     return stored is not None and stored >= EXTRACTOR_VERSION
 
 
+def _read_arxiv_version(paper_id: str) -> str | None:
+    """Return the sidecar arXiv version (e.g. ``v7``), or None."""
+    path = get_paper_path(paper_id, ".meta.json")
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("arxiv_version")
+    if isinstance(version, str) and version.strip():
+        normalized = version.strip().lower()
+        if not normalized.startswith("v"):
+            normalized = f"v{normalized}"
+        return normalized if normalized[1:].isdigit() else None
+    return arxiv_version_suffix(paper_id)
+
+
+def _version_from_arxiv_result(paper) -> str | None:
+    """Best-effort ``vN`` from an arXiv result short id."""
+    short = getattr(paper, "get_short_id", None)
+    if callable(short):
+        try:
+            return arxiv_version_suffix(str(short()))
+        except Exception:
+            return None
+    return None
+
+
+def _cleanup_versioned_aliases(storage_id: str) -> None:
+    """Remove legacy versioned ``.md`` / sidecar files for the same bare ID."""
+    storage = get_paper_path(storage_id, ".md").parent
+    if not storage.exists():
+        return
+    for path in storage.iterdir():
+        if not path.is_file():
+            continue
+        stem = path.name
+        # Handle both ``id.md`` and ``id.meta.json``
+        if stem.endswith(".meta.json"):
+            paper_stem = stem[: -len(".meta.json")]
+        elif path.suffix == ".md":
+            paper_stem = path.stem
+        else:
+            continue
+        if paper_stem == storage_id:
+            continue
+        if bare_arxiv_id(paper_stem) != storage_id:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Could not remove legacy alias %s", path)
+
+
+def _cache_satisfies_request(storage_stem: str, requested_id: str) -> bool:
+    """True when a fresh cache entry can answer *requested_id*."""
+    if not _is_fresh_cache(storage_stem):
+        return False
+    req_ver = arxiv_version_suffix(requested_id)
+    if req_ver is None:
+        return True
+    stored_ver = _read_arxiv_version(storage_stem) or arxiv_version_suffix(storage_stem)
+    return stored_ver is not None and stored_ver == req_ver
+
+
 def _wants_force_refresh(arguments: Dict[str, Any]) -> bool:
     """Return True when the caller asked to overwrite a cached paper."""
     return bool(arguments.get("force") or arguments.get("refresh"))
@@ -548,6 +621,7 @@ def _metadata_from_arxiv_result(paper_id: str, paper) -> dict[str, Any]:
         "title": title,
         "authors": authors,
         "published": published_text,
+        "arxiv_version": _version_from_arxiv_result(paper),
     }
 
 
@@ -568,6 +642,7 @@ def _persist_paper_metadata(
     paper_id: str,
     arxiv_result=None,
     title_hint: str | None = None,
+    arxiv_version: str | None = None,
 ) -> None:
     """Write a sidecar from arXiv API metadata. Never fail the download."""
     try:
@@ -583,12 +658,18 @@ def _persist_paper_metadata(
                 "authors": [],
                 "published": None,
             }
+        version = (
+            arxiv_version
+            or (metadata.get("arxiv_version") if metadata else None)
+            or arxiv_version_suffix(paper_id)
+        )
         save_paper_metadata(
             paper_id,
             title=metadata.get("title") or None,
             authors=metadata.get("authors") or [],
             published=metadata.get("published"),
             extractor_version=EXTRACTOR_VERSION,
+            arxiv_version=version,
             path=get_paper_path(paper_id, ".meta.json"),
         )
     except Exception:
@@ -618,49 +699,68 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     ),
                 )
             ]
-        md_path = get_paper_path(paper_id, ".md")
+        # Fetch may use a versioned ID; storage always uses the bare key so
+        # read_paper("1706.03762") finds download_paper("1706.03762v7") (#202).
+        storage_id = bare_arxiv_id(paper_id)
+        requested_version = arxiv_version_suffix(paper_id)
+        md_path = get_paper_path(storage_id, ".md")
         force = _wants_force_refresh(arguments)
 
-        # --- Cache hit: return immediately unless force/stale extractor ---
-        if md_path.exists() and not force and _is_fresh_cache(paper_id):
-            content = md_path.read_text(encoding="utf-8")
-            payload = add_content_payload(
-                {
-                    "status": "success",
-                    "message": "Paper already available (returned from cache)",
-                    "paper_id": paper_id,
-                    "source": "cache",
-                },
-                content,
-                arguments,
-                _CONTENT_WARNING,
-            )
-            return [
-                types.TextContent(
-                    type="text",
-                    text=json.dumps(payload),
+        # --- Cache hit: bare key (via get_paper_path) or legacy alias ---
+        if not force:
+            resolved = None
+            if md_path.exists() and _cache_satisfies_request(storage_id, paper_id):
+                resolved = storage_id
+            else:
+                # Legacy versioned filenames still live under STORAGE_PATH.
+                legacy = resolve_stored_stem(paper_id, Path(settings.STORAGE_PATH))
+                if (
+                    legacy
+                    and legacy != storage_id
+                    and _cache_satisfies_request(legacy, paper_id)
+                ):
+                    resolved = legacy
+            if resolved:
+                content = get_paper_path(resolved, ".md").read_text(encoding="utf-8")
+                payload = add_content_payload(
+                    {
+                        "status": "success",
+                        "message": "Paper already available (returned from cache)",
+                        "paper_id": storage_id,
+                        "source": "cache",
+                    },
+                    content,
+                    arguments,
+                    _CONTENT_WARNING,
                 )
-            ]
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=json.dumps(payload),
+                    )
+                ]
 
         # --- Try HTML endpoint first ---
         html_text = await asyncio.to_thread(_fetch_html_content, paper_id)
 
         if html_text is not None:
-            # Save to cache
+            # Save to cache under the bare ID
             md_path.write_text(html_text, encoding="utf-8")
             await asyncio.to_thread(
                 _persist_paper_metadata,
-                paper_id,
+                storage_id,
                 None,
                 None,
+                requested_version,
             )
+            _cleanup_versioned_aliases(storage_id)
             # Best-effort index; the tracked task is drained at shutdown.
-            _track_index_task(_run_index_by_id(paper_id))
+            _track_index_task(_run_index_by_id(storage_id))
             payload = add_content_payload(
                 {
                     "status": "success",
                     "message": "Paper fetched from arXiv HTML endpoint",
-                    "paper_id": paper_id,
+                    "paper_id": storage_id,
                     "source": "html",
                 },
                 html_text,
@@ -701,14 +801,16 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         logger.info(f"Falling back to PDF download for {paper_id}")
         markdown, arxiv_result = await asyncio.to_thread(_fetch_pdf_content, paper_id)
 
-        # Save to cache
+        # Save to cache under the bare ID
         md_path.write_text(markdown, encoding="utf-8")
         await asyncio.to_thread(
             _persist_paper_metadata,
-            paper_id,
+            storage_id,
             arxiv_result,
             None,
+            requested_version,
         )
+        _cleanup_versioned_aliases(storage_id)
 
         # Best-effort index; the tracked task is drained at shutdown.
         _track_index_task(_run_index_from_result(arxiv_result))
@@ -717,7 +819,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             {
                 "status": "success",
                 "message": "Paper fetched via PDF conversion",
-                "paper_id": paper_id,
+                "paper_id": storage_id,
                 "source": "pdf",
             },
             markdown,

@@ -9,7 +9,13 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
-from .arxiv_ids import is_valid_arxiv_id
+from .arxiv_ids import (
+    arxiv_version_number,
+    arxiv_version_suffix,
+    bare_arxiv_id,
+    is_valid_arxiv_id,
+    normalize_arxiv_id,
+)
 
 settings = Settings()
 logger = logging.getLogger("arxiv-mcp-server")
@@ -44,14 +50,9 @@ list_tool = types.Tool(
 )
 
 
-def list_papers() -> list[str]:
-    """List all stored paper IDs.
-
-    Returns an empty list if the storage directory does not exist yet or
-    contains no .md files.  Only plain files with the .md suffix are
-    considered; sub-directories and other file types are silently ignored.
-    """
-    storage = Path(settings.STORAGE_PATH)
+def _raw_stored_stems(storage_path: Optional[Path] = None) -> list[str]:
+    """Return every on-disk ``.md`` stem that looks like an arXiv ID."""
+    storage = Path(storage_path or settings.STORAGE_PATH)
     if not storage.exists():
         return []
     return [
@@ -59,6 +60,113 @@ def list_papers() -> list[str]:
         for p in storage.iterdir()
         if p.is_file() and p.suffix == ".md" and is_valid_arxiv_id(p.stem)
     ]
+
+
+def _stems_for_bare_id(
+    bare_id: str,
+    stems: Optional[List[str]] = None,
+    storage_path: Optional[Path] = None,
+) -> list[str]:
+    """Return stored stems that share *bare_id* (including the bare stem)."""
+    pool = stems if stems is not None else _raw_stored_stems(storage_path)
+    return [stem for stem in pool if bare_arxiv_id(stem) == bare_id]
+
+
+def preferred_stored_stem(candidates: List[str]) -> Optional[str]:
+    """Pick the canonical on-disk stem for one paper.
+
+    Prefer the bare-ID file (new storage model). Otherwise keep the highest
+    versioned legacy key.
+    """
+    if not candidates:
+        return None
+    bare = bare_arxiv_id(candidates[0])
+    if bare in candidates:
+        return bare
+    return max(candidates, key=arxiv_version_number)
+
+
+def _sidecar_arxiv_version(
+    stem: str, storage_path: Optional[Path] = None
+) -> Optional[str]:
+    """Read ``arxiv_version`` from a stem's sidecar, if present."""
+    path = (
+        Path(storage_path) / f"{stem}{METADATA_SUFFIX}"
+        if storage_path is not None
+        else paper_metadata_path(stem)
+    )
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("arxiv_version")
+    if isinstance(version, str) and version.strip():
+        normalized = version.strip().lower()
+        if not normalized.startswith("v"):
+            normalized = f"v{normalized}"
+        return normalized if normalized[1:].isdigit() else None
+    return arxiv_version_suffix(stem)
+
+
+def resolve_stored_stem(
+    paper_id: str, storage_path: Optional[Path] = None
+) -> Optional[str]:
+    """Map a requested paper ID to an on-disk markdown stem.
+
+    Bare IDs resolve to the bare storage key when present, otherwise to the
+    highest stored versioned legacy key. Versioned IDs match an exact legacy
+    stem, or a bare file whose sidecar records the same version (or has no
+    version metadata — treated as readable content for that paper).
+
+    Pass *storage_path* when the caller uses a different Settings instance
+    than this module (tests often patch per-module settings).
+    """
+    requested = normalize_arxiv_id(paper_id) if paper_id else ""
+    if not requested or not is_valid_arxiv_id(requested):
+        return None
+
+    stems = _raw_stored_stems(storage_path)
+    if requested in stems:
+        return requested
+
+    bare = bare_arxiv_id(requested)
+    group = _stems_for_bare_id(bare, stems, storage_path)
+    if not group:
+        return None
+
+    req_ver = arxiv_version_suffix(requested)
+    if req_ver is None:
+        return preferred_stored_stem(group)
+
+    if requested in group:
+        return requested
+
+    if bare in group:
+        stored_ver = _sidecar_arxiv_version(bare, storage_path)
+        if stored_ver is None or stored_ver == req_ver:
+            return bare
+
+    for stem in group:
+        if arxiv_version_suffix(stem) == req_ver:
+            return stem
+    return None
+
+
+def list_papers() -> list[str]:
+    """List stored paper IDs, deduped to one bare ID per paper.
+
+    Returns an empty list if the storage directory does not exist yet or
+    contains no .md files. Only plain files with the .md suffix are
+    considered; sub-directories and other file types are silently ignored.
+    Legacy versioned filenames are folded into their bare ID so the same
+    paper is never listed twice.
+    """
+    stems = _raw_stored_stems()
+    return sorted({bare_arxiv_id(stem) for stem in stems})
 
 
 def paper_metadata_path(paper_id: str) -> Path:
@@ -73,6 +181,7 @@ def save_paper_metadata(
     authors: Optional[List[str]] = None,
     published: Optional[str] = None,
     extractor_version: Optional[int] = None,
+    arxiv_version: Optional[str] = None,
     path: Optional[Path] = None,
 ) -> None:
     """Persist lightweight paper metadata next to the downloaded markdown."""
@@ -85,6 +194,12 @@ def save_paper_metadata(
     }
     if extractor_version is not None:
         payload["extractor_version"] = extractor_version
+    if arxiv_version:
+        normalized = arxiv_version.strip().lower()
+        if normalized and not normalized.startswith("v"):
+            normalized = f"v{normalized}"
+        if normalized and normalized[1:].isdigit():
+            payload["arxiv_version"] = normalized
     destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -103,7 +218,9 @@ def _title_from_markdown(paper_id: str) -> Optional[str]:
 
 def load_paper_metadata(paper_id: str) -> Dict[str, Any]:
     """Load local metadata for a stored paper without hitting the network."""
-    path = paper_metadata_path(paper_id)
+    bare = bare_arxiv_id(paper_id)
+    stem = resolve_stored_stem(paper_id) or paper_id
+    path = paper_metadata_path(stem)
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -115,14 +232,14 @@ def load_paper_metadata(paper_id: str) -> Dict[str, Any]:
                 if not isinstance(authors, list):
                     authors = []
                 return {
-                    "id": paper_id,
+                    "id": bare,
                     "title": data.get("title") or None,
                     "authors": [str(author) for author in authors],
                     "published": data.get("published") or None,
                 }
     return {
-        "id": paper_id,
-        "title": _title_from_markdown(paper_id),
+        "id": bare,
+        "title": _title_from_markdown(stem),
         "authors": [],
         "published": None,
     }

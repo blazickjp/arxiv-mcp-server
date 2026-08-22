@@ -6,8 +6,9 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
-from .arxiv_ids import normalize_arxiv_id
+from .arxiv_ids import bare_arxiv_id, normalize_arxiv_id, parse_arxiv_id
 from .content import add_content_payload
+from .list_papers import resolve_stored_stem
 
 settings = Settings()
 
@@ -50,39 +51,49 @@ read_tool = types.Tool(
 )
 
 
-def list_papers() -> list[str]:
-    """List all stored paper IDs."""
-    return [p.stem for p in Path(settings.STORAGE_PATH).glob("*.md")]
-
-
 async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle requests to read a paper's content."""
     try:
-        paper_ids = list_papers()
-        paper_id = normalize_arxiv_id(arguments["paper_id"])
-        # Check if paper exists
-        if paper_id not in paper_ids:
+        raw_id = arguments["paper_id"]
+        paper_id = parse_arxiv_id(raw_id) if isinstance(raw_id, str) else None
+        if paper_id is None and isinstance(raw_id, str):
+            # Preserve prior normalize-only behavior for slightly odd inputs
+            # that still match an on-disk stem via resolve.
+            paper_id = normalize_arxiv_id(raw_id)
+
+        resolved = (
+            resolve_stored_stem(paper_id, Path(settings.STORAGE_PATH))
+            if paper_id
+            else None
+        )
+        if resolved is None:
+            display = paper_id or (
+                raw_id.strip() if isinstance(raw_id, str) else raw_id
+            )
             return [
                 types.TextContent(
                     type="text",
                     text=json.dumps(
                         {
                             "status": "error",
-                            "message": f"Paper {paper_id} not found in storage. You may need to download it first using download_paper.",
+                            "message": (
+                                f"Paper {display} not found in storage. "
+                                "You may need to download it first using download_paper."
+                            ),
                         }
                     ),
                 )
             ]
 
         # Get paper content
-        content = Path(settings.STORAGE_PATH, f"{paper_id}.md").read_text(
+        content = Path(settings.STORAGE_PATH, f"{resolved}.md").read_text(
             encoding="utf-8"
         )
 
         payload = add_content_payload(
             {
                 "status": "success",
-                "paper_id": paper_id,
+                "paper_id": bare_arxiv_id(resolved),
             },
             content,
             arguments,

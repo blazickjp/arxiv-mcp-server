@@ -26,6 +26,9 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Trailing version suffix on an otherwise-valid arXiv ID (v1, v7, …).
+_VERSION_SUFFIX_RE = re.compile(r"(v\d+)$", re.IGNORECASE)
+
 
 def is_valid_arxiv_id(stem: str) -> bool:
     """Return True if *stem* looks like a valid arXiv paper ID."""
@@ -56,3 +59,24 @@ def parse_arxiv_id(raw: str) -> Optional[str]:
     if not normalized or not is_valid_arxiv_id(normalized):
         return None
     return normalized
+
+
+def arxiv_version_suffix(paper_id: str) -> Optional[str]:
+    """Return the trailing ``vN`` suffix (lowercased), or None if absent."""
+    match = _VERSION_SUFFIX_RE.search(paper_id)
+    if not match:
+        return None
+    return match.group(1).lower()
+
+
+def bare_arxiv_id(paper_id: str) -> str:
+    """Strip a trailing version suffix, keeping the bare arXiv identifier."""
+    return _VERSION_SUFFIX_RE.sub("", paper_id)
+
+
+def arxiv_version_number(paper_id: str) -> int:
+    """Numeric version for ordering; bare IDs sort as ``-1`` (below v1)."""
+    suffix = arxiv_version_suffix(paper_id)
+    if suffix is None:
+        return -1
+    return int(suffix[1:])

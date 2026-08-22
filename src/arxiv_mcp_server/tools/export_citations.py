@@ -16,7 +16,7 @@ import httpx
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from .arxiv_ids import is_valid_arxiv_id, normalize_arxiv_id
+from .arxiv_ids import bare_arxiv_id, is_valid_arxiv_id, normalize_arxiv_id
 from .search import ARXIV_API_URL, _parse_arxiv_atom_response, _rate_limited_get
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -61,7 +61,7 @@ def _ascii_token(value: str) -> str:
 
 def _base_id(paper_id: str) -> str:
     """Strip a trailing version suffix, keeping the bare arXiv identifier."""
-    return _VERSION_SUFFIX.sub("", paper_id)
+    return bare_arxiv_id(paper_id)
 
 
 def _year_of(published: str) -> str:
