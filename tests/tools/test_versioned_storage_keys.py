@@ -62,6 +62,8 @@ async def test_versioned_download_stores_under_bare_id(temp_storage_path, mocker
 
     assert result["status"] == "success"
     assert result["paper_id"] == "1706.03762"
+    assert result["arxiv_version"] == "v7"
+    assert result["versioned_id"] == "1706.03762v7"
     assert (temp_storage_path / "1706.03762.md").exists()
     assert not (temp_storage_path / "1706.03762v7.md").exists()
 
@@ -105,6 +107,8 @@ async def test_bare_read_finds_versioned_download(
     payload = json.loads(read[0].text)
     assert payload["status"] == "success"
     assert payload["paper_id"] == "1706.03762"
+    assert payload["arxiv_version"] == "v7"
+    assert payload["versioned_id"] == "1706.03762v7"
     assert "Transformer body" in payload["content"]
 
 
@@ -144,6 +148,8 @@ async def test_list_papers_prefers_latest_legacy_version_only(
     assert payload["total_papers"] == 1
     assert payload["papers"][0]["id"] == "1706.03762"
     assert payload["papers"][0]["title"] == "v7"
+    assert payload["papers"][0]["arxiv_version"] == "v7"
+    assert payload["papers"][0]["versioned_id"] == "1706.03762v7"
 
 
 @pytest.mark.asyncio
@@ -161,6 +167,8 @@ async def test_bare_read_resolves_legacy_versioned_only_storage(
     payload = json.loads(read[0].text)
     assert payload["status"] == "success"
     assert payload["paper_id"] == "1706.03762"
+    assert payload["arxiv_version"] == "v7"
+    assert payload["versioned_id"] == "1706.03762v7"
     assert "legacy only content" in payload["content"]
 
 

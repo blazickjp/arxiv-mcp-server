@@ -6,9 +6,14 @@ from typing import Dict, Any, List
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
-from .arxiv_ids import bare_arxiv_id, normalize_arxiv_id, parse_arxiv_id
+from .arxiv_ids import (
+    arxiv_version_suffix,
+    bare_arxiv_id,
+    normalize_arxiv_id,
+    parse_arxiv_id,
+)
 from .content import add_content_payload
-from .list_papers import resolve_stored_stem
+from .list_papers import _sidecar_arxiv_version, resolve_stored_stem
 
 settings = Settings()
 
@@ -106,11 +111,18 @@ async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent
             encoding="utf-8"
         )
 
+        bare = bare_arxiv_id(resolved)
+        version = _sidecar_arxiv_version(
+            resolved, Path(settings.STORAGE_PATH)
+        ) or arxiv_version_suffix(resolved)
+        read_payload = {
+            "status": "success",
+            "paper_id": bare,
+            "arxiv_version": version,
+            "versioned_id": f"{bare}{version}" if version else None,
+        }
         payload = add_content_payload(
-            {
-                "status": "success",
-                "paper_id": bare_arxiv_id(resolved),
-            },
+            read_payload,
             content,
             arguments,
             _CONTENT_WARNING,

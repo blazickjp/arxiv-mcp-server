@@ -14,6 +14,7 @@ from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
 from .arxiv_ids import (
+    arxiv_version_number,
     arxiv_version_suffix,
     bare_arxiv_id,
     parse_arxiv_id,
@@ -443,6 +444,38 @@ def _cache_satisfies_request(storage_stem: str, requested_id: str) -> bool:
     return stored_ver is not None and stored_ver == req_ver
 
 
+def _would_downgrade_cached_version(storage_stem: str, requested_id: str) -> bool:
+    """True when *requested_id* is an older arXiv version than the bare cache.
+
+    Used to block silent downgrades of the bare-ID store without force=true
+    (issue #206). Unknown stored versions never count as a downgrade.
+    """
+    req_ver = arxiv_version_suffix(requested_id)
+    if req_ver is None:
+        return False
+    stored_ver = _read_arxiv_version(storage_stem)
+    if stored_ver is None:
+        return False
+    return arxiv_version_number(req_ver) < arxiv_version_number(stored_ver)
+
+
+def _response_version_fields(
+    storage_stem: str, *, fallback_version: str | None = None
+) -> Dict[str, Any]:
+    """Build ``arxiv_version`` / ``versioned_id`` fields for tool responses."""
+    bare = bare_arxiv_id(storage_stem)
+    version = (
+        _read_arxiv_version(storage_stem)
+        or fallback_version
+        or arxiv_version_suffix(storage_stem)
+    )
+    fields: Dict[str, Any] = {}
+    if version:
+        fields["arxiv_version"] = version
+        fields["versioned_id"] = f"{bare}{version}"
+    return fields
+
+
 def _wants_force_refresh(arguments: Dict[str, Any]) -> bool:
     """Return True when the caller asked to overwrite a cached paper."""
     return bool(arguments.get("force") or arguments.get("refresh"))
@@ -463,7 +496,7 @@ download_tool = types.Tool(
         "one call cannot return an unbounded paper body. When is_truncated is "
         "true, call again with start=next_start (see next_retrieval) to "
         "continue, or pass return_full_text=true for the entire remaining "
-        "paper. Set force=true to re-fetch and overwrite a cached paper."
+        "paper. Set force=true to re-fetch and overwrite a cached paper (required to replace a newer stored arXiv version with an older one)."
     ),
     inputSchema={
         "type": "object",
@@ -499,8 +532,9 @@ download_tool = types.Tool(
                 "type": "boolean",
                 "description": (
                     "If true, re-download and overwrite the local markdown and "
-                    "metadata sidecar even if the paper is already cached. "
-                    "Default false."
+                    "metadata sidecar even if the paper is already cached, "
+                    "including when replacing a newer stored arXiv version with "
+                    "an older one. Default false."
                 ),
             },
         },
@@ -738,13 +772,48 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     resolved = legacy
             if resolved:
                 content = get_paper_path(resolved, ".md").read_text(encoding="utf-8")
+                cache_payload = {
+                    "status": "success",
+                    "message": "Paper already available (returned from cache)",
+                    "paper_id": storage_id,
+                    "source": "cache",
+                }
+                cache_payload.update(_response_version_fields(resolved))
                 payload = add_content_payload(
-                    {
-                        "status": "success",
-                        "message": "Paper already available (returned from cache)",
-                        "paper_id": storage_id,
-                        "source": "cache",
-                    },
+                    cache_payload,
+                    content,
+                    arguments,
+                    _CONTENT_WARNING,
+                )
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=json.dumps(payload),
+                    )
+                ]
+
+            # Bare-ID storage: refuse silent downgrade of a newer cached version
+            # (#206). Keep the newer content and return a clear cache status.
+            if md_path.exists() and _would_downgrade_cached_version(
+                storage_id, paper_id
+            ):
+                content = md_path.read_text(encoding="utf-8")
+                stored_ver = _read_arxiv_version(storage_id)
+                refuse_payload = {
+                    "status": "success",
+                    "message": (
+                        f"Kept newer cached version {stored_ver}; refused to "
+                        f"overwrite with older requested version "
+                        f"{requested_version} without force=true"
+                    ),
+                    "paper_id": storage_id,
+                    "source": "cache",
+                    "downgrade_refused": True,
+                    "requested_version": requested_version,
+                }
+                refuse_payload.update(_response_version_fields(storage_id))
+                payload = add_content_payload(
+                    refuse_payload,
                     content,
                     arguments,
                     _CONTENT_WARNING,
@@ -772,13 +841,17 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             _cleanup_versioned_aliases(storage_id)
             # Best-effort index; the tracked task is drained at shutdown.
             _track_index_task(_run_index_by_id(storage_id))
+            html_payload = {
+                "status": "success",
+                "message": "Paper fetched from arXiv HTML endpoint",
+                "paper_id": storage_id,
+                "source": "html",
+            }
+            html_payload.update(
+                _response_version_fields(storage_id, fallback_version=requested_version)
+            )
             payload = add_content_payload(
-                {
-                    "status": "success",
-                    "message": "Paper fetched from arXiv HTML endpoint",
-                    "paper_id": storage_id,
-                    "source": "html",
-                },
+                html_payload,
                 html_text,
                 arguments,
                 _CONTENT_WARNING,
@@ -831,13 +904,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Best-effort index; the tracked task is drained at shutdown.
         _track_index_task(_run_index_from_result(arxiv_result))
 
+        pdf_payload = {
+            "status": "success",
+            "message": "Paper fetched via PDF conversion",
+            "paper_id": storage_id,
+            "source": "pdf",
+        }
+        pdf_payload.update(
+            _response_version_fields(
+                storage_id,
+                fallback_version=requested_version
+                or _version_from_arxiv_result(arxiv_result),
+            )
+        )
         payload = add_content_payload(
-            {
-                "status": "success",
-                "message": "Paper fetched via PDF conversion",
-                "paper_id": storage_id,
-                "source": "pdf",
-            },
+            pdf_payload,
             markdown,
             arguments,
             _CONTENT_WARNING,
