@@ -272,60 +272,46 @@ async def test_check_alerts_truncated_page_does_not_jump_watermark_to_now(
 async def test_check_alerts_truncated_page_continues_draining(
     monkeypatch, alerts_test_env
 ):
-    """Regression #217: subsequent checks keep draining until the window is caught up."""
-    pages = [
-        (
-            [
-                {
-                    "id": "2401.00001",
-                    "title": "Paper A",
-                    "authors": ["A"],
-                    "abstract": "x",
-                    "categories": ["cs.LG"],
-                    "published": "2024-02-01T00:00:00+00:00",
-                    "url": "https://arxiv.org/pdf/2401.00001",
-                    "resource_uri": "arxiv://2401.00001",
-                }
-            ],
-            3,
-        ),
-        (
-            [
-                {
-                    "id": "2401.00002",
-                    "title": "Paper B",
-                    "authors": ["B"],
-                    "abstract": "y",
-                    "categories": ["cs.LG"],
-                    "published": "2024-03-01T00:00:00+00:00",
-                    "url": "https://arxiv.org/pdf/2401.00002",
-                    "resource_uri": "arxiv://2401.00002",
-                }
-            ],
-            2,
-        ),
-        (
-            [
-                {
-                    "id": "2401.00003",
-                    "title": "Paper C",
-                    "authors": ["C"],
-                    "abstract": "z",
-                    "categories": ["cs.LG"],
-                    "published": "2024-04-01T00:00:00+00:00",
-                    "url": "https://arxiv.org/pdf/2401.00003",
-                    "resource_uri": "arxiv://2401.00003",
-                }
-            ],
-            1,
-        ),
-        ([], 0),
+    """Regression #217: subsequent checks paginate start until the window is caught up."""
+    corpus = [
+        {
+            "id": "2401.00001",
+            "title": "Paper A",
+            "authors": ["A"],
+            "abstract": "x",
+            "categories": ["cs.LG"],
+            "published": "2024-02-01T00:00:00+00:00",
+            "url": "https://arxiv.org/pdf/2401.00001",
+            "resource_uri": "arxiv://2401.00001",
+        },
+        {
+            "id": "2401.00002",
+            "title": "Paper B",
+            "authors": ["B"],
+            "abstract": "y",
+            "categories": ["cs.LG"],
+            "published": "2024-03-01T00:00:00+00:00",
+            "url": "https://arxiv.org/pdf/2401.00002",
+            "resource_uri": "arxiv://2401.00002",
+        },
+        {
+            "id": "2401.00003",
+            "title": "Paper C",
+            "authors": ["C"],
+            "abstract": "z",
+            "categories": ["cs.LG"],
+            "published": "2024-04-01T00:00:00+00:00",
+            "url": "https://arxiv.org/pdf/2401.00003",
+            "resource_uri": "arxiv://2401.00003",
+        },
     ]
-    seen_date_from = []
+    seen = []
 
     async def _mock_pages(**kwargs):
-        seen_date_from.append(kwargs.get("date_from"))
-        return pages[min(len(seen_date_from) - 1, len(pages) - 1)]
+        start = int(kwargs.get("start") or 0)
+        seen.append({"date_from": kwargs.get("date_from"), "start": start})
+        page = corpus[start : start + 1]
+        return page, len(corpus)
 
     monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_pages)
 
@@ -337,40 +323,115 @@ async def test_check_alerts_truncated_page_continues_draining(
     first = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
     assert first["alerts"][0]["has_more"] is True
     assert first["alerts"][0]["new_papers"][0]["id"] == "2401.00001"
-    assert (
-        alerts_module._load_watches()["topics"][0]["last_checked"]
-        == "2024-02-01T00:00:00+00:00"
-    )
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] == "2024-02-01T00:00:00+00:00"
+    assert stored["check_start"] == 1
+    assert stored["drain_from"] == "2024-01-01T00:00:00+00:00"
 
     second = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
     assert second["alerts"][0]["has_more"] is True
     assert second["alerts"][0]["new_papers"][0]["id"] == "2401.00002"
-    assert (
-        alerts_module._load_watches()["topics"][0]["last_checked"]
-        == "2024-03-01T00:00:00+00:00"
-    )
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] == "2024-03-01T00:00:00+00:00"
+    assert stored["check_start"] == 2
 
-    # Last paper still fills max_results=1, so treat as maybe-truncated and
-    # only advance through the returned published time.
+    # Last paper: start+returned == total => has_more clears, cursor resets to now.
     third = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
-    assert third["alerts"][0]["has_more"] is True
+    assert third["alerts"][0]["has_more"] is False
     assert third["alerts"][0]["new_papers"][0]["id"] == "2401.00003"
-    assert (
-        alerts_module._load_watches()["topics"][0]["last_checked"]
-        == "2024-04-01T00:00:00+00:00"
-    )
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] != "2024-04-01T00:00:00+00:00"
+    assert stored["last_checked"] != "2024-01-01T00:00:00+00:00"
+    assert "check_start" not in stored
+    assert "drain_from" not in stored
+    # date_from stays frozen at the drain window; start paginates.
+    assert [s["date_from"] for s in seen] == ["2024-01-01T00:00:00+00:00"] * 3
+    assert [s["start"] for s in seen] == [0, 1, 2]
 
-    # Empty non-full page: safe to mark caught up to wall-clock now.
-    fourth = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
-    assert fourth["alerts"][0]["has_more"] is False
-    assert fourth["alerts"][0]["new_paper_count"] == 0
-    final_watermark = alerts_module._load_watches()["topics"][0]["last_checked"]
-    assert final_watermark != "2024-04-01T00:00:00+00:00"
-    assert final_watermark != "2024-01-01T00:00:00+00:00"
-    assert seen_date_from[0] == "2024-01-01T00:00:00+00:00"
-    assert seen_date_from[1] == "2024-02-01T00:00:00+00:00"
-    assert seen_date_from[2] == "2024-03-01T00:00:00+00:00"
-    assert seen_date_from[3] == "2024-04-01T00:00:00+00:00"
+
+@pytest.mark.asyncio
+async def test_check_alerts_boundary_hit_does_not_stick_empty_has_more(
+    monkeypatch, alerts_test_env
+):
+    """Regression #217 live FAIL: Atom re-returns the watermark paper; must still progress.
+
+    After call0 sets last_checked to the returned published time, a naive start=0
+    refetch yields the same boundary paper, which `_is_new_paper` drops (strict >).
+    Drain must either return a different next paper or clear has_more — never
+    empty+has_more with a frozen cursor.
+    """
+    paper_a = {
+        "id": "2401.00633",
+        "title": "Boundary",
+        "authors": ["A"],
+        "abstract": "x",
+        "categories": ["cs.LG"],
+        "published": "2024-01-01T02:03:35Z",
+        "url": "https://arxiv.org/pdf/2401.00633",
+        "resource_uri": "arxiv://2401.00633",
+    }
+    paper_b = {
+        "id": "2401.00634",
+        "title": "Next",
+        "authors": ["B"],
+        "abstract": "y",
+        "categories": ["cs.LG"],
+        "published": "2024-01-01T05:00:00Z",
+        "url": "https://arxiv.org/pdf/2401.00634",
+        "resource_uri": "arxiv://2401.00634",
+    }
+    corpus = [paper_a, paper_b]
+    seen = []
+
+    async def _mock_atom(**kwargs):
+        # Simulate day-granular date_from: always the same corpus, honor start.
+        start = int(kwargs.get("start") or 0)
+        seen.append({"start": start, "date_from": kwargs.get("date_from")})
+        page = corpus[start : start + int(kwargs.get("max_results") or 1)]
+        return page, len(corpus)
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_atom)
+
+    await alerts_module.handle_watch_topic(
+        {"topic": 'ti:"neural" AND cat:cs.LG', "max_results": 1}
+    )
+    payload = alerts_module._load_watches()
+    payload["topics"][0]["last_checked"] = "2024-01-01T00:00:00+00:00"
+    alerts_module._save_watches(payload)
+
+    call0 = json.loads(
+        (
+            await alerts_module.handle_check_alerts(
+                {"topic": 'ti:"neural" AND cat:cs.LG'}
+            )
+        )[0].text
+    )
+    assert call0["alerts"][0]["new_paper_count"] == 1
+    assert call0["alerts"][0]["new_papers"][0]["id"] == "2401.00633"
+    assert call0["alerts"][0]["has_more"] is True
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] == "2024-01-01T02:03:35Z"
+    assert not stored["last_checked"].startswith("2026-")
+    assert stored["check_start"] == 1
+
+    call1 = json.loads(
+        (
+            await alerts_module.handle_check_alerts(
+                {"topic": 'ti:"neural" AND cat:cs.LG'}
+            )
+        )[0].text
+    )
+    alert1 = call1["alerts"][0]
+    stored1 = alerts_module._load_watches()["topics"][0]
+    # Second call must return the next paper (start=1), not re-trap on boundary.
+    assert alert1["new_paper_count"] == 1
+    assert alert1["new_papers"][0]["id"] == "2401.00634"
+    assert alert1["new_papers"][0]["id"] != "2401.00633"
+    # Exhausted total=2 => has_more false and drain cursor cleared.
+    assert alert1["has_more"] is False
+    assert "check_start" not in stored1
+    assert "drain_from" not in stored1
+    assert [s["start"] for s in seen] == [0, 1]
 
 
 @pytest.mark.asyncio
@@ -419,10 +480,16 @@ async def test_check_alerts_full_page_marks_caught_up(monkeypatch, alerts_test_e
 def test_page_is_truncated_helpers():
     """Unit coverage for truncation detection used by check_alerts."""
     assert alerts_module._page_is_truncated(1, 1, 9321) is True
-    assert alerts_module._page_is_truncated(10, 10, 10) is True
+    assert alerts_module._page_is_truncated(10, 10, 10) is False
     assert alerts_module._page_is_truncated(3, 10, 3) is False
     assert alerts_module._page_is_truncated(0, 10, 0) is False
     assert alerts_module._page_is_truncated(5, 10, 12) is True
+    # With start offset: last page of a known total is not truncated.
+    assert alerts_module._page_is_truncated(1, 1, 3, start=2) is False
+    assert alerts_module._page_is_truncated(1, 1, 3, start=1) is True
+    # Without total, a full page is assumed truncated.
+    assert alerts_module._page_is_truncated(1, 1, None) is True
+    assert alerts_module._page_is_truncated(0, 1, None) is False
     assert (
         alerts_module._newest_published(
             [

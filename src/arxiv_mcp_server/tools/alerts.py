@@ -72,9 +72,11 @@ check_alerts_tool = types.Tool(
         "Check all saved topic watches for newly published papers since the last check. "
         "Omitting the topic parameter runs ALL saved watches and returns new papers for each. "
         "Passing a topic string checks only that specific watch. "
-        "Advances each watch's last_checked watermark after running: when a page is truncated by "
-        "max_results, the watermark moves to the newest returned paper (has_more=true) so later "
-        "calls keep draining the same window; when the page is not full, last_checked becomes now. "
+        "Advances each watch's drain cursor after running: when a page is truncated by "
+        "max_results, has_more=true and check_start advances so later calls return the next "
+        "papers in the same window (Atom date bounds alone are day-granular and would otherwise "
+        "re-hit the boundary); last_checked tracks the newest returned paper. When the page is "
+        "not full, last_checked becomes now and the drain cursor resets. "
         "Use watch_topic to register topics before calling this. "
         "Returns a summary with new paper counts, has_more, and full paper metadata per topic."
     ),
@@ -207,21 +209,28 @@ def _page_is_truncated(
     max_results: int,
     total_results: Optional[int],
     new_count: Optional[int] = None,
+    start: int = 0,
 ) -> bool:
     """True when max_results or OpenSearch total indicates more papers remain.
 
-    A full page of results (returned/new_count == max_results) is treated as
-    truncated so we never jump the watermark to wall-clock now and skip the
-    rest of the watch window. When OpenSearch reports total > returned, that
-    also means more remain.
+    When OpenSearch reports a total, trust start+returned vs total. Otherwise a
+    full page (returned/new_count == max_results) is treated as truncated so we
+    never jump the watermark to wall-clock now and skip the rest of the window.
     """
-    if total_results is not None and total_results > returned:
-        return True
+    start = max(0, int(start or 0))
+    if total_results is not None:
+        return total_results > (start + returned)
     if returned >= max_results > 0:
         return True
     if new_count is not None and new_count >= max_results > 0:
         return True
     return False
+
+
+def _clear_drain_cursor(topic: Dict[str, Any]) -> None:
+    """Reset pagination fields used while draining a truncated watch window."""
+    topic.pop("drain_from", None)
+    topic.pop("check_start", None)
 
 
 async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextContent]:
@@ -296,15 +305,24 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
 
             last_checked = topic.get("last_checked")
             max_results = min(int(topic.get("max_results", 10)), settings.MAX_RESULTS)
-            # Oldest-first so a truncated page can advance the watermark to the
-            # newest returned paper and subsequent checks keep draining the window.
+            # Freeze the Atom date lower-bound for this drain. submittedDate is
+            # day-granular, so bumping last_checked to a paper's published time
+            # would re-fetch the same boundary hit at start=0. Paginate with
+            # check_start against drain_from instead.
+            drain_from = topic.get("drain_from")
+            if drain_from is None:
+                drain_from = last_checked
+            check_start = max(0, int(topic.get("check_start") or 0))
+
+            # Oldest-first so start offsets walk forward through the window.
             search_results, total_results = await _raw_arxiv_search(
                 query=topic_query,
                 max_results=max_results,
                 sort_by="date",
                 sort_order="ascending",
-                date_from=last_checked,
+                date_from=drain_from,
                 categories=topic.get("categories") or None,
+                start=check_start,
             )
 
             new_papers = [
@@ -318,16 +336,26 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
                 max_results,
                 total_results,
                 new_count=len(new_papers),
+                start=check_start,
             )
 
             if has_more:
-                # Do not jump to wall-clock now — only advance through returned papers.
-                watermark = _newest_published(new_papers)
-                if watermark is not None:
-                    topic["last_checked"] = watermark
-                # else: keep prior last_checked until a page yields papers
+                if search_results:
+                    # Advance start past this raw page so a day-granular Atom
+                    # re-hit of the boundary paper cannot freeze the drain
+                    # (empty new_papers + has_more + frozen cursor).
+                    topic["drain_from"] = drain_from
+                    topic["check_start"] = check_start + len(search_results)
+                    if new_papers:
+                        topic["last_checked"] = _newest_published(new_papers)
+                else:
+                    # has_more with zero raw hits cannot progress — stop.
+                    has_more = False
+                    topic["last_checked"] = now_iso
+                    _clear_drain_cursor(topic)
             else:
                 topic["last_checked"] = now_iso
+                _clear_drain_cursor(topic)
 
             topic["updated_at"] = now_iso
 
