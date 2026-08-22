@@ -205,3 +205,231 @@ def test_check_alerts_tool_annotations_not_readonly():
     ann = alerts_module.check_alerts_tool.annotations
     assert ann.readOnlyHint is False
     assert ann.idempotentHint is False
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_truncated_page_does_not_jump_watermark_to_now(
+    monkeypatch, alerts_test_env
+):
+    """Regression #217: truncated max_results must not advance last_checked to now."""
+    calls = {"n": 0}
+
+    async def _mock_truncated(**kwargs):
+        calls["n"] += 1
+        assert kwargs.get("sort_order") == "ascending"
+        # Page full (max_results=1) while OpenSearch reports many more hits.
+        return (
+            [
+                {
+                    "id": "2401.00001",
+                    "title": "Oldest unread",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.LG"],
+                    "published": "2024-06-01T12:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2401.00001",
+                    "resource_uri": "arxiv://2401.00001",
+                }
+            ],
+            9321,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_truncated)
+
+    await alerts_module.handle_watch_topic(
+        {"topic": 'ti:"neural" AND cat:cs.LG', "max_results": 1}
+    )
+
+    # Seed last_checked far in the past (repro from #217).
+    payload = alerts_module._load_watches()
+    payload["topics"][0]["last_checked"] = "2024-01-01T00:00:00+00:00"
+    alerts_module._save_watches(payload)
+
+    before = "2024-01-01T00:00:00+00:00"
+    response = await alerts_module.handle_check_alerts(
+        {"topic": 'ti:"neural" AND cat:cs.LG'}
+    )
+    result = json.loads(response[0].text)
+    assert result["status"] == "success"
+    alert = result["alerts"][0]
+    assert alert["new_paper_count"] == 1
+    assert alert["has_more"] is True
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] == "2024-06-01T12:00:00+00:00"
+    assert stored["last_checked"] != before
+    # Must not have jumped to wall-clock "now".
+    assert not stored["last_checked"].startswith("2026-")
+    assert "T" in stored["last_checked"]
+    from dateutil import parser as date_parser
+    from datetime import datetime, timezone, timedelta
+
+    watermark = date_parser.parse(stored["last_checked"])
+    assert watermark < datetime.now(timezone.utc) - timedelta(days=30)
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_truncated_page_continues_draining(
+    monkeypatch, alerts_test_env
+):
+    """Regression #217: subsequent checks keep draining until the window is caught up."""
+    pages = [
+        (
+            [
+                {
+                    "id": "2401.00001",
+                    "title": "Paper A",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.LG"],
+                    "published": "2024-02-01T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2401.00001",
+                    "resource_uri": "arxiv://2401.00001",
+                }
+            ],
+            3,
+        ),
+        (
+            [
+                {
+                    "id": "2401.00002",
+                    "title": "Paper B",
+                    "authors": ["B"],
+                    "abstract": "y",
+                    "categories": ["cs.LG"],
+                    "published": "2024-03-01T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2401.00002",
+                    "resource_uri": "arxiv://2401.00002",
+                }
+            ],
+            2,
+        ),
+        (
+            [
+                {
+                    "id": "2401.00003",
+                    "title": "Paper C",
+                    "authors": ["C"],
+                    "abstract": "z",
+                    "categories": ["cs.LG"],
+                    "published": "2024-04-01T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2401.00003",
+                    "resource_uri": "arxiv://2401.00003",
+                }
+            ],
+            1,
+        ),
+        ([], 0),
+    ]
+    seen_date_from = []
+
+    async def _mock_pages(**kwargs):
+        seen_date_from.append(kwargs.get("date_from"))
+        return pages[min(len(seen_date_from) - 1, len(pages) - 1)]
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_pages)
+
+    await alerts_module.handle_watch_topic({"topic": "drain-me", "max_results": 1})
+    payload = alerts_module._load_watches()
+    payload["topics"][0]["last_checked"] = "2024-01-01T00:00:00+00:00"
+    alerts_module._save_watches(payload)
+
+    first = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert first["alerts"][0]["has_more"] is True
+    assert first["alerts"][0]["new_papers"][0]["id"] == "2401.00001"
+    assert (
+        alerts_module._load_watches()["topics"][0]["last_checked"]
+        == "2024-02-01T00:00:00+00:00"
+    )
+
+    second = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert second["alerts"][0]["has_more"] is True
+    assert second["alerts"][0]["new_papers"][0]["id"] == "2401.00002"
+    assert (
+        alerts_module._load_watches()["topics"][0]["last_checked"]
+        == "2024-03-01T00:00:00+00:00"
+    )
+
+    # Last paper still fills max_results=1, so treat as maybe-truncated and
+    # only advance through the returned published time.
+    third = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert third["alerts"][0]["has_more"] is True
+    assert third["alerts"][0]["new_papers"][0]["id"] == "2401.00003"
+    assert (
+        alerts_module._load_watches()["topics"][0]["last_checked"]
+        == "2024-04-01T00:00:00+00:00"
+    )
+
+    # Empty non-full page: safe to mark caught up to wall-clock now.
+    fourth = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert fourth["alerts"][0]["has_more"] is False
+    assert fourth["alerts"][0]["new_paper_count"] == 0
+    final_watermark = alerts_module._load_watches()["topics"][0]["last_checked"]
+    assert final_watermark != "2024-04-01T00:00:00+00:00"
+    assert final_watermark != "2024-01-01T00:00:00+00:00"
+    assert seen_date_from[0] == "2024-01-01T00:00:00+00:00"
+    assert seen_date_from[1] == "2024-02-01T00:00:00+00:00"
+    assert seen_date_from[2] == "2024-03-01T00:00:00+00:00"
+    assert seen_date_from[3] == "2024-04-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_full_page_marks_caught_up(monkeypatch, alerts_test_env):
+    """When fewer than max_results are returned, watermark advances to now safely."""
+
+    async def _mock_partial(**kwargs):
+        return (
+            [
+                {
+                    "id": "2501.00010",
+                    "title": "Only Paper",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.AI"],
+                    "published": "2025-01-15T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2501.00010",
+                    "resource_uri": "arxiv://2501.00010",
+                }
+            ],
+            1,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_partial)
+
+    await alerts_module.handle_watch_topic({"topic": "caught-up", "max_results": 10})
+    payload = alerts_module._load_watches()
+    payload["topics"][0]["last_checked"] = "2025-01-01T00:00:00+00:00"
+    alerts_module._save_watches(payload)
+
+    result = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert result["alerts"][0]["has_more"] is False
+    assert result["alerts"][0]["new_paper_count"] == 1
+
+    stored = alerts_module._load_watches()["topics"][0]["last_checked"]
+    assert stored != "2025-01-01T00:00:00+00:00"
+    assert stored != "2025-01-15T00:00:00+00:00"
+    from dateutil import parser as date_parser
+    from datetime import datetime, timezone, timedelta
+
+    assert date_parser.parse(stored) >= datetime.now(timezone.utc) - timedelta(
+        minutes=5
+    )
+
+
+def test_page_is_truncated_helpers():
+    """Unit coverage for truncation detection used by check_alerts."""
+    assert alerts_module._page_is_truncated(1, 1, 9321) is True
+    assert alerts_module._page_is_truncated(10, 10, 10) is True
+    assert alerts_module._page_is_truncated(3, 10, 3) is False
+    assert alerts_module._page_is_truncated(0, 10, 0) is False
+    assert alerts_module._page_is_truncated(5, 10, 12) is True
+    assert (
+        alerts_module._newest_published(
+            [
+                {"published": "2024-01-01T00:00:00Z"},
+                {"published": "2024-06-01T12:00:00+00:00"},
+                {"published": "2024-03-01T00:00:00Z"},
+            ]
+        )
+        == "2024-06-01T12:00:00+00:00"
+    )

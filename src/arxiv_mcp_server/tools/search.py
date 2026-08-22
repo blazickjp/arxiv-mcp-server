@@ -190,6 +190,7 @@ def build_arxiv_search_url(
     date_to: Optional[str] = None,
     categories: Optional[List[str]] = None,
     start: int = 0,
+    sort_order: str = "descending",
 ) -> str:
     """Build a raw arXiv API URL with a percent-encoded search_query."""
     final_query = build_arxiv_search_query(
@@ -204,13 +205,14 @@ def build_arxiv_search_url(
         "relevance": "relevance",
         "date": "submittedDate",
     }
+    order = sort_order if sort_order in ("ascending", "descending") else "descending"
     encoded_query = quote(final_query, safe="")
     start = max(0, int(start))
     base_params = (
         f"start={start}"
         f"&max_results={max_results}"
         f"&sortBy={sort_map.get(sort_by, 'relevance')}"
-        f"&sortOrder=descending"
+        f"&sortOrder={order}"
     )
     return f"{ARXIV_API_URL}?search_query={encoded_query}&{base_params}"
 
@@ -223,6 +225,7 @@ async def _raw_arxiv_search(
     date_to: Optional[str] = None,
     categories: Optional[List[str]] = None,
     start: int = 0,
+    sort_order: str = "descending",
 ) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Perform arXiv search using raw HTTP requests.
@@ -242,6 +245,7 @@ async def _raw_arxiv_search(
         date_to=date_to,
         categories=categories,
         start=start,
+        sort_order=sort_order,
     )
     logger.debug(f"Raw API URL: {url}")
 

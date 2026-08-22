@@ -72,9 +72,11 @@ check_alerts_tool = types.Tool(
         "Check all saved topic watches for newly published papers since the last check. "
         "Omitting the topic parameter runs ALL saved watches and returns new papers for each. "
         "Passing a topic string checks only that specific watch. "
-        "Updates each watch's last_checked timestamp after running, so subsequent calls only return newer papers. "
+        "Advances each watch's last_checked watermark after running: when a page is truncated by "
+        "max_results, the watermark moves to the newest returned paper (has_more=true) so later "
+        "calls keep draining the same window; when the page is not full, last_checked becomes now. "
         "Use watch_topic to register topics before calling this. "
-        "Returns a summary with new paper counts and full paper metadata per topic."
+        "Returns a summary with new paper counts, has_more, and full paper metadata per topic."
     ),
     inputSchema={
         "type": "object",
@@ -184,6 +186,44 @@ def _is_new_paper(published_value: str, last_checked: Optional[str]) -> bool:
         return True
 
 
+def _newest_published(papers: List[Dict[str, Any]]) -> Optional[str]:
+    """Return the published timestamp of the newest paper in the list."""
+    newest_value: Optional[str] = None
+    newest_dt: Optional[datetime] = None
+    for paper in papers:
+        published = paper.get("published") or ""
+        try:
+            published_dt = parser.parse(published)
+        except (ValueError, TypeError):
+            continue
+        if newest_dt is None or published_dt > newest_dt:
+            newest_dt = published_dt
+            newest_value = published
+    return newest_value
+
+
+def _page_is_truncated(
+    returned: int,
+    max_results: int,
+    total_results: Optional[int],
+    new_count: Optional[int] = None,
+) -> bool:
+    """True when max_results or OpenSearch total indicates more papers remain.
+
+    A full page of results (returned/new_count == max_results) is treated as
+    truncated so we never jump the watermark to wall-clock now and skip the
+    rest of the watch window. When OpenSearch reports total > returned, that
+    also means more remain.
+    """
+    if total_results is not None and total_results > returned:
+        return True
+    if returned >= max_results > 0:
+        return True
+    if new_count is not None and new_count >= max_results > 0:
+        return True
+    return False
+
+
 async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Save or update a watched topic definition."""
     try:
@@ -255,12 +295,14 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
                 continue
 
             last_checked = topic.get("last_checked")
-            search_results, _total = await _raw_arxiv_search(
+            max_results = min(int(topic.get("max_results", 10)), settings.MAX_RESULTS)
+            # Oldest-first so a truncated page can advance the watermark to the
+            # newest returned paper and subsequent checks keep draining the window.
+            search_results, total_results = await _raw_arxiv_search(
                 query=topic_query,
-                max_results=min(
-                    int(topic.get("max_results", 10)), settings.MAX_RESULTS
-                ),
+                max_results=max_results,
                 sort_by="date",
+                sort_order="ascending",
                 date_from=last_checked,
                 categories=topic.get("categories") or None,
             )
@@ -271,17 +313,33 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
                 if _is_new_paper(paper.get("published", ""), last_checked)
             ]
 
+            has_more = _page_is_truncated(
+                len(search_results),
+                max_results,
+                total_results,
+                new_count=len(new_papers),
+            )
+
+            if has_more:
+                # Do not jump to wall-clock now — only advance through returned papers.
+                watermark = _newest_published(new_papers)
+                if watermark is not None:
+                    topic["last_checked"] = watermark
+                # else: keep prior last_checked until a page yields papers
+            else:
+                topic["last_checked"] = now_iso
+
+            topic["updated_at"] = now_iso
+
             alerts.append(
                 {
                     "topic": topic_query,
                     "last_checked": last_checked,
                     "new_paper_count": len(new_papers),
                     "new_papers": new_papers,
+                    "has_more": has_more,
                 }
             )
-
-            topic["last_checked"] = now_iso
-            topic["updated_at"] = now_iso
 
         payload["topics"] = all_topics
         _save_watches(payload)
