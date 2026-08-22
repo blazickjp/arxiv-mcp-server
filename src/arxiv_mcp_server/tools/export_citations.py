@@ -16,7 +16,12 @@ import httpx
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
-from .arxiv_ids import bare_arxiv_id, is_valid_arxiv_id, normalize_arxiv_id
+from .arxiv_ids import (
+    arxiv_version_number,
+    bare_arxiv_id,
+    is_valid_arxiv_id,
+    normalize_arxiv_id,
+)
 from .search import ARXIV_API_URL, _parse_arxiv_atom_response, _rate_limited_get
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -137,13 +142,33 @@ def _render_entry(key: str, paper: Dict[str, Any], requested_id: str) -> str:
 async def _fetch_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """Fetch authoritative metadata for *ids* in one arXiv API request.
 
-    Returns a mapping of bare arXiv ID -> parsed metadata dict.
+    Returns a mapping keyed by ``versioned_id`` (e.g. ``1706.03762v7``) so
+    multiple versions of the same paper in one batch do not collide. Also maps
+    each bare id to the latest version among the returned entries, so bare
+    requests still resolve to latest.
     """
     url = f"{ARXIV_API_URL}?id_list={','.join(ids)}&max_results={len(ids)}"
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await _rate_limited_get(client, url)
     papers = _parse_arxiv_atom_response(response.text)
-    return {paper["id"]: paper for paper in papers if paper.get("id")}
+
+    by_key: Dict[str, Dict[str, Any]] = {}
+    latest_by_bare: Dict[str, Dict[str, Any]] = {}
+    for paper in papers:
+        bare = paper.get("id")
+        versioned = paper.get("versioned_id") or bare
+        if not versioned:
+            continue
+        by_key[versioned] = paper
+        if not bare:
+            continue
+        existing = latest_by_bare.get(bare)
+        if existing is None or arxiv_version_number(
+            paper.get("versioned_id") or ""
+        ) > arxiv_version_number(existing.get("versioned_id") or ""):
+            latest_by_bare[bare] = paper
+    by_key.update(latest_by_bare)
+    return by_key
 
 
 def _error(message: str) -> List[types.TextContent]:
@@ -217,7 +242,12 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
                     }
                 )
                 continue
-            paper = metadata.get(_base_id(candidate))
+            # Prefer the exact versioned key so batching multiple versions of
+            # one paper does not collapse to a single bare-id entry (#212).
+            # Bare ids fall through to the latest-version mapping.
+            paper = metadata.get(candidate)
+            if paper is None and not _VERSION_SUFFIX.search(candidate):
+                paper = metadata.get(_base_id(candidate))
             # Versioned requests must match the Atom entry version (get_abstract
             # rejects unknown versions; do not succeed with a bare abs URL for
             # e.g. 2307.09288v999 when only another version exists).

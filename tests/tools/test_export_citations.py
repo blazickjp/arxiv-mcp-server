@@ -12,9 +12,14 @@ from arxiv_mcp_server.tools import export_citations as ec
 
 
 def _paper(
-    pid, title, authors, published="2024-01-15T00:00:00Z", categories=("cs.AI",)
+    pid,
+    title,
+    authors,
+    published="2024-01-15T00:00:00Z",
+    categories=("cs.AI",),
+    versioned_id=None,
 ):
-    return {
+    entry = {
         "id": pid,
         "title": title,
         "authors": list(authors),
@@ -24,19 +29,38 @@ def _paper(
         "url": f"https://arxiv.org/pdf/{pid}",
         "resource_uri": f"arxiv://{pid}",
     }
+    if versioned_id is not None:
+        entry["versioned_id"] = versioned_id
+    return entry
 
 
 def _stub_metadata(monkeypatch, papers, recorder=None):
-    """Patch _fetch_metadata to return canned metadata keyed by bare ID."""
+    """Patch _fetch_metadata to mirror versioned + bare→latest indexing (#212)."""
 
     async def _fake(ids):
-        # Mirror the real fetch: arXiv metadata is keyed by the *bare* ID
-        # (the Atom parser strips version suffixes), regardless of the version
-        # the caller queried with.
+        # Mirror the real fetch: entries are keyed by versioned_id, with an
+        # additional bare-id → latest-version mapping among returned papers.
         if recorder is not None:
             recorder.extend(ids)
         bases = {ec._base_id(i) for i in ids}
-        return {p["id"]: p for p in papers if p["id"] in bases}
+        matching = [p for p in papers if p["id"] in bases]
+        by_key = {}
+        latest_by_bare = {}
+        for p in matching:
+            versioned = p.get("versioned_id") or p["id"]
+            by_key[versioned] = p
+            existing = latest_by_bare.get(p["id"])
+            if existing is None:
+                latest_by_bare[p["id"]] = p
+            else:
+                from arxiv_mcp_server.tools.arxiv_ids import arxiv_version_number
+
+                if arxiv_version_number(versioned) > arxiv_version_number(
+                    existing.get("versioned_id") or ""
+                ):
+                    latest_by_bare[p["id"]] = p
+        by_key.update(latest_by_bare)
+        return by_key
 
     monkeypatch.setattr(ec, "_fetch_metadata", _fake)
 
@@ -160,7 +184,10 @@ async def test_missing_optional_fields(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_versioned_id_preserved_in_eprint_and_url(monkeypatch):
-    _stub_metadata(monkeypatch, [_paper("2401.00004", "Versioned", ["A B"])])
+    _stub_metadata(
+        monkeypatch,
+        [_paper("2401.00004", "Versioned", ["A B"], versioned_id="2401.00004v2")],
+    )
     payload = await _run({"paper_ids": ["2401.00004v2"]})
     entry = payload["results"][0]["bibtex"]
     assert "eprint = {2401.00004v2}" in entry
@@ -320,9 +347,11 @@ async def test_nonexistent_version_rejected_when_other_version_exists(monkeypatc
     """Base metadata for another version must not satisfy a bad version request."""
 
     async def _fake(ids):
-        paper = _paper("2307.09288", "Llama 2", ["Meta AI"])
-        paper["versioned_id"] = "2307.09288v1"
-        return {"2307.09288": paper}
+        paper = _paper(
+            "2307.09288", "Llama 2", ["Meta AI"], versioned_id="2307.09288v1"
+        )
+        # Real _fetch_metadata keys by versioned_id and bare→latest.
+        return {"2307.09288v1": paper, "2307.09288": paper}
 
     monkeypatch.setattr(ec, "_fetch_metadata", _fake)
     payload = await _run({"paper_ids": ["2307.09288v1", "2307.09288v999"]})
@@ -332,3 +361,124 @@ async def test_nonexistent_version_rejected_when_other_version_exists(monkeypatc
     assert "2307.09288v1" in by_id["2307.09288v1"]["bibtex"]
     assert by_id["2307.09288v999"]["status"] == "error"
     assert by_id["2307.09288v999"]["error"] == "not found on arXiv"
+
+
+@pytest.mark.asyncio
+async def test_batch_multiple_versions_of_same_paper(monkeypatch):
+    """Batching v7 and v1 of one paper must succeed for both (#212).
+
+    Previously _fetch_metadata keyed by bare id so the last Atom entry won and
+    the other requested version was reported as not found.
+    """
+    v7 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2023-08-02T00:00:00Z",
+        versioned_id="1706.03762v7",
+    )
+    v1 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2017-06-12T00:00:00Z",
+        versioned_id="1706.03762v1",
+    )
+
+    async def _fake(ids):
+        # Simulate Atom returning both versioned entries for the batch query.
+        assert ids == ["1706.03762v7", "1706.03762v1"]
+        # Build the same indexing the real _fetch_metadata produces.
+        by_key = {"1706.03762v7": v7, "1706.03762v1": v1, "1706.03762": v7}
+        return by_key
+
+    monkeypatch.setattr(ec, "_fetch_metadata", _fake)
+    payload = await _run({"paper_ids": ["1706.03762v7", "1706.03762v1"]})
+    assert payload["status"] == "success"
+    assert payload["count"] == {"requested": 2, "succeeded": 2, "failed": 0}
+    by_id = {r["paper_id"]: r for r in payload["results"]}
+    assert by_id["1706.03762v7"]["status"] == "success"
+    assert by_id["1706.03762v1"]["status"] == "success"
+    assert "eprint = {1706.03762v7}" in by_id["1706.03762v7"]["bibtex"]
+    assert "eprint = {1706.03762v1}" in by_id["1706.03762v1"]["bibtex"]
+
+
+@pytest.mark.asyncio
+async def test_bare_id_resolves_to_latest_when_versions_batched(monkeypatch):
+    """Bare id still maps to the latest version among returned entries."""
+    v7 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2023-08-02T00:00:00Z",
+        versioned_id="1706.03762v7",
+    )
+    v1 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2017-06-12T00:00:00Z",
+        versioned_id="1706.03762v1",
+    )
+
+    async def _fake(ids):
+        return {"1706.03762v7": v7, "1706.03762v1": v1, "1706.03762": v7}
+
+    monkeypatch.setattr(ec, "_fetch_metadata", _fake)
+    payload = await _run({"paper_ids": ["1706.03762"]})
+    assert payload["status"] == "success"
+    assert payload["results"][0]["status"] == "success"
+    assert "eprint = {1706.03762}" in payload["results"][0]["bibtex"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_keeps_each_versioned_entry(monkeypatch):
+    """Atom returning v7 and v1 must index both; bare maps to latest (#212)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    atom = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/1706.03762v7</id>
+    <title>Attention Is All You Need</title>
+    <summary>v7 abstract</summary>
+    <published>2023-08-02T00:00:00Z</published>
+    <author><name>Ashish Vaswani</name></author>
+    <arxiv:primary_category term="cs.CL"/>
+    <link title="pdf" href="https://arxiv.org/pdf/1706.03762v7"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1706.03762v1</id>
+    <title>Attention Is All You Need</title>
+    <summary>v1 abstract</summary>
+    <published>2017-06-12T00:00:00Z</published>
+    <author><name>Ashish Vaswani</name></author>
+    <arxiv:primary_category term="cs.CL"/>
+    <link title="pdf" href="https://arxiv.org/pdf/1706.03762v1"/>
+  </entry>
+</feed>
+"""
+    response = MagicMock()
+    response.text = atom
+    monkeypatch.setattr(ec, "_rate_limited_get", AsyncMock(return_value=response))
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ec.httpx, "AsyncClient", _FakeClient)
+
+    meta = await ec._fetch_metadata(["1706.03762v7", "1706.03762v1"])
+    assert "1706.03762v7" in meta
+    assert "1706.03762v1" in meta
+    assert meta["1706.03762v7"]["versioned_id"] == "1706.03762v7"
+    assert meta["1706.03762v1"]["versioned_id"] == "1706.03762v1"
+    # Bare id resolves to the latest returned version.
+    assert meta["1706.03762"]["versioned_id"] == "1706.03762v7"
