@@ -97,7 +97,10 @@ async def test_citation_graph_success():
     citation_call = mock_client.get.call_args_list[1]
     assert citation_call.args[0].endswith("/citations")
     assert citation_call.kwargs["params"]["limit"] == 50
-    assert "externalIds" not in citation_call.kwargs["params"]["fields"]
+    assert "externalIds" in citation_call.kwargs["params"]["fields"]
+    assert payload["citations"][0]["external_ids"]["ArXiv"] == "2501.00001"
+    assert payload["references"][0]["arxiv_id"] == "2001.00001"
+    assert payload["references"][0]["external_ids"]["ArXiv"] == "2001.00001"
 
 
 @pytest.mark.asyncio
@@ -176,3 +179,52 @@ async def test_citation_graph_sends_api_key_and_honors_max_citations():
     for call in mock_client.get.call_args_list:
         assert call.kwargs["headers"]["x-api-key"] == "s2-key"
     assert mock_client.get.call_args_list[1].kwargs["params"]["limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_neighbors_include_arxiv_id_from_external_ids():
+    """Neighbors with ArXiv in externalIds must surface arxiv_id for tool hops."""
+    citations = {
+        "data": [
+            {
+                "citingPaper": {
+                    "paperId": "sticky-routing",
+                    "title": "Sticky Routing",
+                    "year": 2026,
+                    "authors": [{"name": "Author S"}],
+                    "externalIds": {"ArXiv": "2607.08780"},
+                }
+            }
+        ]
+    }
+    references = {
+        "data": [
+            {
+                "citedPaper": {
+                    "paperId": "promoe",
+                    "title": "ProMoE",
+                    "year": 2024,
+                    "authors": [{"name": "Author P"}],
+                    "externalIds": {"ArXiv": "2410.22134"},
+                }
+            }
+        ]
+    }
+    mock_client = _mock_async_client(
+        [
+            _json_response(PAPER_PAYLOAD),
+            _json_response(citations),
+            _json_response(references),
+        ]
+    )
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        response = await handle_citation_graph({"paper_id": "2505.16056"})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "success"
+    assert payload["citations"][0]["arxiv_id"] == "2607.08780"
+    assert payload["references"][0]["arxiv_id"] == "2410.22134"
+    neighbor_fields = mock_client.get.call_args_list[1].kwargs["params"]["fields"]
+    assert neighbor_fields == citation_graph_module.NEIGHBOR_FIELDS
+    assert "externalIds" in neighbor_fields
