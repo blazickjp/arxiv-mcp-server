@@ -26,6 +26,9 @@ EXPECTED_TOOL_NAMES = {
     "get_paper_latex",
     "list_paper_latex_sections",
     "get_paper_latex_section",
+    "get_paper_outline",
+    "read_paper_section",
+    "search_paper_text",
 }
 
 
@@ -148,6 +151,7 @@ async def test_tools_list_serialized_size_snapshot():
     # Soft ceiling: after shrinking search_papers, total list should stay well
     # under the pre-change ~16k measurement on main @94a1317.
     assert search_chars < 3000
-    # Soft ceiling allows abstract_mode (#128) on top of the #131 shrink.
-    assert total_chars < 14500
+    # Soft ceiling allows abstract_mode (#128) and markdown outline tools (#129)
+    # on top of the #131 shrink.
+    assert total_chars < 17500
     assert len(search.description) < 1500

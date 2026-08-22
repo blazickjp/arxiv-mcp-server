@@ -51,6 +51,12 @@ from .tools import (
     handle_list_paper_latex_sections,
     get_paper_latex_section_tool,
     handle_get_paper_latex_section,
+    outline_tool,
+    handle_get_paper_outline,
+    read_section_tool,
+    handle_read_paper_section,
+    search_text_tool,
+    handle_search_paper_text,
 )
 from .prompts.handlers import list_prompts as handler_list_prompts
 from .prompts.handlers import get_prompt as handler_get_prompt
@@ -96,6 +102,9 @@ async def list_tools() -> List[types.Tool]:
         get_paper_latex_tool,
         list_paper_latex_sections_tool,
         get_paper_latex_section_tool,
+        outline_tool,
+        read_section_tool,
+        search_text_tool,
     ]
 
 
@@ -152,6 +161,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             result = await handle_list_paper_latex_sections(arguments)
         elif name == "get_paper_latex_section":
             result = await handle_get_paper_latex_section(arguments)
+        elif name == "get_paper_outline":
+            result = await handle_get_paper_outline(arguments)
+        elif name == "read_paper_section":
+            result = await handle_read_paper_section(arguments)
+        elif name == "search_paper_text":
+            result = await handle_search_paper_text(arguments)
         else:
             result = [
                 types.TextContent(type="text", text=f"Error: Unknown tool {name}")

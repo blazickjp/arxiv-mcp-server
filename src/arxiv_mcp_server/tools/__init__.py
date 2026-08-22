@@ -23,6 +23,14 @@ from .alerts import (
     unwatch_topic_tool,
     handle_unwatch_topic,
 )
+from .paper_outline import (
+    outline_tool,
+    handle_get_paper_outline,
+    read_section_tool,
+    handle_read_paper_section,
+    search_text_tool,
+    handle_search_paper_text,
+)
 from .latex import (
     get_paper_latex_tool,
     handle_get_paper_latex,
@@ -65,4 +73,10 @@ __all__ = [
     "handle_list_paper_latex_sections",
     "get_paper_latex_section_tool",
     "handle_get_paper_latex_section",
+    "outline_tool",
+    "handle_get_paper_outline",
+    "read_section_tool",
+    "handle_read_paper_section",
+    "search_text_tool",
+    "handle_search_paper_text",
 ]
