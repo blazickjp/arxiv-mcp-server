@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "arxiv-mcp-server",
   "display_name": "ArXiv MCP Server",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Search, download, and analyze arXiv papers via MCP.",
   "author": {
     "name": "Joseph Blazick",
