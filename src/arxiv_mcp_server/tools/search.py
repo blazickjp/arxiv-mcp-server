@@ -443,7 +443,7 @@ TIPS FOR FOUNDATIONAL RESEARCH:
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query using quoted phrases for exact matches (e.g., '\"machine learning\" OR \"deep learning\"') or specific technical terms. Avoid overly broad or generic terms.",
+                "description": 'Search query using quoted phrases for exact matches (e.g., \'"machine learning" OR "deep learning"\') or specific technical terms. Avoid overly broad or generic terms.',
             },
             "max_results": {
                 "type": "integer",
