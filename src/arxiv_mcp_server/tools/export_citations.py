@@ -218,6 +218,13 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
                 )
                 continue
             paper = metadata.get(_base_id(candidate))
+            # Versioned requests must match the Atom entry version (get_abstract
+            # rejects unknown versions; do not succeed with a bare abs URL for
+            # e.g. 2307.09288v999 when only another version exists).
+            if paper and _VERSION_SUFFIX.search(candidate):
+                resolved = paper.get("versioned_id") or ""
+                if resolved and resolved != candidate:
+                    paper = None
             if not paper:
                 results.append(
                     {

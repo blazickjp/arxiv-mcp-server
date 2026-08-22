@@ -14,8 +14,10 @@ from ..config import Settings, get_arxiv_client
 from ..arxiv_api import ARXIV_RATE_LIMITER, stream_pdf_to_path
 from .content import add_content_payload
 from .list_papers import is_valid_arxiv_id, save_paper_metadata
+from .search import ARXIV_API_URL, ARXIV_NS, _rate_limited_get
 import logging
 import threading
+import xml.etree.ElementTree as ET
 
 pymupdf4llm: Any = None
 fitz: Any = None
@@ -448,6 +450,19 @@ class PaperNotFoundError(Exception):
     """Raised when an arXiv paper ID cannot be found."""
 
 
+async def _paper_exists_on_arxiv(paper_id: str) -> bool:
+    """Return True if arXiv has this paper/version.
+
+    Uses the same Atom ``id_list`` lookup as ``get_abstract``, so a missing
+    paper and a missing version both report as absent (empty feed).
+    """
+    url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await _rate_limited_get(client, url)
+    root = ET.fromstring(response.text)
+    return bool(root.findall("atom:entry", ARXIV_NS))
+
+
 def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
     """Persist an arXiv PDF using the version-independent streaming helper."""
     stream_pdf_to_path(
@@ -657,6 +672,12 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             ]
 
         # --- HTML not available: fall back to PDF ---
+        # Distinguish a missing paper/version from a missing [pdf] extra so
+        # callers are not told to pip-install when the ID simply does not exist
+        # (issue #196). Same Atom id_list check as get_abstract.
+        if not await _paper_exists_on_arxiv(paper_id):
+            raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
+
         if not _load_pdf_dependencies():
             return [
                 types.TextContent(

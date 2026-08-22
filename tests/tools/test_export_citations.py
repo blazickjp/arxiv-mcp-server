@@ -302,3 +302,33 @@ async def test_tool_registered_in_server():
     tools = {tool.name: tool for tool in await list_tools()}
     assert "export_citations" in tools
     assert tools["export_citations"].inputSchema["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_nonexistent_version_not_found(monkeypatch):
+    """Unknown version must not succeed with an abs URL (#196)."""
+    _stub_metadata(monkeypatch, [])
+    payload = await _run({"paper_ids": ["2307.09288v999"]})
+    assert payload["status"] == "error"
+    assert payload["results"][0]["paper_id"] == "2307.09288v999"
+    assert payload["results"][0]["error"] == "not found on arXiv"
+    assert payload["bibtex"] == ""
+
+
+@pytest.mark.asyncio
+async def test_nonexistent_version_rejected_when_other_version_exists(monkeypatch):
+    """Base metadata for another version must not satisfy a bad version request."""
+
+    async def _fake(ids):
+        paper = _paper("2307.09288", "Llama 2", ["Meta AI"])
+        paper["versioned_id"] = "2307.09288v1"
+        return {"2307.09288": paper}
+
+    monkeypatch.setattr(ec, "_fetch_metadata", _fake)
+    payload = await _run({"paper_ids": ["2307.09288v1", "2307.09288v999"]})
+    assert payload["status"] == "partial"
+    by_id = {r["paper_id"]: r for r in payload["results"]}
+    assert by_id["2307.09288v1"]["status"] == "success"
+    assert "2307.09288v1" in by_id["2307.09288v1"]["bibtex"]
+    assert by_id["2307.09288v999"]["status"] == "error"
+    assert by_id["2307.09288v999"]["error"] == "not found on arXiv"

@@ -373,6 +373,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
             results.append(
                 {
                     "id": short_id,
+                    "versioned_id": paper_id,
                     "title": title,
                     "authors": authors,
                     "abstract": abstract,

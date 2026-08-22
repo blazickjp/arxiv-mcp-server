@@ -222,6 +222,10 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
     mocker.patch(
         "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
     )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=True,
+    )
     mock_arxiv_result = MagicMock(spec=arxiv.Result)
     pdf_markdown = "# PDF Paper\nConverted from PDF."
     mocker.patch(
@@ -241,12 +245,16 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
 
 @pytest.mark.asyncio
 async def test_paper_not_found_on_arxiv(temp_storage_path, mocker):
-    """StopIteration from PDF fallback -> error message returned."""
+    """Missing paper detected before PDF fallback -> error message returned."""
     paper_id = "9999.99999"
     _patch_path(mocker, temp_storage_path)
     mocker.patch("arxiv_mcp_server.tools.download._pdf_available", True)
     mocker.patch(
         "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=False,
     )
     mocker.patch(
         "arxiv_mcp_server.tools.download._fetch_pdf_content",
@@ -305,6 +313,10 @@ async def test_pdf_download_persists_metadata_from_arxiv_result(
         "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
     )
     mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=True,
+    )
+    mocker.patch(
         "arxiv_mcp_server.tools.download._fetch_pdf_content",
         return_value=("# Test Paper\nConverted from PDF.", mock_paper),
     )
@@ -322,3 +334,86 @@ async def test_pdf_download_persists_metadata_from_arxiv_result(
     assert sidecar["authors"] == ["John Doe", "Jane Smith"]
     assert sidecar["published"].startswith("2023-01-01")
     assert sidecar["extractor_version"] == EXTRACTOR_VERSION
+
+
+@pytest.mark.asyncio
+async def test_missing_paper_reports_not_found_not_pdf_extra(temp_storage_path, mocker):
+    """Nonexistent paper must not be misreported as a missing [pdf] extra (#196)."""
+    paper_id = "9999.99999"
+    _patch_path(mocker, temp_storage_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=False,
+    )
+    # PDF extra intentionally unavailable — previously this path returned the
+    # pip-install hint even though the paper does not exist.
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._load_pdf_dependencies", return_value=False
+    )
+    mock_pdf = mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert result["message"] == f"Paper {paper_id} not found on arXiv"
+    assert "pdf extra" not in result["message"]
+    assert "pip install" not in result["message"]
+    mock_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_missing_version_reports_not_found_not_pdf_extra(
+    temp_storage_path, mocker
+):
+    """Nonexistent version must not be misreported as a missing [pdf] extra (#196)."""
+    paper_id = "2307.09288v999"
+    _patch_path(mocker, temp_storage_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=False,
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._load_pdf_dependencies", return_value=False
+    )
+    mock_pdf = mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert result["message"] == f"Paper {paper_id} not found on arXiv"
+    assert "pdf extra" not in result["message"]
+    mock_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_existing_paper_without_html_still_hints_pdf_extra(
+    temp_storage_path, mocker
+):
+    """When the paper exists but HTML is gone, keep the [pdf] extra install hint."""
+    paper_id = "2103.22222"
+    _patch_path(mocker, temp_storage_path)
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._fetch_html_content", return_value=None
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._paper_exists_on_arxiv",
+        return_value=True,
+    )
+    mocker.patch(
+        "arxiv_mcp_server.tools.download._load_pdf_dependencies", return_value=False
+    )
+
+    response = await handle_download({"paper_id": paper_id})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert "pdf extra" in result["message"]
+    assert "pip install arxiv-mcp-server[pdf]" in result["message"]
