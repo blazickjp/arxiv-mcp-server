@@ -182,8 +182,9 @@ async def test_download_cache_supports_content_pagination(temp_storage_path, moc
     assert result["returned_chars"] == 5
     assert result["next_start"] == 15
     assert result["is_truncated"] is True
-    chunk = result["content"].split("\n\n", 1)[1]
-    assert chunk == "klmno"
+    assert result["content"] == "klmno"
+    assert "content_warning" not in result  # start>0: no banner (#215)
+    assert "UNTRUSTED" not in result["content"]
     mock_httpx.assert_not_called()
     mock_pdf.assert_not_called()
 
@@ -207,8 +208,8 @@ async def test_html_endpoint_success(temp_storage_path, mocker):
 
     assert result["status"] == "success"
     assert result["source"] == "html"
-    assert result["content"].endswith(html_text)
-    assert result["content"].startswith("[UNTRUSTED EXTERNAL CONTENT")
+    assert result["content"] == html_text
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
     assert (temp_storage_path / f"{paper_id}.md").exists()
     mock_pdf.assert_not_called()
 
@@ -238,8 +239,8 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
 
     assert result["status"] == "success"
     assert result["source"] == "pdf"
-    assert result["content"].endswith(pdf_markdown)
-    assert result["content"].startswith("[UNTRUSTED EXTERNAL CONTENT")
+    assert result["content"] == pdf_markdown
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
     assert (temp_storage_path / f"{paper_id}.md").exists()
 
 

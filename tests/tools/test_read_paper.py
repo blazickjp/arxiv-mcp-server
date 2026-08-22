@@ -32,8 +32,9 @@ async def test_read_paper_supports_content_pagination(temp_storage_path, monkeyp
     assert result["returned_chars"] == 10
     assert result["next_start"] == 15
     assert result["is_truncated"] is True
-    chunk = result["content"].split("\n\n", 1)[1]
-    assert chunk == "fghijklmno"
+    assert result["content"] == "fghijklmno"
+    assert "content_warning" not in result  # start>0: no banner (#215)
+    assert "UNTRUSTED" not in result["content"]
 
 
 @pytest.mark.asyncio
@@ -85,8 +86,9 @@ async def test_read_paper_defaults_to_bounded_content(temp_storage_path, monkeyp
     assert result["next_start"] == DEFAULT_MAX_CHARS
     assert result["is_truncated"] is True
     assert "next_start" in result["next_retrieval"]
-    body = result["content"].split("\n\n", 1)[1]
-    assert len(body) == DEFAULT_MAX_CHARS
+    assert len(result["content"]) == DEFAULT_MAX_CHARS
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
 
 
 @pytest.mark.asyncio
@@ -130,8 +132,8 @@ async def test_read_paper_return_full_text_opt_in(temp_storage_path, monkeypatch
     assert result["is_truncated"] is False
     assert result["returned_chars"] == len(content)
     assert result["next_start"] is None
-    body = result["content"].split("\n\n", 1)[1]
-    assert body == content
+    assert result["content"] == content
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
 
 
 @pytest.mark.asyncio

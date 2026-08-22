@@ -366,8 +366,9 @@ async def test_download_paper_defaults_to_bounded_cached_content(
     assert result["is_truncated"] is True
     assert result["next_start"] == DEFAULT_MAX_CHARS
     assert "next_retrieval" in result
-    body = result["content"].split("\n\n", 1)[1]
-    assert len(body) == DEFAULT_MAX_CHARS
+    assert len(result["content"]) == DEFAULT_MAX_CHARS
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
     mock_html.assert_not_called()
     mock_pdf.assert_not_called()
 
