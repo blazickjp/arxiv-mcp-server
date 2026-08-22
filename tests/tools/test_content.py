@@ -132,5 +132,52 @@ def test_add_content_payload_applies_default_bound_and_preserves_metadata():
     assert payload["next_start"] == DEFAULT_MAX_CHARS
     assert payload["is_truncated"] is True
     assert payload["next_retrieval"]
-    assert payload["content"].startswith(warning)
-    assert payload["content"][len(warning) :] == content[:DEFAULT_MAX_CHARS]
+    # First page: warning is a separate field; content is pure paper text (#215).
+    assert payload["content_warning"] == warning.rstrip()
+    assert payload["content"] == content[:DEFAULT_MAX_CHARS]
+    assert not payload["content"].startswith("[WARN]")
+
+
+def test_add_content_payload_omits_warning_on_continuation_pages():
+    """Continuation pages must not re-emit the untrusted banner (#215)."""
+    content = "abcdefghijklmnopqrstuvwxyz"
+    warning = "[UNTRUSTED EXTERNAL CONTENT — test.]\n\n"
+
+    first = add_content_payload({}, content, {"max_chars": 10}, warning)
+    assert first["start"] == 0
+    assert first["content"] == "abcdefghij"
+    assert first["content_warning"] == warning.rstrip()
+    assert "UNTRUSTED" not in first["content"]
+
+    second = add_content_payload({}, content, {"start": 10, "max_chars": 10}, warning)
+    assert second["start"] == 10
+    assert second["content"] == "klmnopqrst"
+    assert "content_warning" not in second
+    assert not second["content"].startswith("[UNTRUSTED")
+
+    third = add_content_payload({}, content, {"start": 20, "max_chars": 10}, warning)
+    assert third["start"] == 20
+    assert third["content"] == "uvwxyz"
+    assert "content_warning" not in third
+
+
+def test_add_content_payload_stitched_pages_are_contiguous_paper_text():
+    """Stitching start=0,10,20 with max_chars=10 yields the original paper (#215)."""
+    content = "abcdefghijklmnopqrstuvwxyz"
+    warning = "[UNTRUSTED EXTERNAL CONTENT — test.]\n\n"
+    chunks = []
+    start = 0
+    while True:
+        page = add_content_payload(
+            {}, content, {"start": start, "max_chars": 10}, warning
+        )
+        chunks.append(page["content"])
+        assert "UNTRUSTED" not in page["content"]
+        if page["start"] == 0:
+            assert "content_warning" in page
+        else:
+            assert "content_warning" not in page
+        if page["next_start"] is None:
+            break
+        start = page["next_start"]
+    assert "".join(chunks) == content

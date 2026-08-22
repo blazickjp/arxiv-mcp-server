@@ -53,9 +53,10 @@ async def test_mcp_read_paper_default_response_is_size_bounded(
     assert payload["next_start"] == DEFAULT_MAX_CHARS
     assert "next_retrieval" in payload
 
-    # Paper body (excluding the fixed untrusted-content warning) is bounded.
-    body = payload["content"].split("\n\n", 1)[1]
-    assert len(body) == DEFAULT_MAX_CHARS
+    # Paper body is bounded; untrusted notice is a separate first-page field (#215).
+    assert len(payload["content"]) == DEFAULT_MAX_CHARS
+    assert "UNTRUSTED EXTERNAL CONTENT" in payload["content_warning"]
+    assert "UNTRUSTED" not in payload["content"]
 
     # Whole MCP text payload must stay well under a naive full-paper dump.
     # Full paper JSON would be >50k; default chunk should be roughly warning +

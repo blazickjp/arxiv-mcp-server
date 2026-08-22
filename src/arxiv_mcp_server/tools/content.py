@@ -94,9 +94,19 @@ def add_content_payload(
     arguments: dict[str, Any],
     content_warning: str,
 ) -> dict[str, Any]:
-    """Add paginated (bounded-by-default) content fields to a JSON payload."""
+    """Add paginated (bounded-by-default) content fields to a JSON payload.
+
+    Never prepend the untrusted-content banner into paginated ``content``
+    chunks — that broke stitchability across ``start`` pages (#215). Surface
+    the notice once via a separate ``content_warning`` field on the first page
+    (``start == 0``) instead.
+    """
     page = paginate_content(content, bound_arguments(arguments))
     chunk = page.pop("content")
     payload.update(page)
-    payload["content"] = content_warning + chunk
+    payload["content"] = chunk
+    if page["start"] == 0:
+        # Separate field: keep notice text without the trailing blank lines
+        # that existed only to separate a prepended banner from the body.
+        payload["content_warning"] = content_warning.rstrip()
     return payload

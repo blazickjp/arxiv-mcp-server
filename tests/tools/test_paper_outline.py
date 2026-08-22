@@ -171,7 +171,8 @@ async def test_read_section_bounds_and_invalid(patch_storage):
     assert result["status"] == "success"
     assert result["is_truncated"] is True
     assert result["returned_chars"] == 100
-    assert "UNTRUSTED EXTERNAL CONTENT" in result["content"]
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
     assert result["next_start"] == 100
 
     bad = await handle_read_paper_section(
