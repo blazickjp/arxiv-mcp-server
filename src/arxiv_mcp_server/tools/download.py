@@ -458,9 +458,12 @@ download_tool = types.Tool(
     description=(
         "Download a paper from arXiv and return its text content. "
         "Tries the HTML version first for clean extraction; falls back to "
-        "PDF conversion if HTML is unavailable. Stores the paper locally "
-        "and supports start/max_chars pagination for very large papers. "
-        "Set force=true to re-fetch and overwrite a cached paper."
+        "PDF conversion if HTML is unavailable. Stores the paper locally. "
+        "Returned text is bounded to roughly 12,000 characters by default so "
+        "one call cannot return an unbounded paper body. When is_truncated is "
+        "true, call again with start=next_start (see next_retrieval) to "
+        "continue, or pass return_full_text=true for the entire remaining "
+        "paper. Set force=true to re-fetch and overwrite a cached paper."
     ),
     inputSchema={
         "type": "object",
@@ -472,12 +475,25 @@ download_tool = types.Tool(
             "start": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Zero-based character offset for returning large papers in chunks",
+                "description": (
+                    "Zero-based character offset for returning large papers in chunks; "
+                    "pass next_start from a prior truncated response to continue"
+                ),
             },
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum raw paper characters to return from start; omit for full content",
+                "description": (
+                    "Maximum raw paper characters to return from start; "
+                    "omit for the bounded default (12,000 chars)"
+                ),
+            },
+            "return_full_text": {
+                "type": "boolean",
+                "description": (
+                    "Set true to opt out of the bounded default and return the "
+                    "entire remaining paper from start in one call"
+                ),
             },
             "force": {
                 "type": "boolean",
