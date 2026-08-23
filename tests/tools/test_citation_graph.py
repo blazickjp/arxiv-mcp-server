@@ -137,6 +137,7 @@ async def test_citation_graph_retries_on_429_then_succeeds():
         patch.object(
             citation_graph_module.asyncio, "sleep", new_callable=AsyncMock
         ) as sleep,
+        patch.object(citation_graph_module.random, "random", return_value=0.5),
     ):
         response = await handle_citation_graph({"paper_id": "1706.03762"})
 
@@ -144,26 +145,80 @@ async def test_citation_graph_retries_on_429_then_succeeds():
     assert payload["status"] == "success"
     assert payload["paper"]["arxiv_id"] == "1706.03762"
     assert mock_client.get.call_count == 4
-    sleep.assert_awaited()
+    sleep.assert_awaited_once_with(2.0)
 
 
 @pytest.mark.asyncio
-async def test_citation_graph_429_exhausted_has_useful_error():
-    """Persistent 429s should tell the caller how to raise the S2 quota."""
+async def test_citation_graph_429_exhausted_returns_soft_rate_limited():
+    """Persistent 429s should soft-fail with actionable API-key guidance."""
+    attempts = citation_graph_module._MAX_RETRIES + 1
     rate_limited = _json_response({}, status_code=429)
-    mock_client = _mock_async_client([rate_limited] * 4)
+    mock_client = _mock_async_client([rate_limited] * attempts)
 
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
+        patch.object(citation_graph_module.random, "random", return_value=0.5),
     ):
-        response = await handle_citation_graph({"paper_id": "2608.18261"})
+        response = await handle_citation_graph(
+            {"paper_id": "2608.18261", "max_citations": 10}
+        )
 
-    assert response[0].text == (
-        "Error: Semantic Scholar rate-limited; set SEMANTIC_SCHOLAR_API_KEY "
-        "or try again later"
-    )
-    assert mock_client.get.call_count == 4
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "rate_limited"
+    assert payload["arxiv_id"] == "2608.18261"
+    assert payload["max_citations"] == 10
+    assert payload["citations"] == []
+    assert payload["references"] == []
+    assert payload["citation_count"] == 0
+    assert payload["reference_count"] == 0
+    assert "SEMANTIC_SCHOLAR_API_KEY" in payload["message"]
+    assert payload["hint"] == "export SEMANTIC_SCHOLAR_API_KEY=<your-key>"
+    assert not response[0].text.startswith("Error:")
+    assert mock_client.get.call_count == attempts
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_429_exhausted_with_api_key_guidance():
+    """When an API key is set, rate-limit guidance should mention that fact."""
+    attempts = citation_graph_module._MAX_RETRIES + 1
+    rate_limited = _json_response({}, status_code=429)
+    mock_client = _mock_async_client([rate_limited] * attempts)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
+        patch.object(
+            citation_graph_module.settings, "SEMANTIC_SCHOLAR_API_KEY", "s2-key"
+        ),
+    ):
+        response = await handle_citation_graph({"paper_id": "2410.17954"})
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "rate_limited"
+    assert "despite SEMANTIC_SCHOLAR_API_KEY" in payload["message"]
+    assert "hint" not in payload
+
+
+def test_backoff_seconds_longer_with_jitter():
+    """Backoff should start higher than the old 1s ladder and include jitter."""
+    with patch.object(citation_graph_module.random, "random", return_value=0.5):
+        # 0.5 jitter multiplier => delay * 1.0 (0.5 + 0.5)
+        assert citation_graph_module._backoff_seconds(0, None) == 2.0
+        assert citation_graph_module._backoff_seconds(1, None) == 4.0
+        assert citation_graph_module._backoff_seconds(2, None) == 8.0
+        assert citation_graph_module._backoff_seconds(3, None) == 16.0
+        assert citation_graph_module._backoff_seconds(4, None) == 32.0
+        assert citation_graph_module._backoff_seconds(5, None) == 60.0
+
+    with patch.object(citation_graph_module.random, "random", return_value=0.0):
+        # Minimum jitter is 50% of the exponential delay.
+        assert citation_graph_module._backoff_seconds(0, None) == 1.0
+        assert citation_graph_module._backoff_seconds(1, None) == 2.0
+
+    with patch.object(citation_graph_module.random, "random", return_value=1.0):
+        # Retry-After can raise the floor before jitter, still capped.
+        assert citation_graph_module._backoff_seconds(0, "45") == 60.0
 
 
 @pytest.mark.asyncio
