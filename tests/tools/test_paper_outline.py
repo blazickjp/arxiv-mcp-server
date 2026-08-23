@@ -786,6 +786,115 @@ def test_daop_ieee_roman_html_outline_order_without_dupes():
     assert "illustrates similarity" not in titles
 
 
+SWITCH_FUTURE_WORK_HTML_STYLE = """Switch Transformers title line
+
+1.
+Introduction
+
+Intro body about sparse models.
+
+8.
+Future Work
+
+This paper lays out a simplified architecture, improved training procedures,
+and a study of how sparse models scale. However, there remain many open
+future directions which we briefly describe here:
+
+1.
+A significant challenge is further improving training stability for the largest models.
+
+2.
+Generally we find that improved pre-training quality leads to better downstream results.
+
+3.
+Perform a comprehensive study of scaling relationships to guide the design.
+
+4.
+Our work falls within the family of adaptive computation algorithms.
+
+5.
+Investigating expert layers outside the FFN layer of the Transformer.
+
+6.
+Examining Switch Transformer in new and across different modalities.
+
+9.
+Conclusion
+
+Conclusion body.
+
+References
+
+[1] Someone et al.
+"""
+
+
+def test_switch_future_work_numbered_lists_not_outline_sections():
+    """Regression for #257: Switch Transformers Future Work list items.
+
+    HTML→text emits ``4.`` / ``5.`` body-list sentences under Future Work.
+    Those must not become fake L1 outline sections.
+    """
+    sections = parse_markdown_sections(SWITCH_FUTURE_WORK_HTML_STYLE)
+    titles = [s.title for s in sections]
+    assert "Future Work" in titles
+    assert "Conclusion" in titles
+    assert "Introduction" in titles
+    assert titles[-1] == "References"
+    # Numbered body-list prose must stay out of the outline.
+    for banned in (
+        "Our work falls within the family of adaptive computation algorithms",
+        "Investigating expert layers outside the FFN layer of the Transformer",
+        "Examining Switch Transformer in new and across different modalities",
+        "Perform a comprehensive study of scaling relationships to guide the design",
+        "A significant challenge is further improving training stability for the largest models",
+        "Generally we find that improved pre-training quality leads to better downstream results",
+    ):
+        assert banned not in titles
+        assert not any(banned in t for t in titles)
+    # Real numbered sections still parse; list markers do not inflate L1 count.
+    by_title = {s.title: s for s in sections}
+    assert by_title["Introduction"].level == 1
+    assert by_title["Future Work"].level == 1
+    assert by_title["Conclusion"].level == 1
+    assert [s.title for s in sections if s.level == 1] == [
+        "Introduction",
+        "Future Work",
+        "Conclusion",
+        "References",
+    ]
+
+
+def test_numbered_sentence_case_and_period_rejected():
+    """Sentence-case / trailing-period numbered lines are body lists, not headings."""
+    md = """1 Introduction
+
+Body.
+
+2.
+Our approach always used identical homogeneous experts.
+
+3 Methods
+
+Methods body.
+
+4.
+Investigating expert layers outside the feed-forward network.
+
+5 Conclusion
+
+Done.
+
+References
+
+[1] x
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert titles == ["Introduction", "Methods", "Conclusion", "References"]
+    assert "Our approach always used identical homogeneous experts" not in titles
+    assert "Investigating expert layers outside the feed-forward network" not in titles
+
+
 def test_roman_inline_and_reject_colon_bare_titles():
     inline = parse_markdown_sections(
         "I Introduction\n\nIntro body.\n\nII-A Background Details\n\nMore.\n"

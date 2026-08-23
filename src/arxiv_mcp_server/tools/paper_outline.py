@@ -59,6 +59,44 @@ _MAX_BARE_TITLE_CHARS = 80
 _OUTLINE_TERMINATORS = frozenset({"reference", "references", "bibliography"})
 # Top-level section indices stay small; years like 2023 USENIX… are common FPs.
 _MAX_SECTION_INDEX = 99
+# Minor words allowed lowercase inside otherwise Title-Case headings.
+_TITLE_CASE_MINOR_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "nor",
+        "but",
+        "so",
+        "yet",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "as",
+        "per",
+        "via",
+        "vs",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "over",
+        "than",
+        "upon",
+        "de",
+        "von",
+        "van",
+        "der",
+        "la",
+        "le",
+    }
+)
 
 # Common standalone section titles from arXiv HTML→md conversions.
 _BARE_SECTION_TITLES = frozenset(
@@ -186,8 +224,28 @@ def _is_outline_terminator(title: str) -> bool:
     return _normalize_heading_title(title).casefold() in _OUTLINE_TERMINATORS
 
 
+def _is_title_case_phrase(title: str) -> bool:
+    """True when the phrase looks Title Case, not sentence-case body prose."""
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'’.-]*", title)
+    if not words:
+        return False
+    for word in words[1:]:
+        core = word.rstrip(".")
+        if not core:
+            continue
+        # Allow ALLCAPS / Title Case tokens; reject sentence-case content words.
+        if core[0].islower() and core.casefold() not in _TITLE_CASE_MINOR_WORDS:
+            return False
+    return True
+
+
 def _title_looks_like_heading(title: str, *, line_len: int) -> bool:
-    """Shared capitalization / length / venue guards for numbered headings."""
+    """Shared capitalization / length / venue guards for numbered headings.
+
+    Rejects numbered body-list items (e.g. Future Work ``4.`` / ``5.`` prose)
+    that HTML→text otherwise promotes to fake L1 sections. Does not use fuzzy
+    title matching against known section names.
+    """
     title = title.strip()
     if not title or line_len > _MAX_BARE_TITLE_CHARS:
         return False
@@ -196,6 +254,14 @@ def _title_looks_like_heading(title: str, *, line_len: int) -> bool:
         return False
     # Citation venues often look like "USENIX ATC 23" after a year number.
     if re.search(r"\b(?:19|20)\d{2}\b", title):
+        return False
+    normalized = _normalize_heading_title(title)
+    # Full-sentence list items end with ``.``; allow only known bare titles
+    # such as ``Abstract.`` / ``Introduction.``.
+    if title.endswith(".") and normalized.casefold() not in _BARE_SECTION_TITLES:
+        return False
+    # Headings are Title Case noun phrases; body lists are sentence case.
+    if not _is_title_case_phrase(normalized):
         return False
     return True
 
