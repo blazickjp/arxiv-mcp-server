@@ -10,8 +10,10 @@ from arxiv_mcp_server.tools.search import (
     DEFAULT_MAX_RESULTS,
     ABSTRACT_SNIPPET_CHARS,
     SORT_BY_VALUES,
+    _MAX_RETRIES,
     _validate_categories,
     _raw_arxiv_search,
+    _rate_limited_get,
     _parse_arxiv_atom_response,
     _parse_opensearch_total_results,
     _build_search_response,
@@ -20,6 +22,7 @@ from arxiv_mcp_server.tools.search import (
     _normalize_abstract_mode,
     _normalize_sort_by,
     _scope_user_query,
+    _backoff_seconds,
     build_arxiv_search_query,
     build_arxiv_search_url,
 )
@@ -35,10 +38,12 @@ def disable_request_spacing_for_search_unit_tests(monkeypatch):
     monkeypatch.setattr(config, "_arxiv_client", None)
 
 
-def _mock_httpx_response(xml_text: str):
+def _mock_httpx_response(xml_text: str, *, status_code: int = 200, headers=None):
     """Patch httpx.AsyncClient to return an Atom feed body."""
     mock_response = MagicMock()
     mock_response.text = xml_text
+    mock_response.status_code = status_code
+    mock_response.headers = headers or {}
     mock_response.raise_for_status = MagicMock()
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
@@ -175,7 +180,10 @@ async def test_search_with_invalid_dates():
         {"query": "test query", "date_from": "invalid-date", "max_results": 1}
     )
 
-    assert "Error:" in result[0].text
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert "Invalid date format" in content["message"]
+    assert not result[0].text.startswith("Error:")
 
 
 def test_validate_categories():
@@ -269,7 +277,10 @@ async def test_search_with_invalid_categories():
         }
     )
 
-    assert "Error: Invalid category" in result[0].text
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert "Invalid category" in content["message"]
+    assert not result[0].text.startswith("Error:")
 
 
 @pytest.mark.asyncio
@@ -297,15 +308,25 @@ async def test_search_arxiv_http_error():
     response = httpx.Response(500, request=request)
     error = httpx.HTTPStatusError("boom", request=request, response=response)
 
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.headers = {}
+    mock_response.raise_for_status.side_effect = error
+
     mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=error)
+    mock_client.get = AsyncMock(return_value=mock_response)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with patch("httpx.AsyncClient", return_value=mock_client):
         result = await handle_search({"query": "test", "max_results": 1})
 
-        assert "arXiv API HTTP error" in result[0].text
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert "arXiv API HTTP error" in content["message"]
+    assert "HTTP 500" in content["message"]
+    assert "export.arxiv.org" not in result[0].text
+    assert not result[0].text.startswith("Error:")
 
 
 @pytest.mark.asyncio
@@ -1071,8 +1092,10 @@ async def test_search_empty_page_past_end():
 @pytest.mark.asyncio
 async def test_search_invalid_abstract_mode_errors():
     result = await handle_search({"query": "x", "abstract_mode": "brief"})
-    assert "Error:" in result[0].text
-    assert "abstract_mode" in result[0].text
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert "abstract_mode" in content["message"]
+    assert not result[0].text.startswith("Error:")
 
 
 def test_build_search_response_echoes_abstract_mode():
@@ -1109,3 +1132,126 @@ async def test_search_emits_content_warning_once_not_per_abstract():
     none_content = json.loads(none_result[0].text)
     assert "content_warning" not in none_content
     assert "abstract" not in none_content["papers"][0]
+
+
+@pytest.mark.asyncio
+async def test_search_no_criteria_returns_structured_error():
+    """Empty query with no filters must return {status, message} JSON (#238)."""
+    result = await handle_search({"query": "   "})
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert content["message"] == "No search criteria provided"
+    assert not result[0].text.startswith("Error:")
+
+
+def test_search_backoff_seconds_matches_citation_graph_pattern():
+    """Backoff ladder should use exponential delay with jitter (#238)."""
+    with patch.object(search_module.random, "random", return_value=0.5):
+        assert _backoff_seconds(0, None) == 2.0
+        assert _backoff_seconds(1, None) == 4.0
+        assert _backoff_seconds(2, None) == 8.0
+        assert _backoff_seconds(5, None) == 60.0
+
+    with patch.object(search_module.random, "random", return_value=0.0):
+        assert _backoff_seconds(0, None) == 1.0
+
+    with patch.object(search_module.random, "random", return_value=1.0):
+        assert _backoff_seconds(0, "45") == 60.0
+
+
+@pytest.mark.asyncio
+async def test_search_retries_on_429_then_succeeds():
+    """A transient arXiv 429 should be retried with backoff, then succeed (#238)."""
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {}
+    rate_limited.text = ""
+    rate_limited.raise_for_status = MagicMock()
+
+    xml = _atom_feed_with_totals(entry_count=1, total_results=1)
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.headers = {}
+    ok.text = xml
+    ok.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[rate_limited, ok])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        patch.object(search_module.random, "random", return_value=0.5),
+    ):
+        result = await handle_search({"query": "transformers", "max_results": 1})
+
+    content = json.loads(result[0].text)
+    assert "papers" in content
+    assert content["returned"] == 1
+    assert mock_client.get.call_count == 2
+    sleep.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.asyncio
+async def test_search_429_exhausted_returns_soft_rate_limited():
+    """Persistent arXiv 429s soft-fail as status=rate_limited JSON (#238)."""
+    attempts = _MAX_RETRIES + 1
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"Retry-After": "30"}
+    rate_limited.text = ""
+    rate_limited.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=rate_limited)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        patch.object(search_module.random, "random", return_value=0.5),
+    ):
+        result = await handle_search({"query": "transformers", "max_results": 1})
+
+    content = json.loads(result[0].text)
+    assert content["status"] == "rate_limited"
+    assert "HTTP 429" in content["message"]
+    assert content["http_status"] == 429
+    assert content["retry_after_seconds"] == 30.0
+    assert not result[0].text.startswith("Error:")
+    assert mock_client.get.call_count == attempts
+    assert sleep.await_count == _MAX_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_get_retries_503_then_succeeds():
+    """503 follows the same retry path as 429 in the shared client (#238)."""
+    limited = MagicMock()
+    limited.status_code = 503
+    limited.headers = {}
+    limited.text = ""
+    limited.raise_for_status = MagicMock()
+
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.headers = {}
+    ok.text = "<feed/>"
+    ok.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[limited, ok])
+
+    with (
+        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        patch.object(search_module.random, "random", return_value=0.5),
+    ):
+        response = await _rate_limited_get(
+            mock_client, "https://export.arxiv.org/api/query"
+        )
+
+    assert response is ok
+    assert mock_client.get.call_count == 2
+    sleep.assert_awaited_once_with(2.0)
