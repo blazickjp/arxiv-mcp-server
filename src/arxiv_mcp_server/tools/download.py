@@ -18,6 +18,8 @@ from .arxiv_ids import (
     arxiv_version_number,
     arxiv_version_suffix,
     bare_arxiv_id,
+    filesystem_arxiv_stem,
+    logical_arxiv_id_from_stem,
     parse_arxiv_id,
 )
 from .list_papers import resolve_stored_stem
@@ -445,10 +447,17 @@ def _html_to_text(html: str) -> str:
 
 
 def get_paper_path(paper_id: str, suffix: str = ".md") -> Path:
-    """Get the absolute file path for a paper with given suffix."""
+    """Get the absolute file path for a paper with given suffix.
+
+    Legacy slash-form IDs are mapped to a flat stem (``/`` -> ``__``) so the
+    path stays under ``STORAGE_PATH`` without requiring category subdirectories.
+    Parent directories are still created defensively for any nested suffix paths.
+    """
     storage_path = Path(settings.STORAGE_PATH)
     storage_path.mkdir(parents=True, exist_ok=True)
-    return storage_path / f"{paper_id}{suffix}"
+    path = storage_path / f"{filesystem_arxiv_stem(paper_id)}{suffix}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _read_extractor_version(paper_id: str) -> int | None:
@@ -521,9 +530,10 @@ def _cleanup_versioned_aliases(storage_id: str) -> None:
             paper_stem = path.stem
         else:
             continue
-        if paper_stem == storage_id:
+        logical_stem = logical_arxiv_id_from_stem(paper_stem)
+        if logical_stem == storage_id:
             continue
-        if bare_arxiv_id(paper_stem) != storage_id:
+        if bare_arxiv_id(logical_stem) != storage_id:
             continue
         try:
             path.unlink()
@@ -1040,11 +1050,34 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 ),
             )
         ]
-    except Exception as e:
-        logger.exception(f"Unexpected error downloading {paper_id}")
+    except OSError:
+        # Never leak absolute host paths from filesystem errors to the client.
+        safe_id = locals().get("storage_id") or locals().get("paper_id") or "unknown"
+        logger.exception("Storage error downloading %s", safe_id)
         return [
             types.TextContent(
                 type="text",
-                text=json.dumps({"status": "error", "message": f"Error: {str(e)}"}),
+                text=json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"Storage error while saving paper {safe_id}",
+                    }
+                ),
+            )
+        ]
+    except Exception as e:
+        safe_id = locals().get("paper_id") or "unknown"
+        logger.exception("Unexpected error downloading %s", safe_id)
+        message = str(e)
+        try:
+            storage_root = str(Path(settings.STORAGE_PATH))
+            if storage_root and storage_root in message:
+                message = message.replace(storage_root, "<storage>")
+        except Exception:
+            pass
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "message": f"Error: {message}"}),
             )
         ]

@@ -80,3 +80,31 @@ def arxiv_version_number(paper_id: str) -> int:
     if suffix is None:
         return -1
     return int(suffix[1:])
+
+
+def filesystem_arxiv_stem(paper_id: str) -> str:
+    """Map a logical arXiv ID to a flat on-disk stem.
+
+    Legacy category IDs contain ``/`` (e.g. ``hep-th/9901001``). Embedding that
+    slash in a path creates an uncreated parent directory and crashes writers.
+    Match the LaTeX cache convention and replace ``/`` with ``__`` so files stay
+    flat under ``STORAGE_PATH``.
+    """
+    return paper_id.replace("/", "__")
+
+
+def logical_arxiv_id_from_stem(stem: str) -> str:
+    """Restore a logical arXiv ID from an on-disk stem.
+
+    Inverse of :func:`filesystem_arxiv_stem`. Stems without ``__`` are returned
+    unchanged. Restored forms are preferred only when they look like valid
+    (possibly versioned) arXiv IDs.
+    """
+    if "__" not in stem:
+        return stem
+    restored = stem.replace("__", "/")
+    if is_valid_arxiv_id(restored):
+        return restored
+    if is_valid_arxiv_id(bare_arxiv_id(restored)):
+        return restored
+    return stem

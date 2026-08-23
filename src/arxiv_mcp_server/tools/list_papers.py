@@ -13,7 +13,9 @@ from .arxiv_ids import (
     arxiv_version_number,
     arxiv_version_suffix,
     bare_arxiv_id,
+    filesystem_arxiv_stem,
     is_valid_arxiv_id,
+    logical_arxiv_id_from_stem,
     normalize_arxiv_id,
 )
 
@@ -52,15 +54,22 @@ list_tool = types.Tool(
 
 
 def _raw_stored_stems(storage_path: Optional[Path] = None) -> list[str]:
-    """Return every on-disk ``.md`` stem that looks like an arXiv ID."""
+    """Return every on-disk ``.md`` stem that looks like an arXiv ID.
+
+    Filenames use a flat stem (legacy ``/`` stored as ``__``); returned values
+    are logical arXiv IDs with the slash restored.
+    """
     storage = Path(storage_path or settings.STORAGE_PATH)
     if not storage.exists():
         return []
-    return [
-        p.stem
-        for p in storage.iterdir()
-        if p.is_file() and p.suffix == ".md" and is_valid_arxiv_id(p.stem)
-    ]
+    stems: list[str] = []
+    for p in storage.iterdir():
+        if not (p.is_file() and p.suffix == ".md"):
+            continue
+        logical = logical_arxiv_id_from_stem(p.stem)
+        if is_valid_arxiv_id(logical):
+            stems.append(logical)
+    return stems
 
 
 def _stems_for_bare_id(
@@ -92,7 +101,7 @@ def _sidecar_arxiv_version(
 ) -> Optional[str]:
     """Read ``arxiv_version`` from a stem's sidecar, if present."""
     path = (
-        Path(storage_path) / f"{stem}{METADATA_SUFFIX}"
+        Path(storage_path) / f"{filesystem_arxiv_stem(stem)}{METADATA_SUFFIX}"
         if storage_path is not None
         else paper_metadata_path(stem)
     )
@@ -195,7 +204,12 @@ def list_papers() -> list[str]:
 
 def paper_metadata_path(paper_id: str) -> Path:
     """Return the sidecar path for locally stored paper metadata."""
-    return Path(settings.STORAGE_PATH) / f"{paper_id}{METADATA_SUFFIX}"
+    path = (
+        Path(settings.STORAGE_PATH)
+        / f"{filesystem_arxiv_stem(paper_id)}{METADATA_SUFFIX}"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def save_paper_metadata(
@@ -210,6 +224,7 @@ def save_paper_metadata(
 ) -> None:
     """Persist lightweight paper metadata next to the downloaded markdown."""
     destination = path or paper_metadata_path(paper_id)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "id": paper_id,
         "title": title or None,
@@ -229,7 +244,7 @@ def save_paper_metadata(
 
 def _title_from_markdown(paper_id: str) -> Optional[str]:
     """Best-effort title from the first non-empty markdown line (local only)."""
-    md_path = Path(settings.STORAGE_PATH) / f"{paper_id}.md"
+    md_path = Path(settings.STORAGE_PATH) / f"{filesystem_arxiv_stem(paper_id)}.md"
     try:
         for line in md_path.read_text(encoding="utf-8").splitlines():
             text = line.strip().lstrip("#").strip()
