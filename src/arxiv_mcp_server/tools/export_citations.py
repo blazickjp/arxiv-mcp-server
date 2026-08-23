@@ -4,8 +4,8 @@ Scoped per maintainer request in issue #41: BibTeX only (RIS/CSL-JSON are follow
 work), one ``export_citations`` tool over one or more validated arXiv IDs, metadata
 taken from the arXiv API (never model-generated), version suffixes preserved where the
 caller supplies them, bare+versioned forms of the same paper collapsed to one entry
-(preferring the versioned id), deterministic citation keys, and no heavy formatting
-dependency.
+(preferring the versioned id), identical normalized IDs collapsed to one entry,
+deterministic citation keys, and no heavy formatting dependency.
 """
 
 import json
@@ -242,6 +242,7 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
 
         results: List[Dict[str, Any]] = []
         used_keys: set = set()
+        seen_normalized: set = set()
         for pid in raw_ids:
             candidate = normalize_arxiv_id(pid) if isinstance(pid, str) else ""
             if not candidate or not is_valid_arxiv_id(candidate):
@@ -258,6 +259,11 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
                 and _base_id(candidate) in bare_superseded
             ):
                 continue
+            # Collapse exact-duplicate normalized IDs to one BibTeX entry (#259).
+            # Bare↔versioned sibling collapse remains prefer-versioned (#241).
+            if candidate in seen_normalized:
+                continue
+            seen_normalized.add(candidate)
             # Prefer the exact versioned key so batching multiple versions of
             # one paper does not collapse to a single bare-id entry (#212).
             # Bare ids fall through to the latest-version mapping.
