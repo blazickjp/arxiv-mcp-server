@@ -9,6 +9,7 @@ from arxiv_mcp_server.tools.search import (
     DEFAULT_ABSTRACT_MODE,
     DEFAULT_MAX_RESULTS,
     ABSTRACT_SNIPPET_CHARS,
+    SORT_BY_VALUES,
     _validate_categories,
     _raw_arxiv_search,
     _parse_arxiv_atom_response,
@@ -17,6 +18,7 @@ from arxiv_mcp_server.tools.search import (
     _apply_abstract_mode,
     _snippet_abstract,
     _normalize_abstract_mode,
+    _normalize_sort_by,
     _scope_user_query,
     build_arxiv_search_query,
     build_arxiv_search_url,
@@ -385,6 +387,39 @@ async def test_search_sort_by_date():
 
         url = mock_client.get.call_args[0][0]
         assert parse_qs(urlparse(url).query)["sortBy"] == ["submittedDate"]
+
+
+def test_normalize_sort_by_defaults_and_rejects_invalid():
+    """Only documented sort_by values are accepted (#242)."""
+    assert _normalize_sort_by(None) == "relevance"
+    assert _normalize_sort_by("relevance") == "relevance"
+    assert _normalize_sort_by("DATE") == "date"
+    assert SORT_BY_VALUES == ("relevance", "date")
+
+    with pytest.raises(ValueError) as exc:
+        _normalize_sort_by("notarealsort")
+    assert "notarealsort" in str(exc.value)
+    assert "relevance" in str(exc.value)
+    assert "date" in str(exc.value)
+
+    # Aliases such as submittedDate stay on HOLD — reject, do not map.
+    with pytest.raises(ValueError) as exc:
+        _normalize_sort_by("submittedDate")
+    assert "submittedDate" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_sort_by_returns_json_error():
+    """Unknown sort_by is rejected with structured JSON (#242)."""
+    result = await handle_search(
+        {"query": "MoE", "max_results": 1, "sort_by": "notarealsort"}
+    )
+    content = json.loads(result[0].text)
+    assert content["status"] == "error"
+    assert "notarealsort" in content["message"]
+    assert "relevance" in content["message"]
+    assert "date" in content["message"]
+    assert "papers" not in content
 
 
 @pytest.mark.asyncio

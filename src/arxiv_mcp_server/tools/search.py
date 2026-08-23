@@ -23,6 +23,7 @@ DEFAULT_MAX_RESULTS = 5
 DEFAULT_ABSTRACT_MODE = "snippet"
 ABSTRACT_SNIPPET_CHARS = 280
 ABSTRACT_MODES = ("none", "snippet", "full")
+SORT_BY_VALUES = ("relevance", "date")
 _ABSTRACT_TRUNCATION_MARK = "… [truncated]"
 
 ARXIV_HEADERS = {
@@ -295,6 +296,24 @@ def _normalize_abstract_mode(value: Any) -> str:
             f"abstract_mode must be one of: none, snippet, full (got {value!r})"
         )
     return mode
+
+
+def _normalize_sort_by(value: Any) -> str:
+    """Return a valid sort_by or raise ValueError.
+
+    Only the documented values ``relevance`` and ``date`` are accepted.
+    Aliases such as ``submittedDate`` are intentionally rejected (HOLD).
+    """
+    if value is None:
+        return "relevance"
+    if not isinstance(value, str):
+        allowed = ", ".join(SORT_BY_VALUES)
+        raise ValueError(f"Invalid sort_by value {value!r}. Allowed values: {allowed}")
+    sort_by = value.strip().lower()
+    if sort_by not in SORT_BY_VALUES:
+        allowed = ", ".join(SORT_BY_VALUES)
+        raise ValueError(f"Invalid sort_by value {value!r}. Allowed values: {allowed}")
+    return sort_by
 
 
 def _snippet_abstract(abstract: str, max_chars: int = ABSTRACT_SNIPPET_CHARS) -> str:
@@ -599,7 +618,15 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
         date_from_arg = arguments.get("date_from")
         date_to_arg = arguments.get("date_to")
         categories = arguments.get("categories")
-        sort_by_arg = arguments.get("sort_by", "relevance")
+        try:
+            sort_by_arg = _normalize_sort_by(arguments.get("sort_by", "relevance"))
+        except ValueError as e:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=json.dumps({"status": "error", "message": str(e)}),
+                )
+            ]
 
         logger.debug(
             "Starting search with query: %r, max_results: %s, start: %s, "
