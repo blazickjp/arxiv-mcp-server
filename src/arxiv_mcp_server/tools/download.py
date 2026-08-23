@@ -6,6 +6,7 @@ import json
 import asyncio
 import httpx
 from html.parser import HTMLParser
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 import mcp.types as types
@@ -129,7 +130,7 @@ settings = Settings()
 
 # Bump when HTML extraction changes so cached markdown is treated as stale
 # and re-downloaded without requiring the caller to pass force=true.
-EXTRACTOR_VERSION = 4
+EXTRACTOR_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +146,15 @@ class _ArticleTextExtractor(HTMLParser):
         the paper is dropped (banners, report-issue dialog, watermarks).
       - Skip script/style/nav/header/footer plus arXiv UI widgets.
       - Skip author-note chrome (Thanks/ORCID/affiliation/email blocks).
+      - Skip conference/DOI/ISBN/CCS pubnotes and date/license chrome.
+      - Coalesce author lines; drop affiliation superscripts and TeX
+        superscript debris in the author block.
       - Skip footnotemark markers (class, role, or the literal token).
       - Skip license/permission one-liners and ICML/LaTeX page-layout
         style warnings (marginparsep and similar) that appear before the
         title.
       - Keep math once: prefer ``alttext``, otherwise MathML without TeX
-        ``<annotation>`` duplicates.
+        ``<annotation>`` duplicates; normalize common ``\\times`` noise.
     """
 
     SKIP_TAGS = {
@@ -187,6 +191,11 @@ class _ArticleTextExtractor(HTMLParser):
         "ltx_note_mark",
         "ltx_note_type",
         "ltx_tag_note",
+        # ACM/IEEE front-matter dumped into the title (CCS, DOI, ISBN, …).
+        "ltx_pubnotes",
+        "ltx_pubnote",
+        "ltx_dates",
+        "ltx_role_cc-license",
     }
     FOOTNOTEMARK_TOKEN = "footnotemark"
     PERMISSION_MARKERS = (
@@ -227,6 +236,11 @@ class _ArticleTextExtractor(HTMLParser):
         "track",
         "wbr",
     }
+    # Empty-base superscripts / textsuperscript debris used as affiliation marks.
+    _AFFILIATION_MATH_RE = re.compile(
+        r"^\{\}\^|textsuperscript",
+        re.IGNORECASE,
+    )
 
     def __init__(self):
         super().__init__()
@@ -236,6 +250,9 @@ class _ArticleTextExtractor(HTMLParser):
         self._article_chunks: list[str] = []
         self._body_chunks: list[str] = []
         self._seen_title: bool = False
+        self._authors_depth: int = 0
+        self._authors_stack: list[bool] = []
+        self._author_buf: list[str] = []
 
     def _should_skip(self, tag: str, attr_map: dict[str, str]) -> bool:
         if tag in self.SKIP_TAGS:
@@ -258,6 +275,30 @@ class _ArticleTextExtractor(HTMLParser):
             return True
         return any(marker in lowered for marker in self.STYLE_WARNING_MARKERS)
 
+    @staticmethod
+    def _normalize_math_alttext(alttext: str) -> str:
+        """Reduce common TeX extraction noise in math alttext."""
+        # ``\times`` alone or embedded (e.g. ``2.0\times``, ``L\times E``).
+        return alttext.replace(r"\times", "\u00d7")
+
+    def _flush_authors(self) -> None:
+        """Join buffered author tokens into one coherent line."""
+        if not self._author_buf:
+            return
+        line = " ".join(self._author_buf)
+        line = re.sub(r"\s+,", ",", line)
+        line = re.sub(r",\s*", ", ", line)
+        line = re.sub(r"\s+", " ", line).strip(" ,")
+        self._author_buf = []
+        if line:
+            self._append_chunk(line)
+
+    def _append_chunk(self, text: str) -> None:
+        if self._article_depth > 0:
+            self._article_chunks.append(text)
+        else:
+            self._body_chunks.append(text)
+
     def _emit(self, text: str) -> None:
         if self._skip_depth or not text:
             return
@@ -265,10 +306,10 @@ class _ArticleTextExtractor(HTMLParser):
             return
         if not self._seen_title and self._is_pre_title_chrome(text):
             return
-        if self._article_depth > 0:
-            self._article_chunks.append(text)
-        else:
-            self._body_chunks.append(text)
+        if self._authors_depth > 0:
+            self._author_buf.append(text)
+            return
+        self._append_chunk(text)
 
     def handle_starttag(self, tag: str, attrs):
         attr_map = dict(attrs)
@@ -278,27 +319,45 @@ class _ArticleTextExtractor(HTMLParser):
         if tag in {"h1", "h2"} or "ltx_title" in classes:
             self._seen_title = True
 
+        entering_authors = "ltx_authors" in classes
+        if entering_authors:
+            self._authors_depth += 1
+
         # Void elements have no children. Incrementing skip_depth for
         # <input> etc. and never seeing an end tag left the rest of the
-        # document, including <article>, permanently skipped.
+        # document, including <article>, permanently skipped. Do not push
+        # authors_stack either — void tags have no matching endtag.
         if tag in self.VOID_TAGS:
             return
 
         skip = self._should_skip(tag, attr_map)
+        # Affiliation superscripts inside the author block (e.g. "2", "1,5").
+        if self._authors_depth > 0 and (tag == "sup" or "ltx_sup" in classes):
+            skip = True
+
         if tag == "math":
             alttext = (attr_map.get("alttext") or "").strip()
             if alttext:
-                # Emit TeX/alt once and ignore MathML + annotation children.
-                self._emit(alttext)
-                skip = True
+                if self._AFFILIATION_MATH_RE.search(alttext):
+                    # Drop empty-base superscript / textsuperscript debris.
+                    skip = True
+                else:
+                    # Emit TeX/alt once and ignore MathML + annotation children.
+                    self._emit(self._normalize_math_alttext(alttext))
+                    skip = True
 
         if skip:
             self._skip_depth += 1
         self._skip_stack.append(skip)
+        self._authors_stack.append(entering_authors)
 
     def handle_endtag(self, tag: str):
         if self._skip_stack and self._skip_stack.pop():
             self._skip_depth = max(0, self._skip_depth - 1)
+        if self._authors_stack and self._authors_stack.pop():
+            self._authors_depth = max(0, self._authors_depth - 1)
+            if self._authors_depth == 0:
+                self._flush_authors()
         if tag == "article" and self._article_depth > 0:
             self._article_depth -= 1
 
@@ -312,6 +371,8 @@ class _ArticleTextExtractor(HTMLParser):
         self._emit(data.strip())
 
     def get_text(self) -> str:
+        if self._authors_depth > 0:
+            self._flush_authors()
         chunks = self._article_chunks or self._body_chunks
         return "\n".join(chunks)
 
@@ -332,7 +393,13 @@ def _html_to_text(html: str) -> str:
     """Parse raw HTML and return cleaned paper text."""
     parser = _ArticleTextExtractor()
     parser.feed(_extract_article_fragment(html) or html)
-    return parser.get_text()
+    text = parser.get_text()
+    # Math alttext like ``\\times`` becomes a lone ``×`` chunk; keep it on
+    # the same line as the surrounding tokens (e.g. ``10× over``).
+    text = re.sub(r"\n×\n", "× ", text)
+    text = re.sub(r"\n×$", "×", text)
+    text = re.sub(r"^×\n", "× ", text)
+    return text
 
 
 # ---------------------------------------------------------------------------
