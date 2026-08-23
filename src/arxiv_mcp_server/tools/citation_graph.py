@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from typing import Any, Dict, List
 from urllib.parse import quote
 
@@ -31,11 +32,17 @@ PAPER_FIELDS = "title,year,authors,externalIds,citationCount,referenceCount"
 # hops. Keep default max_citations=50 and 429 retries to stay under quota.
 NEIGHBOR_FIELDS = "paperId,title,year,authors,externalIds"
 RATE_LIMIT_MESSAGE = (
-    "Semantic Scholar rate-limited; set SEMANTIC_SCHOLAR_API_KEY or try again later"
+    "Semantic Scholar rate-limited this request. "
+    "Set the SEMANTIC_SCHOLAR_API_KEY environment variable for a higher quota, "
+    "or retry later with a smaller max_citations."
 )
-_MAX_RETRIES = 3
-_INITIAL_BACKOFF_SECONDS = 1.0
-_MAX_BACKOFF_SECONDS = 30.0
+RATE_LIMIT_MESSAGE_WITH_KEY = (
+    "Semantic Scholar rate-limited this request despite SEMANTIC_SCHOLAR_API_KEY. "
+    "Wait and retry, or reduce max_citations."
+)
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF_SECONDS = 2.0
+_MAX_BACKOFF_SECONDS = 60.0
 
 citation_graph_tool = types.Tool(
     name="citation_graph",
@@ -43,8 +50,9 @@ citation_graph_tool = types.Tool(
     description=(
         "Return papers citing an arXiv paper and papers that it references "
         "using Semantic Scholar's citation graph. Results are bounded "
-        "(default 50) to stay within the unauthenticated quota; set "
-        "SEMANTIC_SCHOLAR_API_KEY for a higher limit."
+        "(default 50) to stay within the unauthenticated quota. Under load, "
+        "export SEMANTIC_SCHOLAR_API_KEY for a higher limit; without a key, "
+        "persistent rate limits return status=rate_limited instead of failing hard."
     ),
     inputSchema={
         "type": "object",
@@ -111,15 +119,52 @@ def _s2_headers() -> Dict[str, str]:
     return headers
 
 
+def _has_api_key() -> bool:
+    """Return True when SEMANTIC_SCHOLAR_API_KEY is configured."""
+    return bool((settings.SEMANTIC_SCHOLAR_API_KEY or "").strip())
+
+
+def _rate_limit_message() -> str:
+    """Actionable guidance for Semantic Scholar 429 responses."""
+    if _has_api_key():
+        return RATE_LIMIT_MESSAGE_WITH_KEY
+    return RATE_LIMIT_MESSAGE
+
+
+def _rate_limited_payload(
+    *,
+    arxiv_id: str | None = None,
+    max_citations: int | None = None,
+) -> Dict[str, Any]:
+    """Soft rate-limit result so callers can continue without a hard tool error."""
+    payload: Dict[str, Any] = {
+        "status": "rate_limited",
+        "message": _rate_limit_message(),
+        "citation_count": 0,
+        "reference_count": 0,
+        "citations": [],
+        "references": [],
+    }
+    if arxiv_id is not None:
+        payload["arxiv_id"] = arxiv_id
+    if max_citations is not None:
+        payload["max_citations"] = max_citations
+    if not _has_api_key():
+        payload["hint"] = "export SEMANTIC_SCHOLAR_API_KEY=<your-key>"
+    return payload
+
+
 def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
-    """Exponential backoff, honoring a numeric Retry-After when present."""
+    """Exponential backoff with jitter, honoring numeric Retry-After when present."""
     delay = min(_INITIAL_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
     if retry_after:
         try:
             delay = min(max(delay, float(retry_after)), _MAX_BACKOFF_SECONDS)
         except ValueError:
             pass
-    return delay
+    # Full-ish jitter keeps concurrent clients from retrying in lockstep.
+    jittered = delay * (0.5 + random.random())
+    return min(jittered, _MAX_BACKOFF_SECONDS)
 
 
 async def _s2_get(
@@ -136,7 +181,7 @@ async def _s2_get(
         wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
         logger.warning("Semantic Scholar 429 on %s; retrying in %.1fs", url, wait)
         await asyncio.sleep(wait)
-    raise SemanticScholarRateLimitError(RATE_LIMIT_MESSAGE)
+    raise SemanticScholarRateLimitError(_rate_limit_message())
 
 
 def _neighbor_papers(payload: Dict[str, Any], wrapper_key: str) -> List[Dict[str, Any]]:
@@ -160,8 +205,27 @@ def _bound_max_citations(value: Any) -> int:
     return max(1, min(parsed, MAX_CITATIONS_CAP))
 
 
+def _rate_limited_response(
+    *,
+    arxiv_id: str | None = None,
+    max_citations: int | None = None,
+) -> List[types.TextContent]:
+    """Build the soft rate-limited tool response."""
+    return [
+        types.TextContent(
+            type="text",
+            text=json.dumps(
+                _rate_limited_payload(arxiv_id=arxiv_id, max_citations=max_citations),
+                indent=2,
+            ),
+        )
+    ]
+
+
 async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """Handle citation graph lookup for a single arXiv paper ID."""
+    bare_id: str | None = None
+    limit: int | None = None
     try:
         paper_id = normalize_arxiv_id(arguments["paper_id"])
         if not paper_id:
@@ -224,11 +288,11 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
     except SemanticScholarRateLimitError as exc:
         logger.error("Semantic Scholar rate limited: %s", exc)
-        return [types.TextContent(type="text", text=f"Error: {RATE_LIMIT_MESSAGE}")]
+        return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             logger.error("Semantic Scholar rate limited: %s", exc)
-            return [types.TextContent(type="text", text=f"Error: {RATE_LIMIT_MESSAGE}")]
+            return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
         status = exc.response.status_code if exc.response is not None else None
         # Never leak upstream status lines / URLs (issue #166 class).
         logger.error("Semantic Scholar HTTP error: status=%s", status)
