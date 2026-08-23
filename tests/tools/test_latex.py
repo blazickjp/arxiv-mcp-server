@@ -433,9 +433,16 @@ def test_tool_schemas_are_closed_and_content_is_bounded():
     assert latex.get_paper_latex_tool.inputSchema["additionalProperties"] is False
     props = latex.get_paper_latex_tool.inputSchema["properties"]
     assert props["max_chars"]["maximum"] == latex.MAX_RETURN_CHARS
+    assert "return_full_text" in props
+    assert props["return_full_text"]["type"] == "boolean"
+    assert "start" in props and props["start"]["type"] == "integer"
     assert (
         latex.get_paper_latex_section_tool.inputSchema["additionalProperties"] is False
     )
+    section_props = latex.get_paper_latex_section_tool.inputSchema["properties"]
+    assert "return_full_text" in section_props
+    assert section_props["return_full_text"]["type"] == "boolean"
+    assert "start" in section_props and "max_chars" in section_props
 
 
 @pytest.mark.asyncio
