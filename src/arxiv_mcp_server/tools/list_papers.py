@@ -157,6 +157,29 @@ def resolve_stored_stem(
     return None
 
 
+def cached_storage_labels(
+    paper_id: str, storage_path: Optional[Path] = None
+) -> list[str]:
+    """Return display labels for locally cached stems of this paper.
+
+    Used when a requested version is missing so callers can name what *is*
+    on disk (bare key with sidecar version, and/or legacy versioned stems).
+    """
+    requested = normalize_arxiv_id(paper_id) if paper_id else ""
+    if not requested or not is_valid_arxiv_id(requested):
+        return []
+    bare = bare_arxiv_id(requested)
+    group = _stems_for_bare_id(bare, storage_path=storage_path)
+    labels: list[str] = []
+    for stem in sorted(group, key=lambda s: (arxiv_version_number(s), s)):
+        if stem == bare:
+            ver = _sidecar_arxiv_version(stem, storage_path)
+            labels.append(f"{bare} ({ver})" if ver else bare)
+        else:
+            labels.append(stem)
+    return labels
+
+
 def list_papers() -> list[str]:
     """List stored paper IDs, deduped to one bare ID per paper.
 
