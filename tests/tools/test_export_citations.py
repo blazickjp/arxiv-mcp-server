@@ -432,6 +432,82 @@ async def test_bare_id_resolves_to_latest_when_versions_batched(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bare_and_versioned_same_paper_one_bibtex(monkeypatch):
+    """Bare + versioned of the same paper emit one BibTeX entry (#241).
+
+    Prefer the versioned id when mixed; either order must collapse to one entry.
+    Distinct versioned ids of the same paper remain separate (#212).
+    """
+    paper = _paper(
+        "2410.17954",
+        "ExpertFlow: Adaptive Expert Scheduling",
+        ["Yuan He"],
+        published="2024-10-23T00:00:00Z",
+        versioned_id="2410.17954v2",
+    )
+    _stub_metadata(monkeypatch, [paper])
+
+    for paper_ids in (
+        ["2410.17954", "2410.17954v2"],
+        ["2410.17954v2", "2410.17954"],
+    ):
+        payload = await _run({"paper_ids": paper_ids})
+        assert payload["status"] == "success", paper_ids
+        assert payload["bibtex"].count("@misc{") == 1, paper_ids
+        assert payload["count"]["succeeded"] == 1, paper_ids
+        assert payload["count"]["failed"] == 0, paper_ids
+        assert len(payload["results"]) == 1, paper_ids
+        assert payload["results"][0]["paper_id"] == "2410.17954v2"
+        assert "eprint = {2410.17954v2}" in payload["bibtex"]
+        assert "he2024expertflowa" not in payload["bibtex"]
+        assert payload["results"][0]["key"] == "he2024expertflow"
+
+
+@pytest.mark.asyncio
+async def test_bare_dropped_when_two_versions_also_requested(monkeypatch):
+    """Bare + v1 + v7 keeps both versions, drops bare (#241 + #212)."""
+    v7 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2023-08-02T00:00:00Z",
+        versioned_id="1706.03762v7",
+    )
+    v1 = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2017-06-12T00:00:00Z",
+        versioned_id="1706.03762v1",
+    )
+
+    async def _fake(ids):
+        return {"1706.03762v7": v7, "1706.03762v1": v1, "1706.03762": v7}
+
+    monkeypatch.setattr(ec, "_fetch_metadata", _fake)
+    payload = await _run({"paper_ids": ["1706.03762", "1706.03762v7", "1706.03762v1"]})
+    assert payload["status"] == "success"
+    assert payload["bibtex"].count("@misc{") == 2
+    assert [r["paper_id"] for r in payload["results"]] == [
+        "1706.03762v7",
+        "1706.03762v1",
+    ]
+
+
+def test_bares_with_versioned_sibling_helper():
+    assert ec._bares_with_versioned_sibling(["2410.17954", "2410.17954v2"]) == {
+        "2410.17954"
+    }
+    assert ec._bares_with_versioned_sibling(["2410.17954v2", "2410.17954"]) == {
+        "2410.17954"
+    }
+    assert ec._bares_with_versioned_sibling(["1706.03762v7", "1706.03762v1"]) == {
+        "1706.03762"
+    }
+    assert ec._bares_with_versioned_sibling(["2401.00001", "2401.00002"]) == set()
+
+
+@pytest.mark.asyncio
 async def test_fetch_metadata_keeps_each_versioned_entry(monkeypatch):
     """Atom returning v7 and v1 must index both; bare maps to latest (#212)."""
     from unittest.mock import AsyncMock, MagicMock
