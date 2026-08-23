@@ -76,6 +76,9 @@ async def test_older_version_without_force_does_not_downgrade(
     assert result["paper_id"] == "1706.03762"
     assert "BLEU 41.8 from v7" in result["content"]
     assert "41.0 from v1" not in result["content"]
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "UNTRUSTED" not in result["content"]
     assert (temp_storage_path / "1706.03762.md").read_text(
         encoding="utf-8"
     ) == "# Attention\nBLEU 41.8 from v7"

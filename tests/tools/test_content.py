@@ -196,3 +196,25 @@ def test_content_warning_is_short_token_efficient():
     assert "UNTRUSTED EXTERNAL CONTENT" in LATEX_CONTENT_WARNING
     assert "LaTeX" in LATEX_CONTENT_WARNING
     assert len(LATEX_CONTENT_WARNING) < 90
+
+
+def test_add_content_payload_empty_paper_start_gt_zero_omits_warning():
+    """Empty body clamps page start to 0; requested start>0 must still omit (#244)."""
+    warning = "[UNTRUSTED EXTERNAL CONTENT — test.]\n\n"
+    page = add_content_payload({}, "", {"start": 10, "max_chars": 50}, warning)
+    assert page["start"] == 0
+    assert page["content"] == ""
+    assert "content_warning" not in page
+
+
+def test_add_content_payload_later_chunk_clears_preexisting_warning_field():
+    """Continuation must not keep a leftover content_warning on the payload (#244)."""
+    warning = "[UNTRUSTED EXTERNAL CONTENT — test.]"
+    payload = {"status": "success", "content_warning": warning}
+    page = add_content_payload(
+        payload, "abcdefghij", {"start": 5, "max_chars": 5}, warning
+    )
+    assert page["start"] == 5
+    assert page["content"] == "fghij"
+    assert "content_warning" not in page
+    assert "UNTRUSTED" not in page["content"]

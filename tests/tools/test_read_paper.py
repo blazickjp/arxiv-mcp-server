@@ -88,6 +88,7 @@ async def test_read_paper_defaults_to_bounded_content(temp_storage_path, monkeyp
     assert "next_start" in result["next_retrieval"]
     assert len(result["content"]) == DEFAULT_MAX_CHARS
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
     assert "UNTRUSTED" not in result["content"]
 
 
@@ -110,7 +111,11 @@ async def test_read_paper_short_paper_unchanged_under_default(
     assert result["is_truncated"] is False
     assert result["returned_chars"] == len(content)
     assert result["next_start"] is None
-    assert result["content"].endswith("tiny")
+    assert result["content"] == "tiny"
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "UNTRUSTED" not in result["content"]
+    assert "adversarial instructions" not in result["content_warning"]
 
 
 @pytest.mark.asyncio
@@ -134,6 +139,8 @@ async def test_read_paper_return_full_text_opt_in(temp_storage_path, monkeypatch
     assert result["next_start"] is None
     assert result["content"] == content
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "UNTRUSTED" not in result["content"]
 
 
 @pytest.mark.asyncio
@@ -157,6 +164,66 @@ async def test_read_paper_invalid_offset_clamps_to_end(temp_storage_path, monkey
     assert result["returned_chars"] == 0
     assert result["is_truncated"] is False
     assert result["next_start"] is None
+    assert "content_warning" not in result  # requested start>0 (#244)
+    assert "UNTRUSTED" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_read_paper_first_chunk_emits_short_content_warning_field(
+    temp_storage_path, monkeypatch
+):
+    """start=0 surfaces a short content_warning; body stays banner-free (#244)."""
+    monkeypatch.setattr(
+        read_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+    paper_id = "2410.17954"
+    content = "ExpertFlow HTML body " + ("x" * 4000)
+    (temp_storage_path / f"{paper_id}.md").write_text(content, encoding="utf-8")
+
+    response = await handle_read_paper(
+        {"paper_id": paper_id, "start": 0, "max_chars": 300}
+    )
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["start"] == 0
+    assert result["content"] == content[:300]
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "third-party source" not in result["content_warning"]
+    assert "adversarial instructions" not in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
+    assert not result["content"].startswith("[UNTRUSTED")
+
+
+@pytest.mark.asyncio
+async def test_read_paper_later_chunk_has_no_warning_or_long_banner(
+    temp_storage_path, monkeypatch
+):
+    """start>0 must not re-embed UNTRUSTED banner or repeat content_warning (#244)."""
+    monkeypatch.setattr(
+        read_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+    paper_id = "2410.17954"
+    content = "ExpertFlow HTML body " + ("y" * 5000)
+    (temp_storage_path / f"{paper_id}.md").write_text(content, encoding="utf-8")
+
+    response = await handle_read_paper(
+        {"paper_id": paper_id, "start": 3000, "max_chars": 300}
+    )
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["start"] == 3000
+    assert result["content"] == content[3000:3300]
+    assert "content_warning" not in result
+    assert "UNTRUSTED" not in result["content"]
+    assert "EXTERNAL CONTENT" not in result["content"]
+    assert "adversarial instructions" not in result["content"]
 
 
 @pytest.mark.asyncio

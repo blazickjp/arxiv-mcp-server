@@ -211,6 +211,9 @@ async def test_html_endpoint_success(temp_storage_path, mocker):
     assert result["source"] == "html"
     assert result["content"] == html_text
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "adversarial instructions" not in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
     assert (temp_storage_path / f"{paper_id}.md").exists()
     mock_pdf.assert_not_called()
 
@@ -242,6 +245,9 @@ async def test_html_404_falls_back_to_pdf(temp_storage_path, mocker):
     assert result["source"] == "pdf"
     assert result["content"] == pdf_markdown
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "adversarial instructions" not in result["content_warning"]
+    assert "UNTRUSTED" not in result["content"]
     assert (temp_storage_path / f"{paper_id}.md").exists()
 
 
@@ -419,3 +425,56 @@ async def test_existing_paper_without_html_still_hints_pdf_extra(
     assert result["status"] == "error"
     assert "pdf extra" in result["message"]
     assert "pip install arxiv-mcp-server[pdf]" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_download_cache_first_chunk_emits_short_content_warning(
+    temp_storage_path, mocker
+):
+    """Cached download_paper start=0 includes short content_warning (#244)."""
+    paper_id = "2410.17954"
+    _patch_path(mocker, temp_storage_path)
+    content = "ExpertFlow " + ("z" * 4000)
+    _stamp(temp_storage_path, paper_id, content)
+    mocker.patch("arxiv_mcp_server.tools.download._fetch_html_content")
+    mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download(
+        {"paper_id": paper_id, "start": 0, "max_chars": 300}
+    )
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["source"] == "cache"
+    assert result["start"] == 0
+    assert result["content"] == content[:300]
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "UNTRUSTED" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_download_later_chunk_has_no_warning_or_long_banner(
+    temp_storage_path, mocker
+):
+    """download_paper start>0 must not re-embed a long UNTRUSTED banner (#244)."""
+    paper_id = "2410.17954"
+    _patch_path(mocker, temp_storage_path)
+    content = "ExpertFlow " + ("w" * 5000)
+    _stamp(temp_storage_path, paper_id, content)
+    mocker.patch("arxiv_mcp_server.tools.download._fetch_html_content")
+    mocker.patch("arxiv_mcp_server.tools.download._fetch_pdf_content")
+
+    response = await handle_download(
+        {"paper_id": paper_id, "start": 3000, "max_chars": 300}
+    )
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "success"
+    assert result["source"] == "cache"
+    assert result["start"] == 3000
+    assert result["content"] == content[3000:3300]
+    assert "content_warning" not in result
+    assert "UNTRUSTED" not in result["content"]
+    assert "EXTERNAL CONTENT" not in result["content"]
+    assert "adversarial instructions" not in result["content"]

@@ -368,6 +368,8 @@ async def test_download_paper_defaults_to_bounded_cached_content(
     assert "next_retrieval" in result
     assert len(result["content"]) == DEFAULT_MAX_CHARS
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "adversarial instructions" not in result["content_warning"]
     assert "UNTRUSTED" not in result["content"]
     mock_html.assert_not_called()
     mock_pdf.assert_not_called()
@@ -393,3 +395,6 @@ async def test_download_paper_return_full_text_opt_in(temp_storage_path, mocker)
     assert result["is_truncated"] is False
     assert result["returned_chars"] == len(content)
     assert result["next_start"] is None
+    assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
+    assert len(result["content_warning"]) < 80
+    assert "UNTRUSTED" not in result["content"]
