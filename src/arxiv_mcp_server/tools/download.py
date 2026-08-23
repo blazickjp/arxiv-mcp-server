@@ -130,7 +130,7 @@ settings = Settings()
 
 # Bump when HTML extraction changes so cached markdown is treated as stale
 # and re-downloaded without requiring the caller to pass force=true.
-EXTRACTOR_VERSION = 5
+EXTRACTOR_VERSION = 6
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +147,10 @@ class _ArticleTextExtractor(HTMLParser):
       - Skip script/style/nav/header/footer plus arXiv UI widgets.
       - Skip author-note chrome (Thanks/ORCID/affiliation/email blocks).
       - Skip conference/DOI/ISBN/CCS pubnotes and date/license chrome.
-      - Coalesce author lines; drop affiliation superscripts and TeX
-        superscript debris in the author block.
+      - Coalesce decorative letter-span titles into one line (keep
+        subtitle colons attached); coalesce author lines; drop
+        affiliation superscripts and TeX superscript debris in the
+        author block.
       - Skip footnotemark markers (class, role, or the literal token).
       - Skip license/permission one-liners and ICML/LaTeX page-layout
         style warnings (marginparsep and similar) that appear before the
@@ -253,6 +255,9 @@ class _ArticleTextExtractor(HTMLParser):
         self._authors_depth: int = 0
         self._authors_stack: list[bool] = []
         self._author_buf: list[str] = []
+        self._title_depth: int = 0
+        self._title_stack: list[bool] = []
+        self._title_buf: list[str] = []
 
     def _should_skip(self, tag: str, attr_map: dict[str, str]) -> bool:
         if tag in self.SKIP_TAGS:
@@ -293,6 +298,17 @@ class _ArticleTextExtractor(HTMLParser):
         if line:
             self._append_chunk(line)
 
+    def _flush_title(self) -> None:
+        """Join decorative title letter spans into one coherent line."""
+        if not self._title_buf:
+            return
+        # Concatenate raw pieces so underlined acronym letters reattach
+        # to the rest of each word (D+ata- → Data-), then collapse space.
+        line = re.sub(r"\s+", " ", "".join(self._title_buf)).strip()
+        self._title_buf = []
+        if line:
+            self._append_chunk(line)
+
     def _append_chunk(self, text: str) -> None:
         if self._article_depth > 0:
             self._article_chunks.append(text)
@@ -305,6 +321,9 @@ class _ArticleTextExtractor(HTMLParser):
         if self.FOOTNOTEMARK_TOKEN in text.lower():
             return
         if not self._seen_title and self._is_pre_title_chrome(text):
+            return
+        if self._title_depth > 0:
+            self._title_buf.append(text)
             return
         if self._authors_depth > 0:
             self._author_buf.append(text)
@@ -319,6 +338,11 @@ class _ArticleTextExtractor(HTMLParser):
         if tag in {"h1", "h2"} or "ltx_title" in classes:
             self._seen_title = True
 
+        # Document title only — not abstract/section ``ltx_title_*``.
+        entering_title = tag == "h1" or "ltx_title_document" in classes
+        if entering_title:
+            self._title_depth += 1
+
         entering_authors = "ltx_authors" in classes
         if entering_authors:
             self._authors_depth += 1
@@ -326,7 +350,7 @@ class _ArticleTextExtractor(HTMLParser):
         # Void elements have no children. Incrementing skip_depth for
         # <input> etc. and never seeing an end tag left the rest of the
         # document, including <article>, permanently skipped. Do not push
-        # authors_stack either — void tags have no matching endtag.
+        # authors/title stacks either — void tags have no matching endtag.
         if tag in self.VOID_TAGS:
             return
 
@@ -349,11 +373,16 @@ class _ArticleTextExtractor(HTMLParser):
         if skip:
             self._skip_depth += 1
         self._skip_stack.append(skip)
+        self._title_stack.append(entering_title)
         self._authors_stack.append(entering_authors)
 
     def handle_endtag(self, tag: str):
         if self._skip_stack and self._skip_stack.pop():
             self._skip_depth = max(0, self._skip_depth - 1)
+        if self._title_stack and self._title_stack.pop():
+            self._title_depth = max(0, self._title_depth - 1)
+            if self._title_depth == 0:
+                self._flush_title()
         if self._authors_stack and self._authors_stack.pop():
             self._authors_depth = max(0, self._authors_depth - 1)
             if self._authors_depth == 0:
@@ -368,9 +397,17 @@ class _ArticleTextExtractor(HTMLParser):
         self.handle_endtag(tag)
 
     def handle_data(self, data: str):
+        # Title letter spans must keep surrounding whitespace so
+        # ``D``+``ata-`` reassemble; do not strip until flush.
+        if self._title_depth > 0 and not self._skip_depth:
+            if data:
+                self._title_buf.append(data)
+            return
         self._emit(data.strip())
 
     def get_text(self) -> str:
+        if self._title_depth > 0:
+            self._flush_title()
         if self._authors_depth > 0:
             self._flush_authors()
         chunks = self._article_chunks or self._body_chunks
