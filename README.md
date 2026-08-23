@@ -197,12 +197,24 @@ The server currently exposes 19 tools.
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
 | `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API; optional `SEMANTIC_SCHOLAR_API_KEY` |
 | `export_citations` | Export BibTeX for one or more arXiv IDs | Authoritative arXiv metadata |
-| `watch_topic` | Save or update an arXiv topic watch | Stored locally |
+| `watch_topic` | Save or update an arXiv topic watch | Stored locally; omit `categories` to preserve on update, `categories: []` to clear |
 | `list_watches` | List saved topic watches | Read-only; does not advance last_checked |
 | `check_alerts` | Check saved watches for new papers | Returns papers since the last check |
 | `unwatch_topic` | Delete a saved topic watch | Exact topic match; not-found if missing |
 | `semantic_search` | Search downloaded papers by semantic similarity | Requires `[pro]` |
 | `reindex` | Rebuild the local semantic index | Requires `[pro]` |
+
+### Research alerts (`watch_topic`)
+
+Save standing topic watches with `watch_topic`, inspect them with `list_watches`, poll with `check_alerts`, and remove with `unwatch_topic`.
+
+When updating an existing watch (same `topic` string):
+
+- **Omit** `categories` → **preserve** the stored category filters (and other fields you leave unchanged).
+- Pass **`categories: []`** → **clear** category filters.
+- Pass a non-empty list → replace the stored filters.
+
+Create path: omitting `categories` stores an empty list (no category filter).
 
 ### search_papers query guide
 

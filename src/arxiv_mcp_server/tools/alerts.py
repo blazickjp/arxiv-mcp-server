@@ -34,6 +34,7 @@ watch_topic_tool = types.Tool(
         "The topic string uses the same query syntax as search_papers (quoted phrases, field specifiers, boolean operators). "
         'Examples: \'"diffusion models" AND ti:"video generation"\', \'au:"LeCun" AND cs.LG\'. '
         "Calling watch_topic with the same topic string updates the existing watch rather than creating a duplicate. "
+        "On update, omit categories to preserve existing filters; pass categories: [] to clear them. "
         "Pair with check_alerts to poll for new papers."
     ),
     inputSchema={
@@ -51,7 +52,12 @@ watch_topic_tool = types.Tool(
             "categories": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional arXiv category filter (e.g. ['cs.LG', 'cs.AI']). Narrows results to specific fields.",
+                "description": (
+                    "Optional arXiv category filter (e.g. ['cs.LG', 'cs.AI']). "
+                    "Narrows results to specific fields. "
+                    "On update, omit this field to preserve existing categories; "
+                    "pass an empty array [] to clear them."
+                ),
             },
             "max_results": {
                 "type": "integer",
