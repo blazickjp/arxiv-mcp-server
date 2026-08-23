@@ -118,9 +118,10 @@ def test_html_to_text_keeps_math_once():
     assert "measured decode is" in text
     assert "tok/s warm" in text
     assert text.count("0.44") == 1
-    assert "2.0\\times" in text
-    assert text.count("2.0\\times") == 1
-    assert "2.0\u00d7" not in text
+    # #239: normalize TeX ``\times`` noise to a real multiplication sign.
+    assert "2.0\u00d7" in text
+    assert text.count("2.0\u00d7") == 1
+    assert "2.0\\times" not in text
 
 
 def _stamp(storage, paper_id, content):
