@@ -43,11 +43,15 @@ def _patch_path(mocker, storage):
     )
 
 
-def test_2608_shaped_html_title_is_split_across_lines():
-    """Document the HTML scrape failure mode that #176 must not use."""
+def test_2608_shaped_html_title_is_joined_across_breaks():
+    """EXTRACTOR_VERSION>=6 joins br-split document titles into one line (#258).
+
+    Sidecar metadata still must come from the API (#176); see tests below.
+    """
     text = _html_to_text(SPLIT_TITLE_HTML)
-    assert text.splitlines()[0] == HTML_FIRST_LINE
-    assert API_TITLE not in text.splitlines()[0]
+    assert text.splitlines()[0] == API_TITLE
+    # Pre-#258 failure mode was first-line-only truncation.
+    assert text.splitlines()[0] != HTML_FIRST_LINE
 
 
 @pytest.mark.asyncio
