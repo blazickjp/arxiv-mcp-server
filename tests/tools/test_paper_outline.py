@@ -12,6 +12,7 @@ from arxiv_mcp_server.tools.paper_outline import (
     handle_read_paper_section,
     handle_search_paper_text,
     parse_markdown_sections,
+    search_passages,
 )
 
 SAMPLE_PAPER = """# Introduction
@@ -214,6 +215,88 @@ async def test_search_passages_and_empty(patch_storage):
     )
     miss_result = json.loads(miss[0].text)
     assert miss_result["returned_passages"] == 0
+
+
+def _overlap_ratio(a: dict, b: dict) -> float:
+    overlap = max(0, min(a["end"], b["end"]) - max(a["start"], b["start"]))
+    if overlap == 0:
+        return 0.0
+    shorter = min(a["end"] - a["start"], b["end"] - b["start"])
+    return overlap / shorter if shorter else 0.0
+
+
+def test_search_passages_dedupes_overlapping_windows():
+    """Nearby repeats of the same term must not flood max_passages."""
+    # Cluster "routing" hits ~100 chars apart in one section (repro pattern).
+    filler = "x" * 80
+    abstract = (
+        f"Abstract discusses routing {filler} then routing again {filler} "
+        f"with more routing {filler} and routing once more {filler} "
+        f"final routing mention."
+    )
+    methods = "Methods use routing for expert selection in MoE layers."
+    results = "Results show routing improves latency under load."
+    conclusion = "Conclusion: routing is the key bottleneck."
+    related = "Related work compares routing heuristics."
+    md = (
+        f"# Abstract\n\n{abstract}\n\n"
+        f"# Methods\n\n{methods}\n\n"
+        f"# Results\n\n{results}\n\n"
+        f"# Related Work\n\n{related}\n\n"
+        f"# Conclusion\n\n{conclusion}\n"
+    )
+    sections = parse_markdown_sections(md)
+    passages = search_passages(
+        md, sections, "routing", max_passages=5, passage_chars=400
+    )
+    assert 1 <= len(passages) <= 5
+    # Pairwise windows must not be near-duplicates.
+    for i, a in enumerate(passages):
+        for b in passages[i + 1 :]:
+            assert _overlap_ratio(a, b) <= 0.5, (a["start"], b["start"])
+    # Prefer distinct sections over five abstract near-duplicates.
+    section_ids = {p["section_id"] for p in passages if p["section_id"]}
+    assert len(section_ids) >= min(4, len(passages))
+
+
+def test_search_passages_respects_max_passages_after_dedupe():
+    md = "\n\n".join(
+        f"# Section {i}\n\nUnique routing topic {i} discussion." for i in range(1, 12)
+    )
+    sections = parse_markdown_sections(md)
+    passages = search_passages(
+        md, sections, "routing", max_passages=3, passage_chars=120
+    )
+    assert len(passages) == 3
+    assert len({p["section_id"] for p in passages}) == 3
+
+
+@pytest.mark.asyncio
+async def test_search_paper_text_dedupes_via_handler(patch_storage):
+    filler = "y" * 90
+    body = (
+        f"# Abstract\n\nrouting {filler} routing {filler} routing\n\n"
+        f"# Methods\n\nWe study routing strategies.\n\n"
+        f"# Results\n\nrouting wins on latency.\n"
+    )
+    _write_paper(patch_storage, "2410.17954", body)
+    response = await handle_search_paper_text(
+        {
+            "paper_id": "2410.17954",
+            "query": "routing",
+            "max_passages": 5,
+            "passage_chars": 300,
+        }
+    )
+    result = json.loads(response[0].text)
+    assert result["status"] == "success"
+    assert result["returned_passages"] == len(result["passages"]) <= 5
+    passages = result["passages"]
+    assert len(passages) >= 2
+    for i, a in enumerate(passages):
+        for b in passages[i + 1 :]:
+            assert _overlap_ratio(a, b) <= 0.5
+    assert len({p["section_id"] for p in passages}) >= 2
 
 
 @pytest.mark.asyncio

@@ -335,6 +335,77 @@ def _coerce_passage_chars(value: Any) -> int:
         return DEFAULT_PASSAGE_CHARS
 
 
+# Near-duplicate passages: windows shifted by ~80–160 chars share most text.
+PASSAGE_OVERLAP_THRESHOLD = 0.5
+# Cap candidate scan so pathological queries (e.g. single letter) stay cheap.
+MAX_PASSAGE_CANDIDATES = 500
+
+
+def _passage_overlap_ratio(a_start: int, a_end: int, b_start: int, b_end: int) -> float:
+    """Fraction of the shorter window that overlaps the other (0..1)."""
+    overlap = max(0, min(a_end, b_end) - max(a_start, b_start))
+    if overlap == 0:
+        return 0.0
+    shorter = min(a_end - a_start, b_end - b_start)
+    return overlap / shorter if shorter else 0.0
+
+
+def _passages_heavily_overlap(
+    candidate: dict[str, Any], selected: list[dict[str, Any]]
+) -> bool:
+    for prior in selected:
+        if (
+            _passage_overlap_ratio(
+                candidate["start"],
+                candidate["end"],
+                prior["start"],
+                prior["end"],
+            )
+            > PASSAGE_OVERLAP_THRESHOLD
+        ):
+            return True
+    return False
+
+
+def _select_diverse_passages(
+    candidates: list[dict[str, Any]], max_passages: int
+) -> list[dict[str, Any]]:
+    """Pick up to max_passages preferring new sections, then fill non-overlaps."""
+    if max_passages <= 0 or not candidates:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    seen_sections: set[str] = set()
+
+    # Pass 1: one (non-overlapping) hit per section when possible.
+    for cand in candidates:
+        if len(selected) >= max_passages:
+            break
+        sid = cand.get("section_id")
+        if sid is not None and sid in seen_sections:
+            continue
+        if _passages_heavily_overlap(cand, selected):
+            continue
+        selected.append(cand)
+        if sid is not None:
+            seen_sections.add(sid)
+
+    # Pass 2: fill remaining slots with any non-overlapping later hits.
+    if len(selected) < max_passages:
+        selected_ids = {id(p) for p in selected}
+        for cand in candidates:
+            if len(selected) >= max_passages:
+                break
+            if id(cand) in selected_ids:
+                continue
+            if _passages_heavily_overlap(cand, selected):
+                continue
+            selected.append(cand)
+
+    selected.sort(key=lambda p: (p["match_start"], p["start"]))
+    return selected
+
+
 def search_passages(
     content: str,
     sections: list[MdSection],
@@ -343,7 +414,11 @@ def search_passages(
     max_passages: int,
     passage_chars: int,
 ) -> list[dict[str, Any]]:
-    """Return bounded case-insensitive substring matches with source coordinates."""
+    """Return bounded case-insensitive substring matches with source coordinates.
+
+    Suppresses high-overlap near-duplicates and prefers section-diverse hits
+    while still respecting ``max_passages``.
+    """
     if not query:
         return []
     haystack = content.casefold()
@@ -351,11 +426,11 @@ def search_passages(
     if not needle:
         return []
 
-    results: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     search_from = 0
     half = max(32, passage_chars // 2)
 
-    while len(results) < max_passages:
+    while len(candidates) < MAX_PASSAGE_CANDIDATES:
         idx = haystack.find(needle, search_from)
         if idx < 0:
             break
@@ -372,7 +447,7 @@ def search_passages(
 
         section = _section_for_offset(sections, idx)
         excerpt = content[excerpt_start:excerpt_end]
-        results.append(
+        candidates.append(
             {
                 "start": excerpt_start,
                 "end": excerpt_end,
@@ -384,10 +459,11 @@ def search_passages(
                 "excerpt_chars": len(excerpt),
             }
         )
-        # Advance past this match to avoid duplicates; allow nearby later hits.
+        # Advance past this match; nearby later hits become candidates for
+        # overlap/section filtering below.
         search_from = match_end if match_end > search_from else search_from + 1
 
-    return results
+    return _select_diverse_passages(candidates, max_passages)
 
 
 outline_tool = types.Tool(
@@ -446,7 +522,8 @@ search_text_tool = types.Tool(
     annotations=ToolAnnotations(readOnlyHint=True),
     description=(
         "Search a downloaded paper for bounded matching passages with "
-        "section/source offsets. Lightweight substring search; no Torch."
+        "section/source offsets. Suppresses high-overlap near-duplicates and "
+        "prefers section-diverse hits. Lightweight substring search; no Torch."
     ),
     inputSchema={
         "type": "object",
