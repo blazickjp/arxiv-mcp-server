@@ -151,7 +151,7 @@ async def test_tools_list_serialized_size_snapshot():
     # Soft ceiling: after shrinking search_papers, total list should stay well
     # under the pre-change ~16k measurement on main @94a1317.
     assert search_chars < 3000
-    # Soft ceiling allows abstract_mode (#128) and markdown outline tools (#129)
-    # on top of the #131 shrink.
-    assert total_chars < 17500
+    # Soft ceiling allows abstract_mode (#128), markdown outline tools (#129),
+    # and latex return_full_text schema parity (#256) on top of the #131 shrink.
+    assert total_chars < 18000
     assert len(search.description) < 1500

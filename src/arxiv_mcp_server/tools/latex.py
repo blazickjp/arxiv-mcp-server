@@ -260,6 +260,13 @@ def _page_properties() -> dict[str, Any]:
             "maximum": MAX_RETURN_CHARS,
             "description": f"Maximum source characters to return (default {DEFAULT_MAX_CHARS})",
         },
+        "return_full_text": {
+            "type": "boolean",
+            "description": (
+                "Set true to opt out of the bounded default and return the "
+                "entire remaining source or section from start in one call"
+            ),
+        },
     }
 
 
