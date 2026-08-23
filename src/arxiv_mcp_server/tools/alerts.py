@@ -14,7 +14,11 @@ from mcp.types import ToolAnnotations
 from dateutil import parser
 
 from ..config import Settings
-from .search import _raw_arxiv_search
+from .search import (
+    ArxivRateLimitError,
+    _rate_limited_response,
+    _raw_arxiv_search,
+)
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -412,6 +416,14 @@ async def handle_check_alerts(arguments: Dict[str, Any]) -> List[types.TextConte
             "alerts": alerts,
         }
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+    except ArxivRateLimitError as exc:
+        # Parity with search_papers (#238): structured rate_limited JSON, not bare Error:
+        logger.warning("check_alerts rate limited after retries: %s", exc)
+        return _rate_limited_response(
+            str(exc),
+            retry_after_seconds=exc.retry_after_seconds,
+            status_code=exc.status_code,
+        )
     except Exception as exc:
         logger.error("check_alerts error: %s", exc)
         return [types.TextContent(type="text", text=f"Error: {str(exc)}")]
