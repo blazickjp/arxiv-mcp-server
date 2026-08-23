@@ -207,7 +207,7 @@ async def test_http_status_error_does_not_leak_upstream_url(mocker):
 
 @pytest.mark.asyncio
 async def test_export_citations_normalizes_wrappers(monkeypatch):
-    """Wrappers such as arxiv: and abs URLs are stripped before fetch (#162)."""
+    """Wrappers normalize; bare+versioned collapse; invalid still reported (#162, #241)."""
     requested = []
     _stub_metadata(
         monkeypatch,
@@ -230,9 +230,16 @@ async def test_export_citations_normalizes_wrappers(monkeypatch):
             ]
         }
     )
+    # Fetch still sees both normalized valid ids; results drop superseded bare (#241).
     assert requested == ["1706.03762v7", "1706.03762"]
     assert payload["status"] == "partial"
+    assert payload["count"]["requested"] == 3
+    assert payload["count"]["succeeded"] == 1
+    assert payload["count"]["failed"] == 1
+    assert len(payload["results"]) == 2
     assert payload["results"][0]["status"] == "success"
     assert payload["results"][0]["paper_id"] == "1706.03762v7"
     assert "eprint = {1706.03762v7}" in payload["results"][0]["bibtex"]
-    assert payload["results"][2]["error"] == "invalid arXiv ID format"
+    assert payload["bibtex"].count("@misc{") == 1
+    assert payload["results"][1]["paper_id"] == "not-a-paper"
+    assert payload["results"][1]["error"] == "invalid arXiv ID format"
