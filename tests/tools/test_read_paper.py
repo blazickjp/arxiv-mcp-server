@@ -157,3 +157,83 @@ async def test_read_paper_invalid_offset_clamps_to_end(temp_storage_path, monkey
     assert result["returned_chars"] == 0
     assert result["is_truncated"] is False
     assert result["next_start"] is None
+
+
+@pytest.mark.asyncio
+async def test_read_paper_missing_version_names_cached_bare_sidecar(
+    temp_storage_path, monkeypatch
+):
+    """When bare+v2 is cached, read_paper(v1) names what is local (#243)."""
+    from arxiv_mcp_server.tools.list_papers import save_paper_metadata
+
+    monkeypatch.setattr(
+        read_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+    paper = "2410.17954"
+    (temp_storage_path / f"{paper}.md").write_text("# Body v2", encoding="utf-8")
+    save_paper_metadata(
+        paper,
+        title="Cached Paper",
+        authors=["A"],
+        published="2024-10-01T00:00:00Z",
+        arxiv_version="v2",
+        path=temp_storage_path / f"{paper}.meta.json",
+    )
+
+    response = await handle_read_paper({"paper_id": f"{paper}v1", "max_chars": 1000})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    message = result["message"]
+    assert f"{paper}v1" in message
+    assert "v1 is not cached locally" in message
+    assert f"{paper} (v2)" in message
+    assert "download_paper" in message
+    # Must not claim success or auto-return another version's body.
+    assert "content" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_paper_missing_version_names_legacy_versioned_stem(
+    temp_storage_path, monkeypatch
+):
+    """Legacy on-disk v2 key is mentioned when v1 is requested (#243)."""
+    monkeypatch.setattr(
+        read_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+    paper = "2410.17954"
+    (temp_storage_path / f"{paper}v2.md").write_text("# Legacy v2", encoding="utf-8")
+
+    response = await handle_read_paper({"paper_id": f"{paper}v1"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    message = result["message"]
+    assert f"{paper}v1" in message
+    assert "v1 is not cached locally" in message
+    assert f"{paper}v2" in message
+    assert "download_paper" in message
+
+
+@pytest.mark.asyncio
+async def test_read_paper_totally_missing_keeps_generic_message(
+    temp_storage_path, monkeypatch
+):
+    """No related cache → keep the original generic not-found wording."""
+    monkeypatch.setattr(
+        read_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+    response = await handle_read_paper({"paper_id": "2410.17954v1"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert result["message"] == (
+        "Paper 2410.17954v1 not found in storage. "
+        "You may need to download it first using download_paper."
+    )
