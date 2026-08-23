@@ -33,6 +33,8 @@ API_TITLE = (
     "for Locality Against the Edge Memory-Bandwidth Wall "
     "A Pre-Registered Negative Result, with a Systems Measurement Study"
 )
+# Historical truncated first line from pre-#258 <br>-split HTML scrape;
+# still useful as a stale sidecar fixture for force-refresh coverage.
 HTML_FIRST_LINE = "Cacheable by Design? Training Mixture-of-Experts Routers"
 
 
@@ -43,11 +45,11 @@ def _patch_path(mocker, storage):
     )
 
 
-def test_2608_shaped_html_title_is_split_across_lines():
-    """Document the HTML scrape failure mode that #176 must not use."""
+def test_2608_shaped_html_title_is_joined_across_breaks():
+    """#258 joins <br>-broken document titles into one line (same as API)."""
     text = _html_to_text(SPLIT_TITLE_HTML)
-    assert text.splitlines()[0] == HTML_FIRST_LINE
-    assert API_TITLE not in text.splitlines()[0]
+    assert text.splitlines()[0] == API_TITLE
+    assert HTML_FIRST_LINE != text.splitlines()[0]
 
 
 @pytest.mark.asyncio
