@@ -30,6 +30,7 @@ watch_topic_tool = types.Tool(
         "Save or update a persistent research topic watch. "
         "When checked via check_alerts, returns only papers published since the last check — "
         "acting as a standing alert for new work on a topic. "
+        "New watches seed last_checked to creation time so the first check does not dump historical matches. "
         "The topic string uses the same query syntax as search_papers (quoted phrases, field specifiers, boolean operators). "
         'Examples: \'"diffusion models" AND ti:"video generation"\', \'au:"LeCun" AND cs.LG\'. '
         "Calling watch_topic with the same topic string updates the existing watch rather than creating a duplicate. "
@@ -258,13 +259,17 @@ async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextConten
         else:
             categories = []
 
+        # Seed last_checked=now on create so the first check_alerts only
+        # surfaces papers published after the watch was registered (#227).
+        # Updates preserve the existing watermark (including an intentional None).
+        now = _now_iso()
         record = {
             "topic": topic,
             "categories": categories,
             "max_results": max_results,
-            "last_checked": None,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "last_checked": now,
+            "created_at": now,
+            "updated_at": now,
         }
 
         if existing_index is not None:

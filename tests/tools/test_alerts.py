@@ -31,6 +31,9 @@ async def test_watch_topic_persists_topic(alerts_test_env):
     assert "topic" in payload
     assert isinstance(payload["topic"], dict)
     assert payload["topic"]["topic"] == "multi-agent systems"
+    # #227: new watches seed last_checked to creation time (not null).
+    assert payload["topic"]["last_checked"] is not None
+    assert payload["topic"]["last_checked"] == payload["topic"]["created_at"]
 
 
 @pytest.mark.asyncio
@@ -138,6 +141,10 @@ async def test_check_alerts_returns_new_papers(monkeypatch, alerts_test_env):
     monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_raw_search)
 
     await alerts_module.handle_watch_topic({"topic": "agents"})
+    # Established-watch baseline: last_checked in the past so mocks are "new".
+    _seed = alerts_module._load_watches()
+    _seed["topics"][0]["last_checked"] = "2024-01-01T00:00:00+00:00"
+    alerts_module._save_watches(_seed)
     response = await alerts_module.handle_check_alerts({})
 
     assert len(response) >= 1
@@ -173,7 +180,12 @@ async def test_check_alerts_unpacks_raw_search_tuple(monkeypatch, alerts_test_en
 
     monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_tuple)
     await alerts_module.handle_watch_topic({"topic": "moe"})
+    # Established-watch baseline: last_checked in the past so mocks are "new".
+    _seed = alerts_module._load_watches()
+    _seed["topics"][0]["last_checked"] = "2024-01-01T00:00:00+00:00"
+    alerts_module._save_watches(_seed)
     response = await alerts_module.handle_check_alerts({})
+
     payload = json.loads(response[0].text)
     assert payload["status"] == "success"
     assert payload["alerts"][0]["new_paper_count"] == 1
@@ -639,3 +651,128 @@ def test_page_is_truncated_helpers():
         )
         == "2024-06-01T12:00:00+00:00"
     )
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_create_seeds_last_checked_to_now(alerts_test_env):
+    """Regression #227: new watches must seed last_checked so history is not alerted."""
+    from dateutil import parser as date_parser
+    from datetime import datetime, timezone, timedelta
+
+    response = await alerts_module.handle_watch_topic(
+        {"topic": "mixture-of-experts flood", "categories": ["cs.LG"]}
+    )
+    topic = json.loads(response[0].text)["topic"]
+    assert topic["last_checked"] is not None
+    assert topic["last_checked"] == topic["created_at"]
+    watermark = date_parser.parse(topic["last_checked"])
+    assert watermark >= datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["last_checked"] == topic["last_checked"]
+    assert stored["last_checked"] is not None
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_new_watch_does_not_dump_historical_papers(
+    monkeypatch, alerts_test_env
+):
+    """Regression #227: first check after create returns 0 alerts for old papers."""
+    from dateutil import parser as date_parser
+    from datetime import datetime, timezone, timedelta
+
+    calls = []
+
+    async def _mock_old_flood(**kwargs):
+        calls.append(kwargs)
+        # With a seeded watermark, Atom date_from bounds the query — no historical dump.
+        # Pre-fix (null last_checked / date_from=None) would return this flood.
+        if kwargs.get("date_from"):
+            return ([], 0)
+        return (
+            [
+                {
+                    "id": "2206.00001",
+                    "title": "Ancient MoE",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.LG"],
+                    "published": "2022-06-07T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2206.00001",
+                    "resource_uri": "arxiv://2206.00001",
+                },
+                {
+                    "id": "2301.00002",
+                    "title": "Also old",
+                    "authors": ["B"],
+                    "abstract": "y",
+                    "categories": ["cs.LG"],
+                    "published": "2023-01-15T00:00:00+00:00",
+                    "url": "https://arxiv.org/pdf/2301.00002",
+                    "resource_uri": "arxiv://2301.00002",
+                },
+            ],
+            9000,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_old_flood)
+
+    create = await alerts_module.handle_watch_topic(
+        {"topic": 'ti:"mixture of experts"', "max_results": 10}
+    )
+    created = json.loads(create[0].text)["topic"]
+    seeded = created["last_checked"]
+    assert seeded is not None
+
+    result = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert result["status"] == "success"
+    alert = result["alerts"][0]
+    assert alert["new_paper_count"] == 0
+    assert alert["new_papers"] == []
+
+    stored = alerts_module._load_watches()["topics"][0]
+    # Watermark must not jump into the distant past (the #227 failure mode).
+    assert stored["last_checked"] is not None
+    watermark = date_parser.parse(stored["last_checked"])
+    assert watermark >= datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert not stored["last_checked"].startswith("2022-")
+    assert not stored["last_checked"].startswith("2023-")
+    # date_from passed to search should be the seeded creation watermark.
+    assert calls and calls[0].get("date_from") == seeded
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_new_watch_still_surfaces_future_papers(
+    monkeypatch, alerts_test_env
+):
+    """Regression #227: papers published after watch create still alert normally."""
+    from datetime import datetime, timezone, timedelta
+
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+
+    async def _mock_future(**kwargs):
+        return (
+            [
+                {
+                    "id": "2608.00001",
+                    "title": "Brand new",
+                    "authors": ["A"],
+                    "abstract": "x",
+                    "categories": ["cs.LG"],
+                    "published": future,
+                    "url": "https://arxiv.org/pdf/2608.00001",
+                    "resource_uri": "arxiv://2608.00001",
+                }
+            ],
+            1,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _mock_future)
+
+    await alerts_module.handle_watch_topic({"topic": "future-moe", "max_results": 10})
+    result = json.loads((await alerts_module.handle_check_alerts({}))[0].text)
+    assert result["alerts"][0]["new_paper_count"] == 1
+    assert result["alerts"][0]["new_papers"][0]["id"] == "2608.00001"
+    assert result["alerts"][0]["has_more"] is False
