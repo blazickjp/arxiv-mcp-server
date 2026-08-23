@@ -44,8 +44,14 @@ MAX_SECTION_COUNT = 2000
 # Heading styles seen in arXiv markdown (ATX, numbered, bare HTML titles).
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
 _NUMBERED_HEADING_RE = re.compile(r"^(\d+(?:\.\d+){0,5})[ \t]+(.+?)[ \t]*$")
+# HTML→text often emits the section number alone ("3." / "3.1.") then the title.
+_NUMBER_ONLY_RE = re.compile(r"^(\d+(?:\.\d+){0,5})\.[ \t]*$")
 _FENCE_RE = re.compile(r"^```")
 _MAX_BARE_TITLE_CHARS = 80
+# Stop collecting headings once References/Bibliography is seen (ref-line pollution).
+_OUTLINE_TERMINATORS = frozenset({"reference", "references", "bibliography"})
+# Top-level section indices stay small; years like 2023 USENIX… are common FPs.
+_MAX_SECTION_INDEX = 99
 
 # Common standalone section titles from arXiv HTML→md conversions.
 _BARE_SECTION_TITLES = frozenset(
@@ -155,11 +161,49 @@ def _mask_fenced_code(content: str) -> str:
     return "".join(chars)
 
 
+def _normalize_heading_title(title: str) -> str:
+    """Strip trailing section punctuation common in HTML→text titles."""
+    cleaned = title.strip().rstrip(":.").strip()
+    return cleaned or title.strip()
+
+
+def _is_plausible_section_number(numbering: str) -> bool:
+    """Reject years and other non-outline numbers (e.g. ``2023 USENIX…``)."""
+    parts = numbering.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return False
+    return all(1 <= int(part) <= _MAX_SECTION_INDEX for part in parts)
+
+
+def _is_outline_terminator(title: str) -> bool:
+    return _normalize_heading_title(title).casefold() in _OUTLINE_TERMINATORS
+
+
+def _numbered_heading(
+    numbering: str, title: str, *, line_len: int
+) -> tuple[int, str] | None:
+    """Return (level, title) for a plausible numbered heading, else None."""
+    title = title.strip()
+    if not title or line_len > _MAX_BARE_TITLE_CHARS:
+        return None
+    if not _is_plausible_section_number(numbering):
+        return None
+    # Section titles are capitalized; reject mid-sentence prose joins.
+    if not re.match(r"[A-Z]", title):
+        return None
+    # Citation venues often look like "USENIX ATC 23" after a year number.
+    if re.search(r"\b(?:19|20)\d{2}\b", title):
+        return None
+    level = min(6, numbering.count(".") + 1)
+    return level, _normalize_heading_title(title)
+
+
 def _match_heading_line(line: str) -> tuple[int, str] | None:
     """Return (level, title) for a heading line, or None if not a heading.
 
     Preference: ATX > numbered > bare known section titles. Bare titles must be
-    short standalone lines (no trailing prose).
+    short standalone lines that exactly match a known section name (optional
+    trailing colon/period only).
     """
     stripped = line.strip()
     if not stripped:
@@ -174,21 +218,56 @@ def _match_heading_line(line: str) -> tuple[int, str] | None:
 
     numbered = _NUMBERED_HEADING_RE.match(stripped)
     if numbered:
-        numbering = numbered.group(1)
-        title = numbered.group(2).strip()
-        # Reject numbered list items that look like long prose.
-        if title and len(stripped) <= _MAX_BARE_TITLE_CHARS:
-            if re.match(r"[A-Za-z]", title):
-                level = min(6, numbering.count(".") + 1)
-                return level, title
+        matched = _numbered_heading(
+            numbered.group(1), numbered.group(2), line_len=len(stripped)
+        )
+        if matched is not None:
+            return matched
 
     if len(stripped) <= _MAX_BARE_TITLE_CHARS:
-        # Allow optional trailing colon or period on bare titles.
-        candidate = stripped.rstrip(":.").strip()
+        candidate = _normalize_heading_title(stripped)
+        # Exact known title only — no extra tokens (tightens bare heuristics).
         if candidate.casefold() in _BARE_SECTION_TITLES:
-            return 1, candidate
+            remainder = stripped
+            if remainder.endswith((":", ".")):
+                remainder = remainder[:-1]
+            if remainder.strip().casefold() == candidate.casefold():
+                return 1, candidate
 
     return None
+
+
+def _logical_line(line: str) -> str:
+    logical = line[:-1] if line.endswith("\n") else line
+    if logical.endswith("\r"):
+        logical = logical[:-1]
+    return logical
+
+
+def _match_split_numbered_heading(
+    number_line: str, title_line: str
+) -> tuple[int, str] | None:
+    """Join HTML→text ``3.`` / ``Title`` pairs into a numbered heading."""
+    stripped = number_line.strip()
+    num_only = _NUMBER_ONLY_RE.match(stripped)
+    if num_only is None:
+        return None
+    title_stripped = title_line.strip()
+    if not title_stripped:
+        return None
+    # Do not join onto ATX / inline-numbered headings or another number marker.
+    # Bare known titles (e.g. Method) *should* join with the preceding number.
+    if _ATX_HEADING_RE.match(title_stripped):
+        return None
+    if _NUMBERED_HEADING_RE.match(title_stripped):
+        return None
+    if _NUMBER_ONLY_RE.match(title_stripped):
+        return None
+    return _numbered_heading(
+        num_only.group(1),
+        title_stripped,
+        line_len=len(stripped) + 1 + len(title_stripped),
+    )
 
 
 def parse_markdown_sections(content: str) -> list[MdSection]:
@@ -196,6 +275,8 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     Section body runs from the heading start through the character before the
     next heading of the same or higher level (lower or equal level number).
+    Scanning stops after a References/Bibliography heading so bibliography
+    lines (e.g. ``2023 USENIX ATC…``) are not treated as sections.
     """
     if len(content) == 0:
         return [MdSection("1", 1, "(document)", 0, 0)]
@@ -204,30 +285,57 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
     raw: list[tuple[int, str, str, int]] = []
     counters = [0, 0, 0, 0, 0, 0]
 
+    lines_meta: list[tuple[int, str]] = []
     offset = 0
-    in_fence = False
     for line in masked.splitlines(keepends=True):
+        lines_meta.append((offset, line))
+        offset += len(line)
+
+    in_fence = False
+    index = 0
+    while index < len(lines_meta):
         if len(raw) >= MAX_SECTION_COUNT:
             break
+        start_offset, line = lines_meta[index]
         stripped = line.lstrip(" \t")
         if stripped.startswith("```"):
             in_fence = not in_fence
-            offset += len(line)
+            index += 1
             continue
-        if not in_fence:
-            logical = line[:-1] if line.endswith("\n") else line
-            if logical.endswith("\r"):
-                logical = logical[:-1]
-            matched = _match_heading_line(logical)
-            if matched is not None:
-                level, title = matched
-                start = offset
-                counters[level - 1] += 1
-                for index in range(level, 6):
-                    counters[index] = 0
-                section_id = ".".join(str(value) for value in counters[:level])
-                raw.append((level, section_id, title, start))
-        offset += len(line)
+        if in_fence:
+            index += 1
+            continue
+
+        logical = _logical_line(line)
+        matched = _match_heading_line(logical)
+        consumed = 1
+
+        if matched is None:
+            # Peek across blank lines for a title after a lone section number.
+            peek = index + 1
+            while peek < len(lines_meta):
+                _, peek_line = lines_meta[peek]
+                peek_logical = _logical_line(peek_line)
+                if not peek_logical.strip():
+                    peek += 1
+                    continue
+                if peek_logical.lstrip(" \t").startswith("```"):
+                    break
+                matched = _match_split_numbered_heading(logical, peek_logical)
+                if matched is not None:
+                    consumed = peek - index + 1
+                break
+
+        if matched is not None:
+            level, title = matched
+            counters[level - 1] += 1
+            for counter_index in range(level, 6):
+                counters[counter_index] = 0
+            section_id = ".".join(str(value) for value in counters[:level])
+            raw.append((level, section_id, title, start_offset))
+            if _is_outline_terminator(title):
+                break
+        index += consumed
 
     if not raw:
         return [MdSection("1", 1, "(document)", 0, len(content))]

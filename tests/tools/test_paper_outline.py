@@ -495,3 +495,128 @@ async def test_bare_title_read_section_and_search_clean(patch_storage):
     excerpt = search["passages"][0]["excerpt"]
     assert "UNTRUSTED EXTERNAL CONTENT" not in excerpt
     assert "transduction" in excerpt.casefold()
+
+
+EXPERTFLOW_HTML_STYLE = """ExpertFlow title line
+
+Abstract.
+
+The abstract body.
+
+1.
+Introduction
+
+Intro body.
+
+2.
+Related Work
+
+2.1.
+Mixture-of-Experts (MoE)
+
+MoE body.
+
+3.
+Method
+
+3.1.
+System Design Overview
+
+Overview body.
+
+3.2.
+Routing Path Predictor (RPP)
+
+Predictor body.
+
+4.
+Evaluation
+
+Eval body.
+
+5.
+Conclusion
+
+Conclusion body.
+
+Acknowledgements.
+
+This research is supported.
+
+References
+
+Aminabadi
+et al.
+(2022)
+DeepSpeed paper.
+In
+2023 USENIX Annual Technical Conference (USENIX ATC 23)
+,
+Boston, MA
+,
+2021 USENIX Annual Technical Conference (USENIX ATC 21)
+,
+pp. 551–564
+.
+Appendix
+Should not appear after references terminator.
+"""
+
+
+def test_outline_stops_at_references_and_keeps_method_subsections():
+    """Regression for #229: ExpertFlow-style HTML→text outlines.
+
+    Split ``3.`` / ``Method`` / ``3.1.`` lines must yield nested subsections,
+    and bibliography venue lines must not become outline sections.
+    """
+    sections = parse_markdown_sections(EXPERTFLOW_HTML_STYLE)
+    titles = [s.title for s in sections]
+    assert "Method" in titles
+    assert "System Design Overview" in titles
+    assert "Routing Path Predictor (RPP)" in titles
+    assert "References" in titles
+    assert titles[-1] == "References"
+    assert not any("USENIX" in t for t in titles)
+    assert "Appendix" not in titles
+
+    method = next(s for s in sections if s.title == "Method")
+    assert method.level == 1
+    children = [s for s in sections if s.section_id.startswith(method.section_id + ".")]
+    child_titles = [s.title for s in children]
+    assert "System Design Overview" in child_titles
+    assert "Routing Path Predictor (RPP)" in child_titles
+    assert any(s.section_id == f"{method.section_id}.1" for s in children)
+    assert any(s.section_id == f"{method.section_id}.2" for s in children)
+
+
+def test_reject_year_prefixed_venue_and_loose_bare_titles():
+    """Tighten numbered/bare heuristics so citation lines are not headings."""
+    md = """1 Introduction
+
+Body.
+
+2023 USENIX Annual Technical Conference (USENIX ATC 23)
+
+Still body before real terminator.
+
+References
+
+More venue noise.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    assert titles == ["Introduction", "References"]
+    assert not any("USENIX" in t for t in titles)
+
+    # Extra tokens must not match bare known titles.
+    noisy = parse_markdown_sections("Method discussion continues here\n\nMore.\n")
+    assert noisy[0].title == "(document)"
+
+
+def test_bibliography_terminator_alias():
+    sections = parse_markdown_sections(
+        "Introduction\n\nIntro.\n\nBibliography\n\n1 Some Paper Title Here\n"
+    )
+    titles = [s.title for s in sections]
+    assert titles[-1] == "Bibliography"
+    assert "Some Paper Title Here" not in titles
