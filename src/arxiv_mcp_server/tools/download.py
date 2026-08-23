@@ -132,7 +132,9 @@ settings = Settings()
 
 # Bump when HTML extraction changes so cached markdown is treated as stale
 # and re-downloaded without requiring the caller to pass force=true.
-EXTRACTOR_VERSION = 6
+# #265 already claimed 6 for decorative titles; this Switch noise cleanup
+# bumps to 7 so both changes invalidate caches (#175).
+EXTRACTOR_VERSION = 7
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +154,11 @@ class _ArticleTextExtractor(HTMLParser):
       - Coalesce decorative letter-span titles into one line (keep
         subtitle colons attached); coalesce author lines; drop
         affiliation superscripts and TeX superscript debris in the
-        author block.
+        author block; drop pre-title bylines that duplicate authors.
+      - Skip journal heading/shortheadings/editor note chrome.
       - Skip footnotemark markers (class, role, or the literal token).
+      - Join decorative breaks in bracket cites, figure/table refs, and
+        parenthetical citations where HTML split them across lines.
       - Skip license/permission one-liners and ICML/LaTeX page-layout
         style warnings (marginparsep and similar) that appear before the
         title.
@@ -200,6 +205,13 @@ class _ArticleTextExtractor(HTMLParser):
         "ltx_pubnote",
         "ltx_dates",
         "ltx_role_cc-license",
+        # Journal/PDF chrome notes (running headers, editor, page marks).
+        "ltx_role_heading",
+        "ltx_role_shortheadings",
+        "ltx_role_firstpage",
+        "ltx_role_editor",
+        "ltx_role_newpage",
+        "ltx_role_refnum",
     }
     FOOTNOTEMARK_TOKEN = "footnotemark"
     PERMISSION_MARKERS = (
@@ -245,6 +257,7 @@ class _ArticleTextExtractor(HTMLParser):
         r"^\{\}\^|textsuperscript",
         re.IGNORECASE,
     )
+    _AUTHOR_STOPWORDS = frozenset({"and", "or", "the", "of", "for"})
 
     def __init__(self):
         super().__init__()
@@ -288,6 +301,36 @@ class _ArticleTextExtractor(HTMLParser):
         # ``\times`` alone or embedded (e.g. ``2.0\times``, ``L\times E``).
         return alttext.replace(r"\times", "\u00d7")
 
+    @classmethod
+    def _author_name_tokens(cls, text: str) -> set[str]:
+        """Alphabetic tokens from an author/byline string (for dedupe)."""
+        return {
+            tok
+            for tok in re.findall(r"[A-Za-z]+", text.lower())
+            if len(tok) > 1 and tok not in cls._AUTHOR_STOPWORDS
+        }
+
+    def _drop_duplicate_author_bylines(self, author_line: str) -> None:
+        """Remove earlier chunks that only repeat the author names.
+
+        Some latexml/ar5iv pages emit a plain-paragraph byline before the
+        title in addition to ``ltx_authors`` (Switch Transformers).
+        """
+        name_tokens = self._author_name_tokens(author_line)
+        if not name_tokens:
+            return
+        chunks = self._article_chunks if self._article_depth > 0 else self._body_chunks
+        kept: list[str] = []
+        for chunk in chunks:
+            chunk_tokens = self._author_name_tokens(chunk)
+            if chunk_tokens and chunk_tokens <= name_tokens and len(chunk) < 300:
+                continue
+            kept.append(chunk)
+        if self._article_depth > 0:
+            self._article_chunks = kept
+        else:
+            self._body_chunks = kept
+
     def _flush_authors(self) -> None:
         """Join buffered author tokens into one coherent line."""
         if not self._author_buf:
@@ -298,6 +341,7 @@ class _ArticleTextExtractor(HTMLParser):
         line = re.sub(r"\s+", " ", line).strip(" ,")
         self._author_buf = []
         if line:
+            self._drop_duplicate_author_bylines(line)
             self._append_chunk(line)
 
     def _flush_title(self) -> None:
@@ -348,6 +392,10 @@ class _ArticleTextExtractor(HTMLParser):
         entering_authors = "ltx_authors" in classes
         if entering_authors:
             self._authors_depth += 1
+        # latexml inserts ``ltx_author_before`` between creators; keep commas.
+        if self._authors_depth > 0 and "ltx_author_before" in classes:
+            if self._author_buf and self._author_buf[-1] != ",":
+                self._author_buf.append(",")
 
         # Void elements have no children. Incrementing skip_depth for
         # <input> etc. and never seeing an end tag left the rest of the
@@ -428,6 +476,50 @@ def _extract_article_fragment(html: str) -> str | None:
     return html[start : end + len("</article>")]
 
 
+def _join_split_ref_noise(text: str) -> str:
+    """Rejoin decorative HTML line breaks in cites and figure/table refs.
+
+    latexml often emits ``[``, ``1``, ``]`` or ``Fig.`` / ``2`` as separate
+    text nodes; with newline-joined chunks that becomes ``[\n1\n]`` or
+    ``Fig.\n2``. Parenthetical author-year cites split the same way.
+    """
+    # Bracket cites: [\n1\n] → [1]
+    text = re.sub(r"\[\n(\d+)\n\]", r"[\1]", text)
+    # Fig./Figure/Table/Section/Eq. N[+optional letter] on the next line(s).
+    text = re.sub(
+        r"\b(Fig\.|Figure|Table|Section|Sec\.|Eq\.|Equation)\n(\d+[a-zA-Z]?)\n",
+        r"\1 \2 ",
+        text,
+    )
+    text = re.sub(
+        r"\b(Fig\.|Figure|Table|Section|Sec\.|Eq\.|Equation)\n(\d+[a-zA-Z]?)$",
+        r"\1 \2",
+        text,
+        flags=re.MULTILINE,
+    )
+
+    def _join_paren_block(match: re.Match[str]) -> str:
+        parts = [p.strip() for p in match.group(1).split("\n") if p.strip()]
+        if not parts or any(len(p) >= 80 for p in parts):
+            return match.group(0)
+        out: list[str] = []
+        for part in parts:
+            if part in {";", ","}:
+                if out:
+                    out[-1] = out[-1] + part
+                else:
+                    out.append(part)
+            elif out and out[-1].endswith((";", ",")):
+                out[-1] = f"{out[-1]} {part}"
+            else:
+                out.append(part)
+        return "(" + " ".join(out) + ")"
+
+    # (\nAuthor year\n) and multi-cite (\nA\n;\nB\n) lists.
+    text = re.sub(r"\(([^\n()]*(?:\n[^\n()]*)+)\)", _join_paren_block, text)
+    return text
+
+
 def _html_to_text(html: str) -> str:
     """Parse raw HTML and return cleaned paper text."""
     parser = _ArticleTextExtractor()
@@ -438,7 +530,7 @@ def _html_to_text(html: str) -> str:
     text = re.sub(r"\n×\n", "× ", text)
     text = re.sub(r"\n×$", "×", text)
     text = re.sub(r"^×\n", "× ", text)
-    return text
+    return _join_split_ref_noise(text)
 
 
 # ---------------------------------------------------------------------------
