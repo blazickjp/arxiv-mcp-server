@@ -776,3 +776,29 @@ async def test_check_alerts_new_watch_still_surfaces_future_papers(
     assert result["alerts"][0]["new_paper_count"] == 1
     assert result["alerts"][0]["new_papers"][0]["id"] == "2608.00001"
     assert result["alerts"][0]["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_429_returns_rate_limited_json(monkeypatch, alerts_test_env):
+    """Regression #255: arXiv 429 must return JSON status=rate_limited, not Error: text."""
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+
+    async def _raise_rate_limit(**kwargs):
+        raise ArxivRateLimitError(
+            "arXiv is rate limiting this IP (HTTP 429). Please wait before retrying.",
+            status_code=429,
+            retry_after_seconds=30.0,
+        )
+
+    monkeypatch.setattr(alerts_module, "_raw_arxiv_search", _raise_rate_limit)
+
+    await alerts_module.handle_watch_topic({"topic": "rate-limit-demo"})
+    response = await alerts_module.handle_check_alerts({})
+
+    assert len(response) >= 1
+    assert not response[0].text.startswith("Error:")
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "rate_limited"
+    assert "HTTP 429" in payload["message"] or "rate limiting" in payload["message"]
+    assert payload["http_status"] == 429
+    assert payload["retry_after_seconds"] == 30.0
