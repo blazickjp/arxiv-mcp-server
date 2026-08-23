@@ -495,3 +495,130 @@ async def test_bare_title_read_section_and_search_clean(patch_storage):
     excerpt = search["passages"][0]["excerpt"]
     assert "UNTRUSTED EXTERNAL CONTENT" not in excerpt
     assert "transduction" in excerpt.casefold()
+
+
+EXPERTFLOW_LIKE = """Abstract.
+
+Sparse MoE models face deployment challenges.
+
+1.
+Introduction
+
+Intro body.
+
+2.
+Background and Motivation
+
+Background body.
+
+2.1.
+A Primer on MoE
+
+Primer body.
+
+3.
+ExpertFlow
+
+System overview.
+
+3.1.
+MoE Routing Path Predictor
+
+Predictor body.
+
+3.2.
+Expert Cache Engine (ECE)
+
+Cache body.
+
+6.
+Discussion
+
+Discussion body.
+
+8.
+Conclusion
+
+Conclusion body.
+
+Acknowledgements.
+
+Thanks.
+
+References
+
+Aminabadi et al. 2022.
+2023 USENIX Annual Technical Conference (USENIX ATC 23)
+. 965–981.
+Ren et al. 2021.
+2021 USENIX Annual Technical Conference (USENIX ATC 21)
+. 551–564.
+"""
+
+
+TABLE_METHOD_POLLUTION = """1.
+Introduction
+
+Intro text continues without blank lines.
+Table 3
+.
+Impact of the
+Token Scheduler (TS)
+on system inference speed.
+Method
+Switch-32
+Switch-64
+ExpertFlow
+w/o
+TS
+6.
+Discussion
+
+Real discussion.
+References
+
+[1] Someone.
+"""
+
+
+def test_outline_stops_at_references_no_venue_pollution():
+    sections = parse_markdown_sections(EXPERTFLOW_LIKE)
+    titles = [s.title for s in sections]
+    assert "References" in titles
+    assert titles[-1] == "References"
+    assert not any("USENIX" in t for t in titles)
+    assert "Introduction" in titles
+    assert "MoE Routing Path Predictor" in titles
+    assert "Expert Cache Engine (ECE)" in titles
+    by_title = {s.title: s for s in sections}
+    assert by_title["MoE Routing Path Predictor"].level == 2
+    assert by_title["Expert Cache Engine (ECE)"].level == 2
+    # Subsections nest under ExpertFlow
+    parent = by_title["ExpertFlow"]
+    assert by_title["MoE Routing Path Predictor"].section_id.startswith(
+        parent.section_id + "."
+    )
+
+
+def test_bare_method_table_header_not_section():
+    sections = parse_markdown_sections(TABLE_METHOD_POLLUTION)
+    titles = [s.title for s in sections]
+    assert "Method" not in titles
+    assert "Introduction" in titles
+    assert "Discussion" in titles
+    assert titles[-1] == "References"
+
+
+def test_year_prefixed_venue_not_numbered_heading():
+    md = """1 Introduction
+
+Body.
+
+References
+
+2023 USENIX Annual Technical Conference (USENIX ATC 23)
+2021 USENIX Annual Technical Conference (USENIX ATC 21)
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    assert titles == ["Introduction", "References"]
