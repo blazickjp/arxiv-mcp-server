@@ -8,6 +8,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from .arxiv_ids import parse_arxiv_id
+from .content import CONTENT_WARNING
 from .search import _rate_limited_get, ARXIV_API_URL
 import httpx
 import xml.etree.ElementTree as ET
@@ -127,7 +128,8 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
                         "paper_id": paper_id,
                         "title": text("atom:title"),
                         "authors": authors,
-                        "abstract": "[EXTERNAL CONTENT] " + text("atom:summary"),
+                        "content_warning": CONTENT_WARNING,
+                        "abstract": text("atom:summary"),
                         "categories": categories,
                         "published": text("atom:published"),
                         "pdf_url": pdf_url,

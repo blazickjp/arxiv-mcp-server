@@ -205,6 +205,21 @@ async def test_successful_fetch_abstract_newlines_replaced(mocker):
 
 
 @pytest.mark.asyncio
+async def test_successful_fetch_emits_short_content_warning_once(mocker):
+    """Warning is a separate field; abstract body has no EXTERNAL CONTENT prefix (#230)."""
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        _mock_rate_limited_get(FULL_ATOM_XML),
+    )
+    result = await handle_get_abstract({"paper_id": "2401.12345"})
+    data = json.loads(result[0].text)
+    assert "UNTRUSTED EXTERNAL CONTENT" in data["content_warning"]
+    assert len(data["content_warning"]) < 80
+    assert not data["abstract"].startswith("[")
+    assert "EXTERNAL CONTENT" not in data["abstract"]
+
+
+@pytest.mark.asyncio
 async def test_successful_fetch_authors_list(mocker):
     mocker.patch(
         "arxiv_mcp_server.tools.get_abstract._rate_limited_get",

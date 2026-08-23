@@ -210,7 +210,7 @@ def test_parse_arxiv_atom_response():
     paper = results[0]
     assert paper["id"] == "2301.00001"
     assert paper["title"] == "Test Paper Title"
-    assert paper["abstract"] == "[EXTERNAL CONTENT] This is a test abstract."
+    assert paper["abstract"] == "This is a test abstract."
     assert paper["authors"] == ["John Doe", "Jane Smith"]
     assert "cs.AI" in paper["categories"]
     assert paper["resource_uri"] == "arxiv://2301.00001"
@@ -744,18 +744,15 @@ def test_normalize_abstract_mode_defaults_and_rejects_invalid():
 def test_snippet_abstract_is_deterministic_bounded_and_marked():
     """Snippets are fixed-length, stable, and marked when truncated."""
     body = "A" * (ABSTRACT_SNIPPET_CHARS + 50)
-    full = "[EXTERNAL CONTENT] " + body
-    snip_a = _snippet_abstract(full)
-    snip_b = _snippet_abstract(full)
+    snip_a = _snippet_abstract(body)
+    snip_b = _snippet_abstract(body)
     assert snip_a == snip_b
-    assert snip_a.startswith("[EXTERNAL CONTENT] ")
     assert snip_a.endswith("… [truncated]")
     # Body contribution before marker is exactly ABSTRACT_SNIPPET_CHARS (rstrip no-op on A's).
-    without_prefix = snip_a[len("[EXTERNAL CONTENT] ") :]
-    assert without_prefix[:ABSTRACT_SNIPPET_CHARS] == "A" * ABSTRACT_SNIPPET_CHARS
-    assert len(without_prefix) == ABSTRACT_SNIPPET_CHARS + len("… [truncated]")
+    assert snip_a[:ABSTRACT_SNIPPET_CHARS] == "A" * ABSTRACT_SNIPPET_CHARS
+    assert len(snip_a) == ABSTRACT_SNIPPET_CHARS + len("… [truncated]")
 
-    short = "[EXTERNAL CONTENT] Short abstract."
+    short = "Short abstract."
     assert _snippet_abstract(short) == short
     assert "truncated" not in _snippet_abstract(short)
 
@@ -767,7 +764,7 @@ def test_apply_abstract_mode_none_snippet_full():
             "id": "2301.00001",
             "title": "T",
             "authors": ["A"],
-            "abstract": "[EXTERNAL CONTENT] " + long_body,
+            "abstract": long_body,
             "categories": ["cs.AI"],
         }
     ]
@@ -880,7 +877,8 @@ async def test_search_abstract_mode_full_keeps_complete_abstract():
     content = json.loads(result[0].text)
     assert content["abstract_mode"] == "full"
     abstract = content["papers"][0]["abstract"]
-    assert abstract.startswith("[EXTERNAL CONTENT] ")
+    assert "EXTERNAL CONTENT" not in abstract
+    assert "UNTRUSTED EXTERNAL CONTENT" in content["content_warning"]
     assert "truncated" not in abstract
     assert long_summary.strip().replace("\n", " ")[:40] in abstract.replace("\n", " ")
 
@@ -909,7 +907,8 @@ async def test_search_legacy_explicit_max_results_and_full_abstract():
     content = json.loads(result[0].text)
     assert content["abstract_mode"] == "full"
     assert content["returned"] == 3
-    assert content["papers"][0]["abstract"].startswith("[EXTERNAL CONTENT] ")
+    assert "EXTERNAL CONTENT" not in content["papers"][0]["abstract"]
+    assert "UNTRUSTED EXTERNAL CONTENT" in content["content_warning"]
 
 
 @pytest.mark.asyncio
@@ -1046,3 +1045,32 @@ def test_build_search_response_echoes_abstract_mode():
     payload = _build_search_response(papers, total_results=1, abstract_mode="full")
     assert payload["abstract_mode"] == "full"
     assert payload["next_start"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_emits_content_warning_once_not_per_abstract():
+    """One content_warning per response; abstracts stay prefix-free (#230)."""
+    xml = _atom_feed_with_totals(entry_count=3, total_results=3)
+    _, mock_client = _mock_httpx_response(xml)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await handle_search(
+            {"query": "test", "max_results": 3, "abstract_mode": "snippet"}
+        )
+
+    content = json.loads(result[0].text)
+    assert "UNTRUSTED EXTERNAL CONTENT" in content["content_warning"]
+    assert len(content["content_warning"]) < 80
+    assert content["returned"] == 3
+    for paper in content["papers"]:
+        assert "EXTERNAL CONTENT" not in paper["abstract"]
+        assert "UNTRUSTED" not in paper["abstract"]
+
+    # abstract_mode=none skips the response-level warning (no abstracts returned).
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        none_result = await handle_search(
+            {"query": "test", "max_results": 3, "abstract_mode": "none"}
+        )
+    none_content = json.loads(none_result[0].text)
+    assert "content_warning" not in none_content
+    assert "abstract" not in none_content["papers"][0]
