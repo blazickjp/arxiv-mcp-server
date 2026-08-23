@@ -620,3 +620,183 @@ def test_bibliography_terminator_alias():
     titles = [s.title for s in sections]
     assert titles[-1] == "Bibliography"
     assert "Some Paper Title Here" not in titles
+
+
+DAOP_IEEE_HTML_STYLE = """DAOP: Data-Aware Offloading title line
+
+Yujie Zhang
+
+Abstract
+
+Mixture-of-Experts (MoE) models face deployment challenges on memory-constrained devices.
+
+Index Terms:
+MoE inference engine
+
+I
+Introduction
+
+Mixture-of-Experts (MoE) architecture addresses computational demands.
+
+As detailed in Table
+I
+, migrating a single expert is slow.
+
+II
+Preliminaries
+II-A
+LLMs with Mixture-of-Experts (MoE)
+
+Decoder-only Architecture body.
+
+II-B
+Related Work
+
+Prior MoE systems body.
+
+III
+Observations & Insights
+
+Table
+II
+illustrates similarity.
+
+IV
+DAOP: MoE Inference Engine
+IV-A
+Memory Initialization
+
+We initially allocate experts.
+
+IV-B
+Sequence-specific Expert Allocation
+
+Algorithm body.
+
+Fig. 6:
+Design Overview of DAOP.
+Data:
+initialized expert cache, model blocks,
+comparison threshold SwapInOut
+Result:
+updated expert cache, firstly generated output token
+inputTokens = Embedding(inputTokens);
+
+IV-C
+Prediction-based Expert Pre-Calculation
+
+Prediction body.
+
+V
+Experimental Evaluation
+V-A
+Experimental Setup
+
+We assess performance on Mixtral.
+
+V-B
+Speedup
+
+Speedup body.
+
+V-C
+Energy Efficiency
+
+Table
+IV
+compares the energy efficiency of DAOP.
+
+V-D
+Accuracy Results
+
+TABLE V:
+Impact of DAOP on model accuracy
+Model
+Method
+HellaS
+Arc-e
+Mixtral 8x7B
+Official
+66.96
+
+TABLE VI:
+Impact across entire inference
+Model
+Method
+ECR
+TriviaQA
+Official
+100.0%
+
+VI
+Discussion
+VI-A
+Platform and Model Applicability
+
+Applicability body.
+
+VI-B
+Limitation & Future Work
+
+Limitation body.
+
+VII
+Conclusion
+
+Our proposed inference engine conclusion body.
+
+Acknowledgment
+
+We thank anonymous reviewers.
+
+References
+
+[1]
+Someone et al.
+"""
+
+
+def test_daop_ieee_roman_html_outline_order_without_dupes():
+    """Regression for #240: DAOP HTML IEEE roman tags, not Result:/table Method.
+
+    latexml HTML emits ``I`` / ``Introduction`` and ``V-A`` / ``Experimental
+    Setup`` on separate lines. Algorithm ``Result:`` and table column
+    ``Method`` must not become outline sections or reorder Method/Result.
+    """
+    sections = parse_markdown_sections(DAOP_IEEE_HTML_STYLE)
+    titles = [s.title for s in sections]
+    assert "Result" not in titles
+    assert "Method" not in titles
+    assert titles.count("Experimental Setup") == 1
+    assert titles.index("DAOP: MoE Inference Engine") < titles.index(
+        "Experimental Evaluation"
+    )
+    assert titles.index("Experimental Evaluation") < titles.index("Discussion")
+    by_title = {s.title: s for s in sections}
+    assert by_title["Introduction"].section_id == "2"
+    assert by_title["Preliminaries"].section_id == "3"
+    assert by_title["Related Work"].section_id == "3.2"
+    assert by_title["DAOP: MoE Inference Engine"].section_id == "5"
+    assert by_title["Memory Initialization"].section_id == "5.1"
+    assert by_title["Experimental Setup"].section_id == "6.1"
+    assert by_title["Accuracy Results"].section_id == "6.4"
+    assert titles[-1] == "References"
+    # Prose ``Table I`` / ``Table II`` must not invent extra sections.
+    assert titles.count("Introduction") == 1
+    assert "illustrates similarity" not in titles
+
+
+def test_roman_inline_and_reject_colon_bare_titles():
+    inline = parse_markdown_sections(
+        "I Introduction\n\nIntro body.\n\nII-A Background Details\n\nMore.\n"
+    )
+    assert [s.title for s in inline[:2]] == ["Introduction", "Background Details"]
+    assert inline[0].section_id == "1"
+    assert inline[1].section_id == "1.1"
+
+    colon = parse_markdown_sections(
+        "Introduction\n\nBody.\n\nResult:\nupdated cache\n\nConclusion\n\nDone.\n"
+    )
+    titles = [s.title for s in colon]
+    assert "Result" not in titles
+    assert "Introduction" in titles and "Conclusion" in titles
