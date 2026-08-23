@@ -494,6 +494,80 @@ async def test_bare_dropped_when_two_versions_also_requested(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_exact_duplicate_bare_ids_one_bibtex(monkeypatch):
+    """Identical bare IDs collapse to one BibTeX entry (#259)."""
+    _stub_metadata(
+        monkeypatch,
+        [
+            _paper(
+                "1706.03762",
+                "Attention Is All You Need",
+                ["Ashish Vaswani"],
+                published="2017-06-12T00:00:00Z",
+            )
+        ],
+    )
+    payload = await _run({"paper_ids": ["1706.03762", "1706.03762"]})
+    assert payload["status"] == "success"
+    assert payload["bibtex"].count("@misc{") == 1
+    assert payload["count"]["succeeded"] == 1
+    assert payload["count"]["failed"] == 0
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["paper_id"] == "1706.03762"
+    assert "eprint = {1706.03762}" in payload["bibtex"]
+
+
+@pytest.mark.asyncio
+async def test_exact_duplicate_versioned_ids_one_bibtex(monkeypatch):
+    """Identical versioned IDs (e.g. v7+v7) collapse to one BibTeX entry (#259)."""
+    paper = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2023-08-02T00:00:00Z",
+        versioned_id="1706.03762v7",
+    )
+    _stub_metadata(monkeypatch, [paper])
+    payload = await _run({"paper_ids": ["1706.03762v7", "1706.03762v7"]})
+    assert payload["status"] == "success"
+    assert payload["bibtex"].count("@misc{") == 1
+    assert payload["count"]["succeeded"] == 1
+    assert payload["count"]["failed"] == 0
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["paper_id"] == "1706.03762v7"
+    assert "eprint = {1706.03762v7}" in payload["bibtex"]
+
+
+@pytest.mark.asyncio
+async def test_exact_duplicates_keep_bare_versioned_prefer_versioned(monkeypatch):
+    """Exact-dup collapse coexists with #241 bare+versioned prefer-versioned."""
+    paper = _paper(
+        "1706.03762",
+        "Attention Is All You Need",
+        ["Ashish Vaswani"],
+        published="2023-08-02T00:00:00Z",
+        versioned_id="1706.03762v7",
+    )
+    _stub_metadata(monkeypatch, [paper])
+    payload = await _run(
+        {
+            "paper_ids": [
+                "1706.03762",
+                "1706.03762",
+                "1706.03762v7",
+                "1706.03762v7",
+            ]
+        }
+    )
+    assert payload["status"] == "success"
+    assert payload["bibtex"].count("@misc{") == 1
+    assert payload["count"]["succeeded"] == 1
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["paper_id"] == "1706.03762v7"
+    assert "eprint = {1706.03762v7}" in payload["bibtex"]
+
+
 def test_bares_with_versioned_sibling_helper():
     assert ec._bares_with_versioned_sibling(["2410.17954", "2410.17954v2"]) == {
         "2410.17954"
