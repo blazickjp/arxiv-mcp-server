@@ -4,6 +4,7 @@ import json
 import logging
 import httpx
 import asyncio
+import random
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from typing import Dict, Any, List, Optional
@@ -33,31 +34,142 @@ ARXIV_HEADERS = {
     )
 }
 
+# Retry/backoff for arXiv 429/503 — parity with citation_graph soft handling (#238).
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF_SECONDS = 2.0
+_MAX_BACKOFF_SECONDS = 60.0
+_DEFAULT_RETRY_AFTER_SECONDS = 60.0
+RATE_LIMIT_MESSAGE = (
+    "arXiv is rate limiting this IP (HTTP 429). " "Please wait before retrying."
+)
+
+
+class ArxivRateLimitError(RuntimeError):
+    """Raised when arXiv keeps returning HTTP 429/503 after retries."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 429,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
+    """Exponential backoff with jitter, honoring numeric Retry-After when present."""
+    delay = min(_INITIAL_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
+    if retry_after:
+        try:
+            delay = min(max(delay, float(retry_after)), _MAX_BACKOFF_SECONDS)
+        except ValueError:
+            pass
+    # Full-ish jitter keeps concurrent clients from retrying in lockstep.
+    jittered = delay * (0.5 + random.random())
+    return min(jittered, _MAX_BACKOFF_SECONDS)
+
+
+def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
+    """Parse a numeric Retry-After header value, if present."""
+    if not retry_after:
+        return None
+    try:
+        return float(retry_after)
+    except ValueError:
+        return None
+
+
+def _status_response(
+    status: str, message: str, **extra: Any
+) -> List[types.TextContent]:
+    """Return a structured {status, message} tool payload."""
+    payload: Dict[str, Any] = {"status": status, "message": message}
+    payload.update(extra)
+    return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
+
+
+def _error_response(message: str) -> List[types.TextContent]:
+    """Structured error payload used by search_papers failure paths."""
+    return _status_response("error", message)
+
+
+def _rate_limited_response(
+    message: str | None = None,
+    *,
+    retry_after_seconds: float | None = None,
+    status_code: int = 429,
+) -> List[types.TextContent]:
+    """Soft rate-limit result so callers can continue without a bare Error: stall."""
+    extra: Dict[str, Any] = {"http_status": status_code}
+    if retry_after_seconds is None:
+        retry_after_seconds = _DEFAULT_RETRY_AFTER_SECONDS
+    extra["retry_after_seconds"] = retry_after_seconds
+    return _status_response(
+        "rate_limited",
+        message or RATE_LIMIT_MESSAGE,
+        **extra,
+    )
+
 
 async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """Make an HTTP request through the process-wide arXiv request gate."""
+    """Make an HTTP request through the process-wide arXiv request gate.
+
+    Retries HTTP 429/503 with exponential backoff + jitter (citation_graph parity).
+    One additional retry on timeout only, independent of the rate-limit budget.
+    """
 
     async def request() -> httpx.Response:
-        for attempt in range(2):  # one retry on timeout only
-            try:
-                response = await client.get(url, headers=ARXIV_HEADERS)
-                if response.status_code in (429, 503):
-                    logger.warning(
-                        "arXiv rate limited (%s); not retrying", response.status_code
-                    )
-                    raise RuntimeError(
-                        f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-                        "Please wait 60 seconds before retrying."
-                    )
-                response.raise_for_status()
-                return response
-            except httpx.TimeoutException:
-                if attempt == 0:
-                    logger.warning("arXiv request timed out, retrying once")
-                    await asyncio.sleep(5.0)
-                else:
-                    raise
-        raise RuntimeError("arXiv request timed out after retry")
+        last_response: httpx.Response | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            response: httpx.Response | None = None
+            for timeout_attempt in range(2):
+                try:
+                    response = await client.get(url, headers=ARXIV_HEADERS)
+                    break
+                except httpx.TimeoutException:
+                    if timeout_attempt == 0:
+                        logger.warning("arXiv request timed out, retrying once")
+                        await asyncio.sleep(5.0)
+                    else:
+                        raise RuntimeError("arXiv request timed out after retry")
+            assert response is not None
+            if response.status_code in (429, 503):
+                last_response = response
+                if attempt == _MAX_RETRIES:
+                    break
+                wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
+                logger.warning(
+                    "arXiv %s; retrying in %.1fs (attempt %s/%s)",
+                    response.status_code,
+                    wait,
+                    attempt + 1,
+                    _MAX_RETRIES + 1,
+                )
+                await asyncio.sleep(wait)
+                continue
+            response.raise_for_status()
+            return response
+
+        status_code = last_response.status_code if last_response is not None else 429
+        retry_after = None
+        if last_response is not None:
+            retry_after = _parse_retry_after_seconds(
+                last_response.headers.get("Retry-After")
+            )
+        message = (
+            f"arXiv is rate limiting this IP (HTTP {status_code}). "
+            "Please wait 60 seconds before retrying."
+        )
+        raise ArxivRateLimitError(
+            message,
+            status_code=status_code,
+            retry_after_seconds=(
+                retry_after if retry_after is not None else _DEFAULT_RETRY_AFTER_SECONDS
+            ),
+        )
 
     return await ARXIV_RATE_LIMITER.run_async(request)
 
@@ -488,7 +600,8 @@ search_tool = types.Tool(
         "start default 0; response: total_results, returned, has_more, next_start, "
         "abstract_mode. Pass next_start with same abstract_mode. "
         "Use get_abstract after compact search — not after abstract_mode=full.\n\n"
-        "arXiv ~3s between requests (server-side). On rate-limit wait ~60s."
+        "arXiv ~3s between requests (server-side). Transient 429/503 are retried "
+        "with backoff; persistent rate limits return status=rate_limited."
     ),
     inputSchema={
         "type": "object",
@@ -613,7 +726,7 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 arguments.get("abstract_mode", DEFAULT_ABSTRACT_MODE)
             )
         except ValueError as e:
-            return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+            return _error_response(str(e))
         base_query = arguments["query"]
         date_from_arg = arguments.get("date_from")
         date_to_arg = arguments.get("date_to")
@@ -639,12 +752,9 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
 
         # Validate categories if provided
         if categories and not _validate_categories(categories):
-            return [
-                types.TextContent(
-                    type="text",
-                    text="Error: Invalid category provided. Please check arXiv category names.",
-                )
-            ]
+            return _error_response(
+                "Invalid category provided. Please check arXiv category names."
+            )
 
         try:
             optimized_query = _optimize_query(base_query) if base_query.strip() else ""
@@ -671,16 +781,28 @@ async def handle_search(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 types.TextContent(type="text", text=json.dumps(response_data, indent=2))
             ]
 
+        except ArxivRateLimitError as e:
+            logger.warning("arXiv search rate limited after retries: %s", e)
+            return _rate_limited_response(
+                str(e),
+                retry_after_seconds=e.retry_after_seconds,
+                status_code=e.status_code,
+            )
         except httpx.HTTPStatusError as e:
             logger.error(f"arXiv API HTTP error: {e}")
-            return [
-                types.TextContent(
-                    type="text", text=f"Error: arXiv API HTTP error - {str(e)}"
-                )
-            ]
+            # Never leak upstream URLs (parity with get_abstract / #166).
+            status = e.response.status_code if e.response is not None else "unknown"
+            return _error_response(f"arXiv API HTTP error (HTTP {status})")
         except ValueError as e:
-            return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+            return _error_response(str(e))
 
+    except ArxivRateLimitError as e:
+        logger.warning("arXiv search rate limited after retries: %s", e)
+        return _rate_limited_response(
+            str(e),
+            retry_after_seconds=e.retry_after_seconds,
+            status_code=e.status_code,
+        )
     except Exception as e:
         logger.error(f"Unexpected search error: {e}")
-        return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+        return _error_response(str(e))
