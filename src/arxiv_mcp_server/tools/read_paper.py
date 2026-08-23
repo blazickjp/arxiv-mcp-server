@@ -9,6 +9,7 @@ from ..config import Settings
 from .arxiv_ids import (
     arxiv_version_suffix,
     bare_arxiv_id,
+    filesystem_arxiv_stem,
     normalize_arxiv_id,
     parse_arxiv_id,
 )
@@ -124,7 +125,9 @@ async def handle_read_paper(arguments: Dict[str, Any]) -> List[types.TextContent
             ]
 
         # Get paper content
-        content = (storage / f"{resolved}.md").read_text(encoding="utf-8")
+        content = (storage / f"{filesystem_arxiv_stem(resolved)}.md").read_text(
+            encoding="utf-8"
+        )
 
         bare = bare_arxiv_id(resolved)
         version = _sidecar_arxiv_version(resolved, storage) or arxiv_version_suffix(

@@ -6,7 +6,9 @@ from arxiv_mcp_server.tools.arxiv_ids import (
     arxiv_version_number,
     arxiv_version_suffix,
     bare_arxiv_id,
+    filesystem_arxiv_stem,
     is_valid_arxiv_id,
+    logical_arxiv_id_from_stem,
     normalize_arxiv_id,
     parse_arxiv_id,
 )
@@ -98,3 +100,16 @@ def test_arxiv_version_suffix(raw, expected):
 def test_arxiv_version_number_orders_versions():
     assert arxiv_version_number("1706.03762") == -1
     assert arxiv_version_number("1706.03762v3") < arxiv_version_number("1706.03762v7")
+
+
+@pytest.mark.parametrize(
+    "logical, stem",
+    [
+        ("hep-th/9901001", "hep-th__9901001"),
+        ("quant-ph/0101001v2", "quant-ph__0101001v2"),
+        ("1706.03762v7", "1706.03762v7"),
+    ],
+)
+def test_filesystem_stem_roundtrip(logical, stem):
+    assert filesystem_arxiv_stem(logical) == stem
+    assert logical_arxiv_id_from_stem(stem) == logical
