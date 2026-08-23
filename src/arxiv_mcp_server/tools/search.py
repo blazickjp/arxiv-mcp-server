@@ -13,6 +13,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
 from ..arxiv_api import ARXIV_RATE_LIMITER
+from .content import CONTENT_WARNING
 
 logger = logging.getLogger("arxiv-mcp-server")
 settings = Settings()
@@ -23,7 +24,6 @@ DEFAULT_ABSTRACT_MODE = "snippet"
 ABSTRACT_SNIPPET_CHARS = 280
 ABSTRACT_MODES = ("none", "snippet", "full")
 _ABSTRACT_TRUNCATION_MARK = "… [truncated]"
-_EXTERNAL_CONTENT_PREFIX = "[EXTERNAL CONTENT] "
 
 ARXIV_HEADERS = {
     "User-Agent": (
@@ -299,18 +299,11 @@ def _normalize_abstract_mode(value: Any) -> str:
 
 def _snippet_abstract(abstract: str, max_chars: int = ABSTRACT_SNIPPET_CHARS) -> str:
     """Return a deterministic bounded abstract snippet, marked when truncated."""
-    if abstract.startswith(_EXTERNAL_CONTENT_PREFIX):
-        prefix = _EXTERNAL_CONTENT_PREFIX
-        body = abstract[len(_EXTERNAL_CONTENT_PREFIX) :]
-    else:
-        prefix = ""
-        body = abstract
-
-    if len(body) <= max_chars:
+    if len(abstract) <= max_chars:
         return abstract
 
     # Fixed-length slice (no word-boundary heuristics) for stable output.
-    return prefix + body[:max_chars].rstrip() + _ABSTRACT_TRUNCATION_MARK
+    return abstract[:max_chars].rstrip() + _ABSTRACT_TRUNCATION_MARK
 
 
 def _apply_abstract_mode(
@@ -356,6 +349,9 @@ def _build_search_response(
         "abstract_mode": mode,
         "papers": papers,
     }
+    # Once per response (#230): avoid repeating EXTERNAL CONTENT on every abstract.
+    if mode != "none":
+        response["content_warning"] = CONTENT_WARNING
     if total_results is not None:
         response["total_results"] = total_results
         if has_more is None:
@@ -404,7 +400,7 @@ def _parse_arxiv_atom_response(xml_text: str) -> List[Dict[str, Any]]:
 
             # Abstract/Summary
             summary_elem = entry.find("atom:summary", ARXIV_NS)
-            abstract = _EXTERNAL_CONTENT_PREFIX + (
+            abstract = (
                 summary_elem.text.strip().replace("\n", " ")
                 if summary_elem is not None and summary_elem.text
                 else ""
