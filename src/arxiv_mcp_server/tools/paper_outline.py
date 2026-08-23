@@ -3,8 +3,8 @@
 Section IDs use hierarchical counters (``1``, ``1.1``, ``1.1.1``), matching the
 LaTeX outline tools. Missing heading levels insert ``0`` placeholders (e.g. an
 ``h3`` after an ``h1`` becomes ``1.0.1``). Duplicate titles remain distinct via
-those counters. Papers with no recognized headings (ATX, numbered, or common
-bare arXiv section titles) expose a synthetic section ``1``.
+those counters. Papers with no recognized headings (ATX, arabic/IEEE-roman numbered, or
+common bare arXiv section titles) expose a synthetic section ``1``.
 """
 
 from __future__ import annotations
@@ -46,6 +46,13 @@ _ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
 _NUMBERED_HEADING_RE = re.compile(r"^(\d+(?:\.\d+){0,5})[ \t]+(.+?)[ \t]*$")
 # HTML→text often emits the section number alone ("3." / "3.1.") then the title.
 _NUMBER_ONLY_RE = re.compile(r"^(\d+(?:\.\d+){0,5})\.[ \t]*$")
+# IEEE/latexml HTML often splits roman section tags onto their own line:
+# ``I`` / ``Introduction``, ``II-A`` / ``Related Work``. Longer numerals first.
+_ROMAN_NUMERAL = (
+    r"(?:XX|XIX|XVIII|XVII|XVI|XV|XIV|XIII|XII|XI|X|" r"IX|VIII|VII|VI|V|IV|III|II|I)"
+)
+_ROMAN_MARKER_RE = re.compile(rf"^({_ROMAN_NUMERAL}(?:-[A-Z])*)$")
+_ROMAN_INLINE_RE = re.compile(rf"^({_ROMAN_NUMERAL}(?:-[A-Z])*)[ \t]+(.+?)$")
 _FENCE_RE = re.compile(r"^```")
 _MAX_BARE_TITLE_CHARS = 80
 # Stop collecting headings once References/Bibliography is seen (ref-line pollution).
@@ -179,31 +186,49 @@ def _is_outline_terminator(title: str) -> bool:
     return _normalize_heading_title(title).casefold() in _OUTLINE_TERMINATORS
 
 
+def _title_looks_like_heading(title: str, *, line_len: int) -> bool:
+    """Shared capitalization / length / venue guards for numbered headings."""
+    title = title.strip()
+    if not title or line_len > _MAX_BARE_TITLE_CHARS:
+        return False
+    # Section titles are capitalized; reject mid-sentence prose joins.
+    if not re.match(r"[A-Z]", title):
+        return False
+    # Citation venues often look like "USENIX ATC 23" after a year number.
+    if re.search(r"\b(?:19|20)\d{2}\b", title):
+        return False
+    return True
+
+
 def _numbered_heading(
     numbering: str, title: str, *, line_len: int
 ) -> tuple[int, str] | None:
     """Return (level, title) for a plausible numbered heading, else None."""
-    title = title.strip()
-    if not title or line_len > _MAX_BARE_TITLE_CHARS:
+    if not _title_looks_like_heading(title, line_len=line_len):
         return None
     if not _is_plausible_section_number(numbering):
         return None
-    # Section titles are capitalized; reject mid-sentence prose joins.
-    if not re.match(r"[A-Z]", title):
-        return None
-    # Citation venues often look like "USENIX ATC 23" after a year number.
-    if re.search(r"\b(?:19|20)\d{2}\b", title):
-        return None
     level = min(6, numbering.count(".") + 1)
-    return level, _normalize_heading_title(title)
+    return level, _normalize_heading_title(title.strip())
+
+
+def _roman_heading(marker: str, title: str, *, line_len: int) -> tuple[int, str] | None:
+    """Return (level, title) for an IEEE roman section marker, else None."""
+    if _ROMAN_MARKER_RE.match(marker.strip()) is None:
+        return None
+    if not _title_looks_like_heading(title, line_len=line_len):
+        return None
+    level = min(6, 1 + marker.strip().count("-"))
+    return level, _normalize_heading_title(title.strip())
 
 
 def _match_heading_line(line: str) -> tuple[int, str] | None:
     """Return (level, title) for a heading line, or None if not a heading.
 
-    Preference: ATX > numbered > bare known section titles. Bare titles must be
-    short standalone lines that exactly match a known section name (optional
-    trailing colon/period only).
+    Preference: ATX > arabic-numbered > IEEE roman > bare known section titles.
+    Bare titles must be short standalone lines that exactly match a known
+    section name (optional trailing period only — trailing colon is rejected
+    so algorithm ``Result:`` / ``Data:`` lines are not outlines).
     """
     stripped = line.strip()
     if not stripped:
@@ -224,12 +249,25 @@ def _match_heading_line(line: str) -> tuple[int, str] | None:
         if matched is not None:
             return matched
 
+    roman_inline = _ROMAN_INLINE_RE.match(stripped)
+    if roman_inline:
+        matched = _roman_heading(
+            roman_inline.group(1),
+            roman_inline.group(2),
+            line_len=len(stripped),
+        )
+        if matched is not None:
+            return matched
+
     if len(stripped) <= _MAX_BARE_TITLE_CHARS:
+        # Algorithm listings use ``Result:`` / ``Data:``; do not treat as sections.
+        if stripped.endswith(":"):
+            return None
         candidate = _normalize_heading_title(stripped)
         # Exact known title only — no extra tokens (tightens bare heuristics).
         if candidate.casefold() in _BARE_SECTION_TITLES:
             remainder = stripped
-            if remainder.endswith((":", ".")):
+            if remainder.endswith("."):
                 remainder = remainder[:-1]
             if remainder.strip().casefold() == candidate.casefold():
                 return 1, candidate
@@ -247,11 +285,8 @@ def _logical_line(line: str) -> str:
 def _match_split_numbered_heading(
     number_line: str, title_line: str
 ) -> tuple[int, str] | None:
-    """Join HTML→text ``3.`` / ``Title`` pairs into a numbered heading."""
+    """Join HTML→text ``3.`` / ``Title`` or ``II-A`` / ``Title`` pairs."""
     stripped = number_line.strip()
-    num_only = _NUMBER_ONLY_RE.match(stripped)
-    if num_only is None:
-        return None
     title_stripped = title_line.strip()
     if not title_stripped:
         return None
@@ -263,11 +298,67 @@ def _match_split_numbered_heading(
         return None
     if _NUMBER_ONLY_RE.match(title_stripped):
         return None
-    return _numbered_heading(
-        num_only.group(1),
-        title_stripped,
-        line_len=len(stripped) + 1 + len(title_stripped),
-    )
+    if _ROMAN_MARKER_RE.match(title_stripped):
+        return None
+    if _ROMAN_INLINE_RE.match(title_stripped):
+        return None
+
+    line_len = len(stripped) + 1 + len(title_stripped)
+    num_only = _NUMBER_ONLY_RE.match(stripped)
+    if num_only is not None:
+        return _numbered_heading(num_only.group(1), title_stripped, line_len=line_len)
+    if _ROMAN_MARKER_RE.match(stripped):
+        return _roman_heading(stripped, title_stripped, line_len=line_len)
+    return None
+
+
+def _is_bare_section_title_line(line: str) -> bool:
+    """True when the line is only a known bare section title (not numbered)."""
+    stripped = line.strip()
+    if not stripped or stripped.endswith(":"):
+        return False
+    if _ATX_HEADING_RE.match(stripped):
+        return False
+    if _NUMBERED_HEADING_RE.match(stripped):
+        return False
+    if _ROMAN_INLINE_RE.match(stripped):
+        return False
+    candidate = _normalize_heading_title(stripped)
+    if candidate.casefold() not in _BARE_SECTION_TITLES:
+        return False
+    remainder = stripped[:-1] if stripped.endswith(".") else stripped
+    return remainder.strip().casefold() == candidate.casefold()
+
+
+def _bare_title_has_section_body(
+    lines_meta: list[tuple[int, str]], after_index: int
+) -> bool:
+    """Reject bare titles whose next line looks like a table cell, not a body.
+
+    Real HTML→text sections are followed by prose, another heading, or a
+    split number marker. Table column headers are followed by another short
+    single-token cell (e.g. ``Method`` then ``HellaS``).
+    """
+    peek = after_index
+    while peek < len(lines_meta):
+        _, peek_line = lines_meta[peek]
+        peek_logical = _logical_line(peek_line)
+        if not peek_logical.strip():
+            peek += 1
+            continue
+        if peek_logical.lstrip(" \t").startswith("```"):
+            return True
+        if _match_heading_line(peek_logical) is not None:
+            return True
+        stripped = peek_logical.strip()
+        if _NUMBER_ONLY_RE.match(stripped) or _ROMAN_MARKER_RE.match(stripped):
+            return True
+        # Identifier-like neighbor (Model / Method / HellaS) ⇒ table chrome.
+        # Sentence fragments like ``Body.`` keep the bare title.
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", stripped):
+            return False
+        return True
+    return True
 
 
 def parse_markdown_sections(content: str) -> list[MdSection]:
@@ -328,6 +419,16 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
         if matched is not None:
             level, title = matched
+            # Drop table-header false positives: bare ``Method`` between short
+            # single-token cells (Model / Method / HellaS) is not a section.
+            # Keep References/Bibliography even when the next line is ``[1]``.
+            if (
+                _is_bare_section_title_line(logical)
+                and not _is_outline_terminator(title)
+                and not _bare_title_has_section_body(lines_meta, index + consumed)
+            ):
+                index += 1
+                continue
             counters[level - 1] += 1
             for counter_index in range(level, 6):
                 counters[counter_index] = 0
