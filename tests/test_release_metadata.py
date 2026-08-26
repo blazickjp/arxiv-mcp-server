@@ -133,7 +133,7 @@ def test_readme_exposes_supported_install_paths():
     assert "Get-Command uvx" in readme
     assert "uv tool update-shell" in readme
     assert (
-        "registry.modelcontextprotocol.io/?search=io.github.blazickjp%2Farxiv-mcp-server"
+        "registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest"
         in readme
     )
     assert "claude plugin install arxiv-mcp-server@arxiv-mcp" in readme

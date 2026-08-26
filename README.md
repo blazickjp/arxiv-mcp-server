@@ -4,27 +4,47 @@
 
 [![PyPI](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![Downloads](https://static.pepy.tech/badge/arxiv-mcp-server)](https://pypi.org/project/arxiv-mcp-server/)
-[![GitHub Stars](https://img.shields.io/github/stars/blazickjp/arxiv-mcp-server?style=flat)](https://github.com/blazickjp/arxiv-mcp-server/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/blazickjp/arxiv-mcp-server?style=flat)](https://github.com/blazickjp/arxiv-mcp-server/forks)
-[![Tests](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml/badge.svg)](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml)
-[![Python](https://img.shields.io/pypi/pyversions/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed,_latest_0.7.2-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest)
 
-[![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
-[![Install in VS Code Insiders](https://img.shields.io/badge/Install_in-VS_Code_Insiders-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D&quality=insiders)
-[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%2C%22disabled%22%3Afalse%2C%22autoApprove%22%3A%5B%5D%7D)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-Install-D97757?style=flat-square&logo=anthropic&logoColor=white)](#claude-code)
-[![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex-Install-000000?style=flat-square&logo=openai&logoColor=white)](#openai-codex)
-[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Install-6C5CE7?style=flat-square)](#hermes-agent)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-Listed-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/?search=io.github.blazickjp%2Farxiv-mcp-server)
-
-An MCP server for searching arXiv, downloading papers, reading bounded full text, retrieving original LaTeX by section, following citation graphs, and maintaining research alerts.
-
-It runs locally over stdio by default. Papers and indexes stay on your machine; search, source retrieval, citation graphs, and downloads call their respective external services.
+A local MCP server for agent literature work. The differentiator is original-LaTeX section reads, BibTeX from arXiv metadata, and topic watches. Papers stay on disk. The working loop is paper ID → outline → one section → citations. Search is optional.
 
 ## Install
 
-The command-based integrations require [uv](https://docs.astral.sh/uv/getting-started/installation/), which provides `uvx`. Choose your client below; no repository clone or Python environment setup is required.
+The default install is `uvx arxiv-mcp-server`. Command-based integrations need [uv](https://docs.astral.sh/uv/getting-started/installation/), which provides `uvx`. No repository clone or Python environment setup is required.
+
+```bash
+uvx arxiv-mcp-server
+```
+
+Add this stdio configuration to clients that accept the `mcpServers` JSON shape, such as Claude Desktop and Kiro. Other clients may use a top-level `servers` object, TOML, or their own settings UI; consult the client's MCP documentation.
+
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"]
+    }
+  }
+}
+```
+
+The default paper directory is `~/.arxiv-mcp-server/papers`. To choose another directory, append `"--storage-path", "/absolute/path/to/papers"` to `args`.
+
+The supported package is published on PyPI as `arxiv-mcp-server==0.7.2`. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
+
+Listed on the [official MCP registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest), latest 0.7.2.
+
+## Why this is not a search wrapper
+
+Search, source retrieval, citation graphs, and downloads call their respective external services. What stays local is the literature loop: read author-submitted LaTeX one section at a time, export BibTeX from authoritative arXiv metadata, and keep topic watches on disk. The server runs locally over stdio by default.
+
+<details>
+<summary>Per-client recipes (Claude Code, Codex, Hermes, VS Code / Kiro, Claude Desktop, plugins)</summary>
+
+Use the default JSON above unless your client has a one-line helper.
 
 ### Claude Code
 
@@ -62,6 +82,8 @@ Verify the direct MCP installation with `codex mcp get arxiv`. Codex CLI, the Co
 
 ### Hermes Agent
 
+[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Install-6C5CE7?style=flat-square)](#hermes-agent)
+
 Add the server, approve the discovered tools, and test the saved connection:
 
 ```bash
@@ -69,9 +91,11 @@ hermes mcp add arxiv --command uvx --args arxiv-mcp-server
 hermes mcp test arxiv
 ```
 
-### Kiro and VS Code
+### VS Code and Kiro
 
-Use the **Add to Kiro**, **Install in VS Code**, or **Install in VS Code Insiders** button above.
+[![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
+[![Install in VS Code Insiders](https://img.shields.io/badge/Install_in-VS_Code_Insiders-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D&quality=insiders)
+[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%2C%22disabled%22%3Afalse%2C%22autoApprove%22%3A%5B%5D%7D)
 
 For the richer Kiro Power integration, open the **Powers** panel, choose **Add Custom Power → Import power from GitHub**, and enter:
 
@@ -79,66 +103,36 @@ For the richer Kiro Power integration, open the **Powers** panel, choose **Add C
 https://github.com/blazickjp/arxiv-mcp-server
 ```
 
-The Power installs the MCP connection from `mcp.json` and adds focused arXiv research guidance. Kiro users who prefer manual configuration can place the generic configuration below in `.kiro/settings/mcp.json` for one workspace or `~/.kiro/settings/mcp.json` for all workspaces.
+The Power installs the MCP connection from `mcp.json` and adds focused arXiv research guidance. Kiro users who prefer manual configuration can place the generic configuration above in `.kiro/settings/mcp.json` for one workspace or `~/.kiro/settings/mcp.json` for all workspaces.
 
 ### Claude Desktop bundle
 
-macOS users can install a bundled `.mcpb` extension from the [latest GitHub release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
+macOS users can install a bundled `.mcpb` extension from the [v0.7.2 release](https://github.com/blazickjp/arxiv-mcp-server/releases/tag/v0.7.2) or the [latest GitHub release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
 
-- Apple Silicon: `arxiv-mcp-server-darwin-arm64-<version>.mcpb`
-- Intel: `arxiv-mcp-server-darwin-x86_64-<version>.mcpb`
+- Apple Silicon: [`arxiv-mcp-server-darwin-arm64-0.7.2.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.7.2/arxiv-mcp-server-darwin-arm64-0.7.2.mcpb)
+- Intel: [`arxiv-mcp-server-darwin-x86_64-0.7.2.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.7.2/arxiv-mcp-server-darwin-x86_64-0.7.2.mcpb)
 
 Double-click the bundle, drag it into Claude Desktop, or open **Settings → Extensions → Advanced settings → Install Extension…**. The bundle includes the server dependencies and requires CPython 3.11.x.
 
 ### Other MCP clients
 
-Add this stdio configuration to clients that accept the `mcpServers` JSON shape, such as Claude Desktop and Kiro. Other clients may use a top-level `servers` object, TOML, or their own settings UI; consult the client's MCP documentation.
+Other clients may use a top-level `servers` object, TOML, or their own settings UI; consult the client MCP documentation. Direct MCP installation is the shortest path. Install a plugin when you also want the research workflow that steers the client toward focused searches, bounded reads, citation traversal, and section-level LaTeX retrieval.
 
-```json
-{
-  "mcpServers": {
-    "arxiv": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["arxiv-mcp-server"]
-    }
-  }
-}
-```
+### Plugin manifests
 
-The default paper directory is `~/.arxiv-mcp-server/papers`. To choose another directory, append `"--storage-path", "/absolute/path/to/papers"` to `args`.
+The same MCP server and research skill are packaged for both major plugin systems:
 
-For older papers that require PDF conversion, run the package with its PDF extra:
+| Integration | Manifest | Marketplace |
+|---|---|---|
+| Claude Code | `.claude-plugin/plugin.json` | `.claude-plugin/marketplace.json` |
+| OpenAI Codex / ChatGPT Work | `.codex-plugin/plugin.json` | `.agents/plugins/marketplace.json` |
+| Kiro Power | `POWER.md` | `mcp.json` |
+| Shared MCP launch | `.mcp.json` for Claude and repository-local clients; `.codex-mcp.json` for Codex plugins | `uvx arxiv-mcp-server` |
+| Shared research workflow | `skills/arxiv-mcp-server/SKILL.md` | Installed with either plugin |
 
-```json
-{
-  "mcpServers": {
-    "arxiv": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": [
-        "--from",
-        "arxiv-mcp-server[pdf]",
-        "arxiv-mcp-server"
-      ]
-    }
-  }
-}
-```
+</details>
 
-The supported package is published on PyPI. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
-
-### If an existing installation is missing newer tools
-
-`uvx` reuses cached tool environments. Force it to resolve the current PyPI release with a supported interpreter, then restart your MCP client:
-
-```bash
-uvx --python 3.11 --refresh-package arxiv-mcp-server arxiv-mcp-server
-```
-
-If your client still launches an older environment, add `"--python", "3.11"` before `"arxiv-mcp-server"` in its `args` array.
-
-### If a desktop client cannot find `uvx`
+## If a desktop client cannot find `uvx`
 
 Desktop applications do not always inherit the same `PATH` as your terminal. If `uvx arxiv-mcp-server` works in a terminal but the client reports that the server failed to connect, find the executable's absolute path:
 
@@ -154,7 +148,17 @@ command -v uvx
 
 Replace `"command": "uvx"` with the returned absolute path, then restart the client. Keep the `args` value unchanged.
 
-### Persistent command install
+## If an existing installation is missing newer tools
+
+`uvx` reuses cached tool environments. Force it to resolve the current PyPI release with a supported interpreter, then restart your MCP client:
+
+```bash
+uvx --python 3.11 --refresh-package arxiv-mcp-server arxiv-mcp-server
+```
+
+If your client still launches an older environment, add `"--python", "3.11"` before `"arxiv-mcp-server"` in its `args` array.
+
+## Persistent command install
 
 To place `arxiv-mcp-server` on your `PATH` instead of launching it through `uvx`:
 
@@ -163,20 +167,6 @@ uv tool install arxiv-mcp-server
 ```
 
 If the command is not immediately available, run `uv tool update-shell` and restart the terminal. Afterward, use `"command": "arxiv-mcp-server"` and omit the package name from `args`.
-
-## Plugin integrations
-
-The repository now packages the same MCP server and research skill for both major plugin systems:
-
-| Integration | Manifest | Marketplace |
-|---|---|---|
-| Claude Code | `.claude-plugin/plugin.json` | `.claude-plugin/marketplace.json` |
-| OpenAI Codex / ChatGPT Work | `.codex-plugin/plugin.json` | `.agents/plugins/marketplace.json` |
-| Kiro Power | `POWER.md` | `mcp.json` |
-| Shared MCP launch | `.mcp.json` for Claude and repository-local clients; `.codex-mcp.json` for Codex plugins | `uvx arxiv-mcp-server` |
-| Shared research workflow | `skills/arxiv-mcp-server/SKILL.md` | Installed with either plugin |
-
-Direct MCP installation is the shortest path. Install the plugin when you also want the research workflow that steers the client toward focused searches, bounded reads, citation traversal, and section-level LaTeX retrieval.
 
 ## Tools
 
@@ -386,6 +376,24 @@ uv tool install --force "arxiv-mcp-server[pdf]"
 
 The `pdf` extra installs `pymupdf4llm` and `pymupdf-layout` for papers without usable arXiv HTML. The `pro` extra adds local embedding dependencies for `semantic_search` and `reindex`; semantic search only operates on papers already downloaded to the configured storage directory.
 
+For older papers that require PDF conversion, run the package with its PDF extra:
+
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "arxiv-mcp-server[pdf]",
+        "arxiv-mcp-server"
+      ]
+    }
+  }
+}
+```
+
 ## Built-in prompts
 
 The server provides seven MCP prompt workflows. Prompt availability depends on the client; the server provides workflow instructions but does not run a separate model.
@@ -495,3 +503,4 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
