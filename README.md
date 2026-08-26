@@ -194,7 +194,7 @@ The server currently exposes 19 tools.
 | `get_paper_latex` | Retrieve bounded author-submitted LaTeX | Remote arXiv source archive |
 | `list_paper_latex_sections` | Return a paginated LaTeX outline | Supports `start` and `max_sections` |
 | `get_paper_latex_section` | Read one bounded LaTeX section | Select by outline ID or exact title |
-| `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API; optional `SEMANTIC_SCHOLAR_API_KEY` |
+| `citation_graph` | Fetch references and citing papers | Remote Semantic Scholar API (1 call per paper, cached on disk); optional free API key improves reliability |
 | `export_citations` | Export BibTeX for one or more arXiv IDs | Authoritative arXiv metadata |
 | `watch_topic` | Save or update an arXiv topic watch | Stored locally; omit `categories` to preserve on update, `categories: []` to clear |
 | `list_watches` | List saved topic watches | Read-only; does not advance last_checked |
@@ -464,7 +464,7 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 | `PORT` | `8000` | HTTP bind port |
 | `ALLOWED_HOSTS` | empty | Additional accepted HTTP Host values |
 | `ALLOWED_ORIGINS` | empty | Additional accepted HTTP Origin values |
-| `SEMANTIC_SCHOLAR_API_KEY` | empty | Optional Semantic Scholar API key for `citation_graph` |
+| `SEMANTIC_SCHOLAR_API_KEY` | empty | Free Semantic Scholar API key for `citation_graph`. Get one at https://www.semanticscholar.org/product/api#api-key to avoid rate limits. Unauthenticated requests work until quota exhausted. |
 
 Environment variable names are case-insensitive through Pydantic settings. `--storage-path` is a command-line option rather than an environment setting.
 

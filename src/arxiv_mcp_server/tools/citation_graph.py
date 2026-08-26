@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import random
+import time
+from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import quote
 
@@ -27,22 +29,32 @@ settings = Settings()
 SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1"
 DEFAULT_MAX_CITATIONS = 50
 MAX_CITATIONS_CAP = 200
-PAPER_FIELDS = "title,year,authors,externalIds,citationCount,referenceCount"
-# Include externalIds so neighbors can expose arxiv_id for download/get_abstract
-# hops. Keep default max_citations=50 and 429 retries to stay under quota.
-NEIGHBOR_FIELDS = "paperId,title,year,authors,externalIds"
+# Request paper metadata plus up to limit citations/references in one call.
+# Subfield syntax (citations.year, references.externalIds) lets neighbors expose
+# arxiv_id for tool hops while keeping responses small.
+PAPER_FIELDS = (
+    "title,year,authors,externalIds,citationCount,referenceCount,citations,references"
+)
+CITATION_SUBFIELDS = "citations.paperId,citations.title,citations.year,citations.authors,citations.externalIds"
+REFERENCE_SUBFIELDS = "references.paperId,references.title,references.year,references.authors,references.externalIds"
 RATE_LIMIT_MESSAGE = (
-    "Semantic Scholar rate-limited this request. "
-    "Set the SEMANTIC_SCHOLAR_API_KEY environment variable for a higher quota, "
-    "or retry later with a smaller max_citations."
+    "⚠️ RATE LIMITED: Semantic Scholar quota exhausted. "
+    "This is NOT an empty graph—the API blocked the request. "
+    "Get a free API key at https://www.semanticscholar.org/product/api#api-key "
+    "and set SEMANTIC_SCHOLAR_API_KEY, or retry later with a smaller max_citations."
 )
 RATE_LIMIT_MESSAGE_WITH_KEY = (
-    "Semantic Scholar rate-limited this request despite SEMANTIC_SCHOLAR_API_KEY. "
+    "⚠️ RATE LIMITED: Semantic Scholar quota exhausted despite SEMANTIC_SCHOLAR_API_KEY. "
+    "This is NOT an empty graph—the API blocked the request. "
     "Wait and retry, or reduce max_citations."
 )
 _MAX_RETRIES = 5
 _INITIAL_BACKOFF_SECONDS = 2.0
 _MAX_BACKOFF_SECONDS = 60.0
+# Cache citation graphs on disk to reduce repeated S2 calls. Rate-limited results
+# expire quickly; successful graphs persist longer.
+CACHE_TTL_SUCCESS_SECONDS = 7 * 24 * 3600  # 7 days
+CACHE_TTL_RATE_LIMITED_SECONDS = 5 * 60  # 5 minutes
 
 citation_graph_tool = types.Tool(
     name="citation_graph",
@@ -50,9 +62,11 @@ citation_graph_tool = types.Tool(
     description=(
         "Return papers citing an arXiv paper and papers that it references "
         "using Semantic Scholar's citation graph. Results are bounded "
-        "(default 50) to stay within the unauthenticated quota. Under load, "
-        "export SEMANTIC_SCHOLAR_API_KEY for a higher limit; without a key, "
-        "persistent rate limits return status=rate_limited instead of failing hard."
+        "(default 50) to stay within the unauthenticated quota. Graphs are "
+        "cached on disk to reduce repeated API calls. Under load, "
+        "a free Semantic Scholar API key (https://www.semanticscholar.org/product/api#api-key) "
+        "makes this reliable; without a key, persistent rate limits return "
+        "status=rate_limited with an unmistakable warning instead of failing hard."
     ),
     inputSchema={
         "type": "object",
@@ -139,7 +153,9 @@ def _rate_limited_payload(
     """Soft rate-limit result so callers can continue without a hard tool error."""
     payload: Dict[str, Any] = {
         "status": "rate_limited",
+        "error": "RATE_LIMITED",
         "message": _rate_limit_message(),
+        "warning": "This is NOT an empty citation graph. The API request was blocked by rate limiting.",
         "citation_count": 0,
         "reference_count": 0,
         "citations": [],
@@ -150,8 +166,130 @@ def _rate_limited_payload(
     if max_citations is not None:
         payload["max_citations"] = max_citations
     if not _has_api_key():
-        payload["hint"] = "export SEMANTIC_SCHOLAR_API_KEY=<your-key>"
+        payload["hint"] = (
+            "Get a free API key at https://www.semanticscholar.org/product/api#api-key and set SEMANTIC_SCHOLAR_API_KEY"
+        )
     return payload
+
+
+def _cache_dir() -> Path:
+    """Return the citation graph cache directory under the configured storage path."""
+    cache_path = settings.STORAGE_PATH / "citation_graphs"
+    cache_path.mkdir(parents=True, exist_ok=True)
+    return cache_path
+
+
+def _cache_key(arxiv_id: str, max_citations: int) -> str:
+    """Build a cache filename for this arXiv ID and max_citations."""
+    # Normalize to bare ID for consistent cache keys
+    bare_id = bare_arxiv_id(arxiv_id)
+    return f"{bare_id}__limit_{max_citations}.json"
+
+
+def _load_cached_graph(arxiv_id: str, max_citations: int) -> Dict[str, Any] | None:
+    """Load a cached citation graph if valid and not expired.
+
+    This function looks for a cache file that matches the arxiv_id and has
+    max_citations >= requested max_citations. If multiple cache files exist,
+    it prefers the one closest to the requested limit.
+    """
+    cache_dir_path = _cache_dir()
+    bare_id = bare_arxiv_id(arxiv_id)
+
+    # Find all cache files for this arxiv_id
+    pattern = f"{bare_id}__limit_*.json"
+    import glob
+
+    cache_files = glob.glob(str(cache_dir_path / pattern))
+
+    if not cache_files:
+        return None
+
+    # Find a suitable cache file (with limit >= requested)
+    best_cache = None
+    best_limit = float("inf")
+
+    for cache_file in cache_files:
+        try:
+            # Extract limit from filename
+            filename = Path(cache_file).stem
+            limit_str = filename.split("__limit_")[1]
+            cached_limit = int(limit_str)
+
+            # Check if this cache can satisfy the request
+            if cached_limit >= max_citations and cached_limit < best_limit:
+                best_cache = cache_file
+                best_limit = cached_limit
+        except (IndexError, ValueError):
+            continue
+
+    if best_cache is None:
+        logger.debug(
+            "No suitable cache found for %s with limit %d", bare_id, max_citations
+        )
+        return None
+
+    try:
+        with open(best_cache, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+
+        cached_at = cached.get("cached_at", 0)
+        status = cached.get("status", "success")
+        now = time.time()
+
+        # Rate-limited results expire quickly; successful graphs persist longer
+        if status == "rate_limited":
+            ttl = CACHE_TTL_RATE_LIMITED_SECONDS
+        else:
+            ttl = CACHE_TTL_SUCCESS_SECONDS
+
+        if now - cached_at > ttl:
+            logger.debug(
+                "Cache expired for %s (age %.1fs)",
+                Path(best_cache).name,
+                now - cached_at,
+            )
+            return None
+
+        logger.info(
+            "Cache hit for %s (age %.1fs)", Path(best_cache).name, now - cached_at
+        )
+
+        # If we cached more than requested, slice the results.
+        # Work on a copy to avoid issues with json.load() returning shared lists.
+        cached_limit = cached.get("max_citations", DEFAULT_MAX_CITATIONS)
+        if cached_limit > max_citations and status == "success":
+            import copy
+
+            result = copy.deepcopy(cached)
+            result["citations"] = result.get("citations", [])[:max_citations]
+            result["references"] = result.get("references", [])[:max_citations]
+            result["citation_count"] = len(result["citations"])
+            result["reference_count"] = len(result["references"])
+            result["max_citations"] = max_citations
+            return result
+
+        return cached
+
+    except Exception as exc:
+        logger.warning("Failed to load cache %s: %s", Path(best_cache).name, exc)
+        return None
+
+
+def _save_cached_graph(
+    arxiv_id: str, max_citations: int, result: Dict[str, Any]
+) -> None:
+    """Save a citation graph result to disk cache."""
+    cache_file = _cache_dir() / _cache_key(arxiv_id, max_citations)
+    try:
+        # Create a copy to avoid mutating the original result
+        cached_result = result.copy()
+        cached_result["cached_at"] = time.time()
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(cached_result, f, indent=2)
+        logger.debug("Cached citation graph to %s", cache_file.name)
+    except Exception as exc:
+        logger.warning("Failed to cache citation graph to %s: %s", cache_file.name, exc)
 
 
 def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
@@ -184,14 +322,28 @@ async def _s2_get(
     raise SemanticScholarRateLimitError(_rate_limit_message())
 
 
-def _neighbor_papers(payload: Dict[str, Any], wrapper_key: str) -> List[Dict[str, Any]]:
-    """Unwrap citation/reference endpoint rows into paper objects."""
-    papers: List[Dict[str, Any]] = []
-    for row in payload.get("data") or []:
-        paper = row.get(wrapper_key) if isinstance(row, dict) else None
-        if isinstance(paper, dict):
-            papers.append(paper)
-    return papers
+def _extract_citations(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract citations list from paper endpoint response."""
+    citations = payload.get("citations", {})
+    if isinstance(citations, dict):
+        # Citations returned as {data: [...]}
+        return citations.get("data", [])
+    elif isinstance(citations, list):
+        # Citations returned as direct list
+        return citations
+    return []
+
+
+def _extract_references(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract references list from paper endpoint response."""
+    references = payload.get("references", {})
+    if isinstance(references, dict):
+        # References returned as {data: [...]}
+        return references.get("data", [])
+    elif isinstance(references, list):
+        # References returned as direct list
+        return references
+    return []
 
 
 def _bound_max_citations(value: Any) -> int:
@@ -223,7 +375,20 @@ def _rate_limited_response(
 
 
 async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle citation graph lookup for a single arXiv paper ID."""
+    """Handle citation graph lookup for a single arXiv paper ID.
+
+    This function:
+    1. Checks the disk cache first to avoid redundant S2 API calls
+    2. Makes ONE S2 API call to fetch paper + citations + references together
+    3. Caches the result for future lookups
+    4. Returns unmistakable rate-limit responses on 429
+
+    Args:
+        arguments: Tool arguments with paper_id (required) and max_citations (optional).
+
+    Returns:
+        List of TextContent with the citation graph or error.
+    """
     bare_id: str | None = None
     limit: int | None = None
     try:
@@ -239,24 +404,45 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         bare_id = bare_arxiv_id(paper_id)
         requested_version = arxiv_version_suffix(paper_id)
         limit = _bound_max_citations(arguments.get("max_citations"))
+
+        # Check cache first
+        cached = _load_cached_graph(bare_id, limit)
+        if cached is not None:
+            # Restore requested version metadata if present
+            if requested_version is not None and "paper" in cached:
+                cached["paper"]["requested_arxiv_id"] = paper_id
+                cached["paper"]["requested_version"] = requested_version
+            return [types.TextContent(type="text", text=json.dumps(cached, indent=2))]
+
+        # Cache miss: fetch from S2 with a single API call
         s2_paper_identifier = quote(f"ARXIV:{bare_id}", safe=":")
         paper_url = f"{SEMANTIC_SCHOLAR_API_URL}/paper/{s2_paper_identifier}"
-        citations_url = f"{paper_url}/citations"
-        references_url = f"{paper_url}/references"
-        neighbor_params = {"fields": NEIGHBOR_FIELDS, "limit": limit}
+
+        # Request paper metadata plus citations and references with subfields.
+        # This reduces from 3 sequential calls to 1.
+        fields = f"{PAPER_FIELDS},{CITATION_SUBFIELDS},{REFERENCE_SUBFIELDS}"
+        params = {
+            "fields": fields,
+            # Note: The paper endpoint does not support limit/offset for nested
+            # citations/references fields. S2 returns a bounded subset (typically
+            # up to 1000 per field). For our default 50 / cap 200 use case, this
+            # is sufficient. If we need precise control, we'd fall back to separate
+            # /citations and /references calls, but that defeats the quota goal.
+        }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            paper_response = await _s2_get(client, paper_url, {"fields": PAPER_FIELDS})
-            citations_response = await _s2_get(client, citations_url, neighbor_params)
-            references_response = await _s2_get(client, references_url, neighbor_params)
+            paper_response = await _s2_get(client, paper_url, params)
 
         payload = paper_response.json()
-        citations = _normalize_paper_items(
-            _neighbor_papers(citations_response.json(), "citingPaper")
-        )
-        references = _normalize_paper_items(
-            _neighbor_papers(references_response.json(), "citedPaper")
-        )
+
+        # Extract citations and references from the unified response
+        citations_raw = _extract_citations(payload)
+        references_raw = _extract_references(payload)
+
+        # Semantic Scholar may return more than we requested since we can't pass
+        # limit to the paper endpoint's nested fields. Slice to the requested limit.
+        citations = _normalize_paper_items(citations_raw[:limit])
+        references = _normalize_paper_items(references_raw[:limit])
 
         paper_meta = {
             "paper_id": payload.get("paperId"),
@@ -284,14 +470,24 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             "references": references,
         }
 
+        # Cache the successful result
+        _save_cached_graph(bare_id, limit, result)
+
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     except SemanticScholarRateLimitError as exc:
         logger.error("Semantic Scholar rate limited: %s", exc)
+        rate_limited = _rate_limited_payload(arxiv_id=bare_id, max_citations=limit)
+        # Cache rate-limited results with a short TTL so we don't hammer S2
+        if bare_id is not None and limit is not None:
+            _save_cached_graph(bare_id, limit, rate_limited)
         return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             logger.error("Semantic Scholar rate limited: %s", exc)
+            rate_limited = _rate_limited_payload(arxiv_id=bare_id, max_citations=limit)
+            if bare_id is not None and limit is not None:
+                _save_cached_graph(bare_id, limit, rate_limited)
             return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
         status = exc.response.status_code if exc.response is not None else None
         # Never leak upstream status lines / URLs (issue #166 class).
