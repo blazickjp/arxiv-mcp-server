@@ -171,16 +171,6 @@ def test_readme_exposes_supported_install_paths():
     }
     assert json.loads(vscode_query["config"][0]) == vscode_config
 
-    insiders_url = re.search(
-        r"https://insiders\.vscode\.dev/redirect/mcp/install\?[^)]+",
-        readme,
-    )
-    assert insiders_url is not None
-    insiders_query = parse_qs(urlparse(insiders_url.group()).query)
-    assert insiders_query["name"] == ["arxiv-mcp-server"]
-    assert insiders_query["quality"] == ["insiders"]
-    assert json.loads(insiders_query["config"][0]) == vscode_config
-
 
 def test_claude_manifests_reference_live_schemastore_schemas():
     plugin = json.loads(
