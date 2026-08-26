@@ -7,6 +7,13 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed,_latest_0.7.2-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest)
 
+[![Install in VS Code](https://img.shields.io/badge/Install_in-VS_Code-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D)
+[![Install in VS Code Insiders](https://img.shields.io/badge/Install_in-VS_Code_Insiders-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=arxiv-mcp-server&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%7D&quality=insiders)
+[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=arxiv-mcp-server&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22arxiv-mcp-server%22%5D%2C%22disabled%22%3Afalse%2C%22autoApprove%22%3A%5B%5D%7D)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-Install-D97757?style=flat-square&logo=anthropic&logoColor=white)](#claude-code)
+[![OpenAI Codex](https://img.shields.io/badge/OpenAI_Codex-Install-000000?style=flat-square&logo=openai&logoColor=white)](#openai-codex)
+[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Install-6C5CE7?style=flat-square)](#hermes-agent)
+
 A local MCP server for agent literature work. The differentiator is original-LaTeX section reads, BibTeX from arXiv metadata, and topic watches. Papers stay on disk. The working loop is paper ID → outline → one section → citations. Search is optional.
 
 ## Install
