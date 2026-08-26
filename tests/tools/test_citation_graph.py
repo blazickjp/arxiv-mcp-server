@@ -524,6 +524,64 @@ async def test_citation_graph_cache_rate_limited_expires_quickly():
 
 
 @pytest.mark.asyncio
+async def test_citation_graph_rate_limited_cached_not_as_empty_success():
+    """Rate-limited results ARE cached but served with unmistakable rate-limit markers, NOT as empty success."""
+    attempts = citation_graph_module._MAX_RETRIES + 1
+    rate_limited = _json_response({}, status_code=429)
+    # Only provide responses for first call; second call should serve from cache
+    mock_client = _mock_async_client([rate_limited] * attempts)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
+        patch.object(citation_graph_module.random, "random", return_value=0.5),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_citation_cache_rate_limited_not_empty")
+        import shutil
+
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        # First call: rate limited (makes 6 attempts: initial + 5 retries)
+        response1 = await handle_citation_graph({"paper_id": "2401.12345"})
+        payload1 = json.loads(response1[0].text)
+        assert payload1["status"] == "rate_limited"
+        assert payload1["error"] == "RATE_LIMITED"
+        assert (
+            payload1["warning"]
+            == "This is NOT an empty citation graph. The API request was blocked by rate limiting."
+        )
+        assert payload1["citations"] == []
+        assert payload1["references"] == []
+        assert "SEMANTIC_SCHOLAR_API_KEY" in payload1["message"]
+        assert "free API key" in payload1["hint"]
+        assert mock_client.get.call_count == attempts
+
+        # Second call immediately: should return CACHED rate-limited result WITHOUT new API calls
+        # This prevents API hammering while still making rate-limit unmistakable
+        response2 = await handle_citation_graph({"paper_id": "2401.12345"})
+        payload2 = json.loads(response2[0].text)
+
+        # Verify cached result is still rate-limited (not empty success)
+        assert payload2["status"] == "rate_limited"
+        assert payload2["error"] == "RATE_LIMITED"
+        assert (
+            payload2["warning"]
+            == "This is NOT an empty citation graph. The API request was blocked by rate limiting."
+        )
+        assert payload2["citations"] == []
+        assert payload2["references"] == []
+
+        # Most important: NO new API calls were made (cached result served)
+        assert mock_client.get.call_count == attempts  # Still same count, no new calls
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_citation_graph_cache_can_serve_smaller_limit():
     """Cached result with larger limit can satisfy smaller limit request."""
     import shutil
