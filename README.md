@@ -13,7 +13,11 @@ A local MCP server for agent literature work. The differentiator is original-LaT
 
 The default install is `uvx arxiv-mcp-server`. Command-based integrations need [uv](https://docs.astral.sh/uv/getting-started/installation/), which provides `uvx`. No repository clone or Python environment setup is required.
 
-Add this stdio configuration to any client that accepts the `mcpServers` JSON shape:
+```bash
+uvx arxiv-mcp-server
+```
+
+Add this stdio configuration to clients that accept the `mcpServers` JSON shape, such as Claude Desktop and Kiro. Other clients may use a top-level `servers` object, TOML, or their own settings UI; consult the client's MCP documentation.
 
 ```json
 {
@@ -37,7 +41,8 @@ Listed on the [official MCP registry](https://registry.modelcontextprotocol.io/v
 
 Search, source retrieval, citation graphs, and downloads call their respective external services. What stays local is the literature loop: read author-submitted LaTeX one section at a time, export BibTeX from authoritative arXiv metadata, and keep topic watches on disk. The server runs locally over stdio by default.
 
-## Client recipes
+<details>
+<summary>Per-client recipes (Claude Code, Codex, Hermes, VS Code / Kiro, Claude Desktop, plugins)</summary>
 
 Use the default JSON above unless your client has a one-line helper.
 
@@ -124,6 +129,8 @@ The same MCP server and research skill are packaged for both major plugin system
 | Kiro Power | `POWER.md` | `mcp.json` |
 | Shared MCP launch | `.mcp.json` for Claude and repository-local clients; `.codex-mcp.json` for Codex plugins | `uvx arxiv-mcp-server` |
 | Shared research workflow | `skills/arxiv-mcp-server/SKILL.md` | Installed with either plugin |
+
+</details>
 
 ## If a desktop client cannot find `uvx`
 
