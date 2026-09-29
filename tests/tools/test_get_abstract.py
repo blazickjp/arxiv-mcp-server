@@ -378,6 +378,100 @@ async def test_timeout_runtime_error_handled(mocker):
 
 
 # ---------------------------------------------------------------------------
+# HTTP errors (non-404) are reported as HTTP errors, not "not found" (#278)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_http_406_error_is_not_reported_as_not_found(mocker):
+    """HTTP 406 from arXiv should be reported as an HTTP error, not not-found (#278)."""
+    import httpx
+
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(406, request=request)
+    error = httpx.HTTPStatusError(
+        "406 Not Acceptable", request=request, response=response
+    )
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        AsyncMock(side_effect=error),
+    )
+    result = await handle_get_abstract({"paper_id": "2607.06596"})
+    data = json.loads(result[0].text)
+    assert data["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 406)" == data["message"]
+    assert "not found" not in data["message"].lower()
+    assert "2607.06596" not in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_http_500_error_is_not_reported_as_not_found(mocker):
+    """HTTP 500 from arXiv should be reported as an HTTP error, not not-found (#278)."""
+    import httpx
+
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError(
+        "500 Server Error", request=request, response=response
+    )
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        AsyncMock(side_effect=error),
+    )
+    result = await handle_get_abstract({"paper_id": "2401.12345"})
+    data = json.loads(result[0].text)
+    assert data["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 500)" == data["message"]
+    assert "not found" not in data["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_http_403_error_is_not_reported_as_not_found(mocker):
+    """HTTP 403 from arXiv should be reported as an HTTP error, not not-found (#278)."""
+    import httpx
+
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(403, request=request)
+    error = httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        AsyncMock(side_effect=error),
+    )
+    result = await handle_get_abstract({"paper_id": "2401.12345"})
+    data = json.loads(result[0].text)
+    assert data["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 403)" == data["message"]
+    assert "not found" not in data["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_http_error_does_not_leak_url(mocker):
+    """HTTP errors must not expose upstream URLs (#166, #278)."""
+    import httpx
+
+    request = httpx.Request(
+        "GET", "https://export.arxiv.org/api/query?id_list=2401.12345"
+    )
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError(
+        "500 Server Error", request=request, response=response
+    )
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        AsyncMock(side_effect=error),
+    )
+    result = await handle_get_abstract({"paper_id": "2401.12345"})
+    text = result[0].text
+    assert "export.arxiv.org" not in text
+    assert "https://" not in text
+    assert "http://" not in text
+
+
+# ---------------------------------------------------------------------------
 # Generic / unexpected exception
 # ---------------------------------------------------------------------------
 

@@ -146,15 +146,17 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
                 type="text", text=json.dumps({"status": "error", "message": str(e)})
             )
         ]
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as e:
+        # HTTP errors other than not-found (issue #278).
         # Never leak upstream status lines / URLs (issue #166).
+        status = e.response.status_code if e.response is not None else "unknown"
         return [
             types.TextContent(
                 type="text",
                 text=json.dumps(
                     {
                         "status": "error",
-                        "message": f"Paper {paper_id} not found on arXiv",
+                        "message": f"arXiv API HTTP error (HTTP {status})",
                     }
                 ),
             )
