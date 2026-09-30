@@ -366,6 +366,30 @@ async def test_rate_limit_error_returns_error_status(mocker):
 
 
 @pytest.mark.asyncio
+async def test_arxiv_rate_limit_error_returns_rate_limited_response(mocker):
+    """ArxivRateLimitError should return status=rate_limited with retry info (#277)."""
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+
+    mocker.patch(
+        "arxiv_mcp_server.tools.get_abstract._rate_limited_get",
+        AsyncMock(
+            side_effect=ArxivRateLimitError(
+                "arXiv is rate limiting this IP (HTTP 406). "
+                "Please wait 600 seconds before retrying.",
+                status_code=406,
+                retry_after_seconds=600.0,
+            )
+        ),
+    )
+    result = await handle_get_abstract({"paper_id": "2401.12345"})
+    data = json.loads(result[0].text)
+    assert data["status"] == "rate_limited"
+    assert data["http_status"] == 406
+    assert data["retry_after_seconds"] == 600.0
+    assert "HTTP 406" in data["message"]
+
+
+@pytest.mark.asyncio
 async def test_timeout_runtime_error_handled(mocker):
     mocker.patch(
         "arxiv_mcp_server.tools.get_abstract._rate_limited_get",

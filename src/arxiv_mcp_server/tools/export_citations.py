@@ -24,7 +24,13 @@ from .arxiv_ids import (
     is_valid_arxiv_id,
     normalize_arxiv_id,
 )
-from .search import ARXIV_API_URL, _parse_arxiv_atom_response, _rate_limited_get
+from .search import (
+    ARXIV_API_URL,
+    _parse_arxiv_atom_response,
+    _rate_limited_get,
+    ArxivRateLimitError,
+    _rate_limited_response,
+)
 
 logger = logging.getLogger("arxiv-mcp-server")
 
@@ -323,8 +329,18 @@ async def handle_export_citations(arguments: Dict[str, Any]) -> List[types.TextC
         }
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
-    except RuntimeError as exc:  # rate limit / timeout surfaced by _rate_limited_get
+    except ArxivRateLimitError as exc:  # rate limit from _rate_limited_get (#277)
+        return _rate_limited_response(
+            str(exc),
+            retry_after_seconds=exc.retry_after_seconds,
+            status_code=exc.status_code,
+        )
+    except RuntimeError as exc:  # timeout surfaced by _rate_limited_get
         return _error(str(exc))
+    except httpx.HTTPStatusError as exc:  # HTTP errors (#166, #278)
+        # Never leak upstream URLs (issue #166).
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        return _error(f"arXiv API HTTP error (HTTP {status})")
     except Exception as exc:  # noqa: BLE001 - report, don't crash the server
         logger.error(f"export_citations error: {exc}")
         return _error(str(exc))

@@ -398,3 +398,125 @@ async def test_download_paper_return_full_text_opt_in(temp_storage_path, mocker)
     assert "UNTRUSTED EXTERNAL CONTENT" in result["content_warning"]
     assert len(result["content_warning"]) < 80
     assert "UNTRUSTED" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_html_fetch_406_raises_rate_limit_error():
+    """HTML fetch should raise ArxivRateLimitError on 406, not return None (#277)."""
+    from arxiv_mcp_server.tools.download import _fetch_html_content
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+    import httpx
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+    mock_response.status_code = 406
+
+    with patch.object(httpx, "get", return_value=mock_response):
+        with pytest.raises(ArxivRateLimitError) as exc_info:
+            _fetch_html_content("2103.12345")
+
+        assert exc_info.value.status_code == 406
+        assert exc_info.value.retry_after_seconds == 600.0
+        assert "HTTP 406" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_download_html_406_returns_rate_limited_response(
+    temp_storage_path, mocker
+):
+    """Download should return rate_limited response when HTML fetch gets 406 (#277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        side_effect=ArxivRateLimitError(
+            "arXiv is rate limiting this IP (HTTP 406). "
+            "Please wait 600 seconds before retrying.",
+            status_code=406,
+            retry_after_seconds=600.0,
+        ),
+    )
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 406
+    assert result["retry_after_seconds"] == 600.0
+    assert "HTTP 406" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_406_returns_rate_limited_response(
+    temp_storage_path, mocker
+):
+    """Download should return rate_limited response when PDF fetch gets 406 (#277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+    mocker.patch.object(
+        download_module,
+        "_fetch_pdf_content",
+        side_effect=ArxivRateLimitError(
+            "arXiv is rate limiting this IP (HTTP 406). "
+            "Please wait 600 seconds before retrying.",
+            status_code=406,
+            retry_after_seconds=600.0,
+        ),
+    )
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 406
+    assert result["retry_after_seconds"] == 600.0
+    assert "HTTP 406" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_http_error_no_traceback(temp_storage_path, mocker, caplog):
+    """PDF HTTP errors should not log full traceback (#166, #277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    import logging
+
+    caplog.set_level(logging.ERROR)
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+    mocker.patch.object(
+        download_module,
+        "_fetch_pdf_content",
+        side_effect=RuntimeError("arXiv PDF download HTTP error (HTTP 500)"),
+    )
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert "arXiv PDF download HTTP error (HTTP 500)" in result["message"]
+    assert "export.arxiv.org" not in result["message"]
+    # Should log error, not exception (no traceback)
+    assert "Download error for 2103.12345" in caplog.text
+    assert "Traceback" not in caplog.text

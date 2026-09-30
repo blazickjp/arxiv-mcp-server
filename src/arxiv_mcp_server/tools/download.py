@@ -24,7 +24,13 @@ from .arxiv_ids import (
 )
 from .list_papers import resolve_stored_stem
 from .list_papers import save_paper_metadata
-from .search import ARXIV_API_URL, ARXIV_NS, _rate_limited_get
+from .search import (
+    ARXIV_API_URL,
+    ARXIV_NS,
+    _rate_limited_get,
+    ArxivRateLimitError,
+    _rate_limited_response,
+)
 import logging
 import threading
 import xml.etree.ElementTree as ET
@@ -754,13 +760,29 @@ def _fetch_html_content(paper_id: str) -> str | None:
 
     Returns the extracted text on success, or None if the HTML endpoint
     is not available (404 or other non-200 status).
+
+    Raises ArxivRateLimitError on 406 (throttling) so the caller can
+    handle it as rate limiting, not missing HTML (issue #277).
     """
+    from .search import ArxivRateLimitError, _HTTP_406_RETRY_AFTER_SECONDS
+
     url = f"https://arxiv.org/html/{paper_id}"
     try:
         response = httpx.get(url, timeout=30, follow_redirects=True)
         if response.status_code == 200:
             logger.info(f"HTML fetch succeeded for {paper_id}")
             return _html_to_text(response.text)
+        if response.status_code == 406:
+            # Throttling, not missing HTML (issue #277)
+            message = (
+                f"arXiv is rate limiting this IP (HTTP 406). "
+                f"Please wait {int(_HTTP_406_RETRY_AFTER_SECONDS)} seconds before retrying."
+            )
+            raise ArxivRateLimitError(
+                message,
+                status_code=406,
+                retry_after_seconds=_HTTP_406_RETRY_AFTER_SECONDS,
+            )
         logger.info(
             f"HTML fetch returned {response.status_code} for {paper_id}, will try PDF"
         )
@@ -1130,6 +1152,13 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             )
         ]
 
+    except ArxivRateLimitError as e:
+        # Rate limit from _rate_limited_get or stream_pdf_to_path (issue #277)
+        return _rate_limited_response(
+            str(e),
+            retry_after_seconds=e.retry_after_seconds,
+            status_code=e.status_code,
+        )
     except PaperNotFoundError as e:
         return [
             types.TextContent(
@@ -1155,6 +1184,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                         "message": f"Storage error while saving paper {safe_id}",
                     }
                 ),
+            )
+        ]
+    except RuntimeError as e:
+        # Clean HTTP errors from stream_pdf_to_path (issue #166)
+        safe_id = locals().get("paper_id") or "unknown"
+        message = str(e)
+        # Only log traceback if it's not a known HTTP error
+        if "HTTP error" in message:
+            logger.error("Download error for %s: %s", safe_id, message)
+        else:
+            logger.exception("Unexpected runtime error downloading %s", safe_id)
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "message": message}),
             )
         ]
     except Exception as e:
