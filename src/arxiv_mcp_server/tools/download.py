@@ -5,6 +5,7 @@ import gc
 import json
 import asyncio
 import httpx
+import requests
 from html.parser import HTMLParser
 import re
 from pathlib import Path
@@ -24,7 +25,13 @@ from .arxiv_ids import (
 )
 from .list_papers import resolve_stored_stem
 from .list_papers import save_paper_metadata
-from .search import ARXIV_API_URL, ARXIV_NS, _rate_limited_get
+from .search import (
+    ARXIV_API_URL,
+    ARXIV_NS,
+    _rate_limited_get,
+    ArxivRateLimitError,
+    _rate_limited_response,
+)
 import logging
 import threading
 import xml.etree.ElementTree as ET
@@ -754,13 +761,39 @@ def _fetch_html_content(paper_id: str) -> str | None:
 
     Returns the extracted text on success, or None if the HTML endpoint
     is not available (404 or other non-200 status).
+
+    Raises ArxivRateLimitError on 406 (throttling) so the caller can
+    handle it as rate limiting, not missing HTML (issue #277).
+    Honors Retry-After header when present.
     """
+    from .search import ArxivRateLimitError, _HTTP_406_RETRY_AFTER_SECONDS
+
     url = f"https://arxiv.org/html/{paper_id}"
     try:
         response = httpx.get(url, timeout=30, follow_redirects=True)
         if response.status_code == 200:
             logger.info(f"HTML fetch succeeded for {paper_id}")
             return _html_to_text(response.text)
+        if response.status_code == 406:
+            # Throttling, not missing HTML (issue #277)
+            # Honor Retry-After header if present
+            retry_after = _HTTP_406_RETRY_AFTER_SECONDS
+            retry_after_header = response.headers.get("Retry-After")
+            if retry_after_header:
+                try:
+                    retry_after = float(retry_after_header)
+                except ValueError:
+                    pass
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP 406). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            raise ArxivRateLimitError(
+                message,
+                status_code=406,
+                retry_after_seconds=retry_after,
+            )
         logger.info(
             f"HTML fetch returned {response.status_code} for {paper_id}, will try PDF"
         )
@@ -811,6 +844,8 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
     Raises PaperNotFoundError if the paper does not exist, or other exceptions
     on network/conversion failures.
     Raises ImportError (with a helpful message) if the [pdf] extra is not installed.
+    Raises ArxivRateLimitError on 406/429/503.
+    Raises httpx.HTTPStatusError on other HTTP errors (cleaned by caller).
     """
     if not _load_pdf_dependencies():
         raise ImportError(
@@ -818,13 +853,39 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
             "pip install arxiv-mcp-server[pdf]"
         )
 
-    client = get_arxiv_client()
+    # Use a client with minimal retries for the metadata lookup to avoid
+    # making many requests on 406/429/503 (issue #277).
+    # Note: Retry-After headers cannot be honored on this path because the
+    # arxiv package's HTTPError does not preserve response headers.
+    client = get_arxiv_client(num_retries=0)
     try:
         paper = ARXIV_RATE_LIMITER.run_sync(
             lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
         )
     except StopIteration:
         raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
+    except arxiv.HTTPError as e:
+        # arxiv.HTTPError has a status attribute
+        status = e.status
+        # Create httpx.HTTPStatusError for consistent handling by caller
+        request = httpx.Request("GET", "(arXiv metadata)")
+        response = httpx.Response(status, request=request)
+        raise httpx.HTTPStatusError(
+            "arXiv metadata request failed",
+            request=request,
+            response=response,
+        )
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    ):
+        # Network errors: report cleanly without URL or traceback
+        raise RuntimeError("Could not reach arXiv (network error)") from None
+    finally:
+        # Close the per-call session created by the num_retries=0 client
+        session = getattr(client, "_session", None)
+        if session and hasattr(session, "close"):
+            session.close()
 
     pdf_path = get_paper_path(paper_id, ".pdf")
     _download_arxiv_pdf_to_path(paper, pdf_path)
@@ -1130,6 +1191,79 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             )
         ]
 
+    except ArxivRateLimitError as e:
+        # Rate limit from _rate_limited_get or stream_pdf_to_path (issue #277)
+        return _rate_limited_response(
+            str(e),
+            retry_after_seconds=e.retry_after_seconds,
+            status_code=e.status_code,
+        )
+    except httpx.HTTPStatusError as e:
+        # HTTP errors from _rate_limited_get (existence check) or other HTTP calls (#166, #277)
+        status = e.response.status_code if e.response is not None else "unknown"
+        # Handle 406 as rate limiting
+        if status == 406:
+            from .search import _HTTP_406_RETRY_AFTER_SECONDS
+
+            # Check if Retry-After header is present
+            retry_after = None
+            if e.response is not None:
+                retry_after_header = e.response.headers.get("Retry-After")
+                if retry_after_header:
+                    try:
+                        retry_after = float(retry_after_header)
+                    except ValueError:
+                        pass
+            if retry_after is None:
+                retry_after = _HTTP_406_RETRY_AFTER_SECONDS
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP 406). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            return _rate_limited_response(
+                message,
+                retry_after_seconds=retry_after,
+                status_code=406,
+            )
+        # Handle 429/503 as rate limiting
+        elif status in (429, 503):
+            # Parse Retry-After header
+            retry_after = None
+            if e.response is not None:
+                retry_after_header = e.response.headers.get("Retry-After")
+                if retry_after_header:
+                    try:
+                        retry_after = float(retry_after_header)
+                    except ValueError:
+                        pass
+            if retry_after is None:
+                from .search import _DEFAULT_RETRY_AFTER_SECONDS
+
+                retry_after = _DEFAULT_RETRY_AFTER_SECONDS
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP {status}). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            return _rate_limited_response(
+                message,
+                retry_after_seconds=retry_after,
+                status_code=status,
+            )
+        # Other HTTP errors
+        logger.error("HTTP error downloading paper: %s", status)
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "status": "error",
+                        "message": f"arXiv API HTTP error (HTTP {status})",
+                    }
+                ),
+            )
+        ]
     except PaperNotFoundError as e:
         return [
             types.TextContent(
@@ -1155,6 +1289,21 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                         "message": f"Storage error while saving paper {safe_id}",
                     }
                 ),
+            )
+        ]
+    except RuntimeError as e:
+        # Clean HTTP errors from stream_pdf_to_path (issue #166)
+        safe_id = locals().get("paper_id") or "unknown"
+        message = str(e)
+        # Only log traceback if it's not a known HTTP or network error
+        if "HTTP error" in message or "network error" in message:
+            logger.error("Download error for %s: %s", safe_id, message)
+        else:
+            logger.exception("Unexpected runtime error downloading %s", safe_id)
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps({"status": "error", "message": message}),
             )
         ]
     except Exception as e:

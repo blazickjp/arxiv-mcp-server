@@ -632,3 +632,55 @@ async def test_fetch_metadata_keeps_each_versioned_entry(monkeypatch):
     assert meta["1706.03762v1"]["versioned_id"] == "1706.03762v1"
     # Bare id resolves to the latest returned version.
     assert meta["1706.03762"]["versioned_id"] == "1706.03762v7"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_returns_rate_limited_response(monkeypatch):
+    """ArxivRateLimitError should return status=rate_limited with retry info (#277)."""
+    from unittest.mock import AsyncMock
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+
+    monkeypatch.setattr(
+        ec,
+        "_rate_limited_get",
+        AsyncMock(
+            side_effect=ArxivRateLimitError(
+                "arXiv is rate limiting this IP (HTTP 406). "
+                "Please wait 600 seconds before retrying.",
+                status_code=406,
+                retry_after_seconds=600.0,
+            )
+        ),
+    )
+
+    result = await _run({"paper_ids": ["1706.03762"]})
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 406
+    assert result["retry_after_seconds"] == 600.0
+    assert "HTTP 406" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_http_status_error_does_not_leak_url(monkeypatch):
+    """HTTPStatusError should not expose upstream URLs (#166, #277)."""
+    from unittest.mock import AsyncMock
+    import httpx
+
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query?id_list=x")
+    response = httpx.Response(500, request=request)
+
+    monkeypatch.setattr(
+        ec,
+        "_rate_limited_get",
+        AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "500 Internal Server Error", request=request, response=response
+            )
+        ),
+    )
+
+    result = await _run({"paper_ids": ["1706.03762"]})
+    assert result["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 500)" == result["message"]
+    assert "export.arxiv.org" not in result["message"]
+    assert "Internal Server Error" not in result["message"]

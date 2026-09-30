@@ -1255,3 +1255,66 @@ async def test_rate_limited_get_retries_503_then_succeeds():
     assert response is ok
     assert mock_client.get.call_count == 2
     sleep.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_get_retries_406_minimally_then_succeeds():
+    """406 is retried with minimal attempts to avoid prolonging the block (#277)."""
+    limited = MagicMock()
+    limited.status_code = 406
+    limited.headers = {}
+    limited.text = ""
+    limited.raise_for_status = MagicMock()
+
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.headers = {}
+    ok.text = "<feed/>"
+    ok.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[limited, ok])
+
+    with (
+        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        patch.object(search_module.random, "random", return_value=0.5),
+    ):
+        response = await _rate_limited_get(
+            mock_client, "https://export.arxiv.org/api/query"
+        )
+
+    assert response is ok
+    assert mock_client.get.call_count == 2
+    sleep.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.asyncio
+async def test_search_406_exhausted_returns_soft_rate_limited():
+    """Persistent arXiv 406s soft-fail as status=rate_limited JSON (#277)."""
+    rate_limited = MagicMock()
+    rate_limited.status_code = 406
+    rate_limited.headers = {}
+    rate_limited.text = ""
+    rate_limited.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=rate_limited)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        patch.object(search_module.random, "random", return_value=0.5),
+    ):
+        result = await handle_search({"query": "transformers", "max_results": 1})
+
+    content = json.loads(result[0].text)
+    assert content["status"] == "rate_limited"
+    assert "HTTP 406" in content["message"]
+    assert content["http_status"] == 406
+    assert content["retry_after_seconds"] == 600.0
+    assert not result[0].text.startswith("Error:")
+    # 406 should only retry 1 time (2 attempts total)
+    assert mock_client.get.call_count == search_module._HTTP_406_MAX_RETRIES + 1
+    assert sleep.await_count == search_module._HTTP_406_MAX_RETRIES

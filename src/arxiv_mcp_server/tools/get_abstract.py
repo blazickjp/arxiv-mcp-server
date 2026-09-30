@@ -9,7 +9,12 @@ from mcp.types import ToolAnnotations
 
 from .arxiv_ids import parse_arxiv_id
 from .content import CONTENT_WARNING
-from .search import _rate_limited_get, ARXIV_API_URL
+from .search import (
+    _rate_limited_get,
+    ARXIV_API_URL,
+    ArxivRateLimitError,
+    _rate_limited_response,
+)
 import httpx
 import xml.etree.ElementTree as ET
 
@@ -139,22 +144,31 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
             )
         ]
 
+    except ArxivRateLimitError as e:
+        # Rate limit from _rate_limited_get (issues #277, #278)
+        return _rate_limited_response(
+            str(e),
+            retry_after_seconds=e.retry_after_seconds,
+            status_code=e.status_code,
+        )
     except RuntimeError as e:
-        # Rate limit or timeout from _rate_limited_get
+        # Timeout from _rate_limited_get
         return [
             types.TextContent(
                 type="text", text=json.dumps({"status": "error", "message": str(e)})
             )
         ]
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as e:
+        # HTTP errors other than not-found (issue #278).
         # Never leak upstream status lines / URLs (issue #166).
+        status = e.response.status_code if e.response is not None else "unknown"
         return [
             types.TextContent(
                 type="text",
                 text=json.dumps(
                     {
                         "status": "error",
-                        "message": f"Paper {paper_id} not found on arXiv",
+                        "message": f"arXiv API HTTP error (HTTP {status})",
                     }
                 ),
             )

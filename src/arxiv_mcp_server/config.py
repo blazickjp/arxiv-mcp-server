@@ -29,51 +29,66 @@ logger = logging.getLogger(__name__)
 _arxiv_client = None
 
 
-def get_arxiv_client():
-    """Return the process-wide arxiv.Client, creating it on first use.
+def get_arxiv_client(num_retries=None):
+    """Return an arxiv.Client with appropriate timeouts and connection settings.
+
+    Args:
+        num_retries: Override the number of retries. If None, uses the shared
+                     process-wide client with default retries. If an integer,
+                     creates a new client with that retry count (use 0 for
+                     minimal retries to avoid prolonging 406 IP blocks).
 
     Callers that need a particular page size must set it while holding the
     shared arXiv request gate. This preserves one requests.Session without
     allowing concurrent searches to race over client configuration.
     """
     global _arxiv_client
-    if _arxiv_client is None:
+
+    # If num_retries is specified, create a new client with that setting
+    if num_retries is not None:
+        import arxiv
+
+        client = arxiv.Client(num_retries=num_retries, delay_seconds=3.0)
+    # Otherwise use the shared client
+    elif _arxiv_client is None:
         import arxiv
 
         client = arxiv.Client()
-
-        # The upstream arxiv package issues HTTP requests through a
-        # requests.Session with no timeout (arxiv.Client._session.get),
-        # so a connection that silently stops responding (a "black hole":
-        # the peer never answers again, no FIN/RST — root cause unknown,
-        # see issue) blocks forever inside ARXIV_RATE_LIMITER's
-        # process-wide lock, wedging every subsequent search until the
-        # server is restarted.
-        #
-        # 1. Inject connect/read timeouts so such a request fails within
-        #    ~35s, the lock is released, and later calls recover.
-        # 2. Disable keep-alive connection reuse so a pooled connection
-        #    can never be reused after going stale (urllib3's stale check
-        #    only verifies the socket object exists, not that the peer is
-        #    still reachable).
-        #
-        # Only patch a real requests.Session; tests may substitute a mock
-        # client without one.
-        session = getattr(client, "_session", None)
-        if isinstance(session, requests.Session):
-            _orig_get = session.get
-
-            def _get_with_timeout(url, **kwargs):
-                kwargs.setdefault("timeout", (5.0, 30.0))
-                return _orig_get(url, **kwargs)
-
-            session.get = _get_with_timeout
-            # requests' default headers already include 'Connection: keep-alive',
-            # so setdefault would be a no-op; assign directly.
-            session.headers["Connection"] = "close"
-
         _arxiv_client = client
-    return _arxiv_client
+    else:
+        return _arxiv_client
+
+    # The upstream arxiv package issues HTTP requests through a
+    # requests.Session with no timeout (arxiv.Client._session.get),
+    # so a connection that silently stops responding (a "black hole":
+    # the peer never answers again, no FIN/RST — root cause unknown,
+    # see issue) blocks forever inside ARXIV_RATE_LIMITER's
+    # process-wide lock, wedging every subsequent search until the
+    # server is restarted.
+    #
+    # 1. Inject connect/read timeouts so such a request fails within
+    #    ~35s, the lock is released, and later calls recover.
+    # 2. Disable keep-alive connection reuse so a pooled connection
+    #    can never be reused after going stale (urllib3's stale check
+    #    only verifies the socket object exists, not that the peer is
+    #    still reachable).
+    #
+    # Only patch a real requests.Session; tests may substitute a mock
+    # client without one.
+    session = getattr(client, "_session", None)
+    if isinstance(session, requests.Session):
+        _orig_get = session.get
+
+        def _get_with_timeout(url, **kwargs):
+            kwargs.setdefault("timeout", (5.0, 30.0))
+            return _orig_get(url, **kwargs)
+
+        session.get = _get_with_timeout
+        # requests' default headers already include 'Connection: keep-alive',
+        # so setdefault would be a no-op; assign directly.
+        session.headers["Connection"] = "close"
+
+    return client
 
 
 def close_arxiv_client() -> None:

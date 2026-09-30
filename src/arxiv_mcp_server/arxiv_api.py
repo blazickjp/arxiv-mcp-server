@@ -85,7 +85,19 @@ def stream_pdf_to_path(
     request_timeout: float,
     user_agent: str,
 ) -> None:
-    """Stream an arXiv PDF to disk with bounded memory usage."""
+    """Stream an arXiv PDF to disk with bounded memory usage.
+
+    Handles arXiv HTTP 406 (throttling) with minimal retries to avoid
+    prolonging the IP block (issue #277).
+    """
+    # Import here to avoid circular dependency
+    from .tools.search import (
+        ArxivRateLimitError,
+        _HTTP_406_MAX_RETRIES,
+        _HTTP_406_RETRY_AFTER_SECONDS,
+        _backoff_seconds,
+    )
+
     timeout = httpx.Timeout(
         connect=30.0,
         read=max(120.0, request_timeout),
@@ -103,15 +115,81 @@ def stream_pdf_to_path(
     staging = Path(staging_name)
 
     try:
-        with httpx.Client(
-            timeout=timeout, follow_redirects=True, headers=headers
-        ) as client:
-            with client.stream("GET", canonical_pdf_url(paper)) as response:
-                response.raise_for_status()
-                with staging.open("wb") as output:
-                    for chunk in response.iter_bytes(chunk_size=256 * 1024):
-                        output.write(chunk)
-        staging.replace(destination)
+        last_response: httpx.Response | None = None
+        max_attempts = _HTTP_406_MAX_RETRIES + 1
+
+        for attempt in range(max_attempts):
+            try:
+                with httpx.Client(
+                    timeout=timeout, follow_redirects=True, headers=headers
+                ) as client:
+                    with client.stream("GET", canonical_pdf_url(paper)) as response:
+                        # Check status before streaming
+                        if response.status_code == 406:
+                            last_response = response
+                            if attempt < _HTTP_406_MAX_RETRIES:
+                                wait = _backoff_seconds(
+                                    attempt, response.headers.get("Retry-After")
+                                )
+                                time.sleep(wait)
+                                continue
+                            # 406 exhausted
+                            break
+
+                        # Handle 429/503 as rate limiting
+                        if response.status_code in (429, 503):
+                            last_response = response
+                            # For 429/503 on PDF, return rate_limited like everywhere else
+                            break
+
+                        # Non-406 errors: raise immediately (no retry)
+                        response.raise_for_status()
+
+                        # Success: stream to disk
+                        with staging.open("wb") as output:
+                            for chunk in response.iter_bytes(chunk_size=256 * 1024):
+                                output.write(chunk)
+                        staging.replace(destination)
+                        return
+            except httpx.HTTPStatusError as e:
+                # HTTPStatusError from raise_for_status() - non-406 errors
+                # Clean error without URL leak (issue #166)
+                status = e.response.status_code if e.response is not None else "unknown"
+                staging.unlink(missing_ok=True)
+                raise RuntimeError(f"arXiv PDF download HTTP error (HTTP {status})")
+
+        # 406/429/503 exhausted after retries
+        if last_response is not None and last_response.status_code in (406, 429, 503):
+            staging.unlink(missing_ok=True)
+            status_code = last_response.status_code
+
+            # Parse Retry-After header
+            retry_after = None
+            retry_after_header = last_response.headers.get("Retry-After")
+            if retry_after_header:
+                try:
+                    retry_after = float(retry_after_header)
+                except ValueError:
+                    pass
+
+            # Use defaults if no Retry-After header
+            if retry_after is None:
+                if status_code == 406:
+                    retry_after = _HTTP_406_RETRY_AFTER_SECONDS
+                else:
+                    from .tools.search import _DEFAULT_RETRY_AFTER_SECONDS
+
+                    retry_after = _DEFAULT_RETRY_AFTER_SECONDS
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP {status_code}). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            raise ArxivRateLimitError(
+                message,
+                status_code=status_code,
+                retry_after_seconds=retry_after,
+            )
     except BaseException:
         staging.unlink(missing_ok=True)
         raise

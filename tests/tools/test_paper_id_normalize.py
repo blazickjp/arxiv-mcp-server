@@ -200,7 +200,9 @@ async def test_http_status_error_does_not_leak_upstream_url(mocker):
     result = await handle_get_abstract({"paper_id": "1706.03762"})
     data = json.loads(result[0].text)
     assert data["status"] == "error"
-    assert "400" not in data["message"]
+    # Status code should be present (issue #278)
+    assert "HTTP 400" in data["message"] or "400" in data["message"]
+    # URL and status line should not be leaked (issue #166)
     assert "export.arxiv.org" not in data["message"]
     assert "Bad Request" not in data["message"]
 

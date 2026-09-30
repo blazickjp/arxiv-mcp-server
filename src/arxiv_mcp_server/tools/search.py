@@ -39,6 +39,8 @@ _MAX_RETRIES = 5
 _INITIAL_BACKOFF_SECONDS = 2.0
 _MAX_BACKOFF_SECONDS = 60.0
 _DEFAULT_RETRY_AFTER_SECONDS = 60.0
+_HTTP_406_RETRY_AFTER_SECONDS = 600.0
+_HTTP_406_MAX_RETRIES = 1
 RATE_LIMIT_MESSAGE = (
     "arXiv is rate limiting this IP (HTTP 429). " "Please wait before retrying."
 )
@@ -118,6 +120,7 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
     """Make an HTTP request through the process-wide arXiv request gate.
 
     Retries HTTP 429/503 with exponential backoff + jitter (citation_graph parity).
+    Retries HTTP 406 with minimal attempts to avoid prolonging the IP-level block.
     One additional retry on timeout only, independent of the rate-limit budget.
     """
 
@@ -136,9 +139,14 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
                     else:
                         raise RuntimeError("arXiv request timed out after retry")
             assert response is not None
-            if response.status_code in (429, 503):
+            if response.status_code in (429, 503, 406):
                 last_response = response
-                if attempt == _MAX_RETRIES:
+                max_retries_for_status = (
+                    _HTTP_406_MAX_RETRIES
+                    if response.status_code == 406
+                    else _MAX_RETRIES
+                )
+                if attempt == max_retries_for_status:
                     break
                 wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
                 logger.warning(
@@ -146,7 +154,7 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
                     response.status_code,
                     wait,
                     attempt + 1,
-                    _MAX_RETRIES + 1,
+                    max_retries_for_status + 1,
                 )
                 await asyncio.sleep(wait)
                 continue
@@ -159,16 +167,20 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
             retry_after = _parse_retry_after_seconds(
                 last_response.headers.get("Retry-After")
             )
+        if retry_after is None:
+            retry_after = (
+                _HTTP_406_RETRY_AFTER_SECONDS
+                if status_code == 406
+                else _DEFAULT_RETRY_AFTER_SECONDS
+            )
         message = (
             f"arXiv is rate limiting this IP (HTTP {status_code}). "
-            "Please wait 60 seconds before retrying."
+            f"Please wait {int(retry_after)} seconds before retrying."
         )
         raise ArxivRateLimitError(
             message,
             status_code=status_code,
-            retry_after_seconds=(
-                retry_after if retry_after is not None else _DEFAULT_RETRY_AFTER_SECONDS
-            ),
+            retry_after_seconds=retry_after,
         )
 
     return await ARXIV_RATE_LIMITER.run_async(request)
