@@ -19,6 +19,7 @@ from mcp.types import ToolAnnotations
 from ..arxiv_api import ARXIV_RATE_LIMITER
 from ..config import Settings
 from .content import LATEX_CONTENT_WARNING, add_content_payload
+from .search import ArxivRateLimitError, _rate_limited_response
 from .latex_archive import (
     MAX_ARCHIVE_BYTES,
     MAX_ARCHIVE_MEMBERS,
@@ -365,6 +366,40 @@ async def handle_get_paper_latex(
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        # Handle rate limiting (406/429/503)
+        if status in (406, 429, 503):
+            from .search import (
+                _HTTP_406_RETRY_AFTER_SECONDS,
+                _DEFAULT_RETRY_AFTER_SECONDS,
+            )
+
+            # Parse Retry-After header
+            retry_after = None
+            retry_after_header = exc.response.headers.get("Retry-After")
+            if retry_after_header:
+                try:
+                    retry_after = float(retry_after_header)
+                except ValueError:
+                    pass
+
+            # Use defaults if no Retry-After header
+            if retry_after is None:
+                retry_after = (
+                    _HTTP_406_RETRY_AFTER_SECONDS
+                    if status == 406
+                    else _DEFAULT_RETRY_AFTER_SECONDS
+                )
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP {status}). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            return _rate_limited_response(
+                message,
+                retry_after_seconds=retry_after,
+                status_code=status,
+            )
+        # Handle other HTTP errors
         message = (
             "LaTeX source is unavailable for this paper"
             if status in {404, 403}
@@ -418,8 +453,43 @@ async def handle_list_paper_latex_sections(
         }
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
     except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        # Handle rate limiting (406/429/503)
+        if status in (406, 429, 503):
+            from .search import (
+                _HTTP_406_RETRY_AFTER_SECONDS,
+                _DEFAULT_RETRY_AFTER_SECONDS,
+            )
+
+            # Parse Retry-After header
+            retry_after = None
+            retry_after_header = exc.response.headers.get("Retry-After")
+            if retry_after_header:
+                try:
+                    retry_after = float(retry_after_header)
+                except ValueError:
+                    pass
+
+            # Use defaults if no Retry-After header
+            if retry_after is None:
+                retry_after = (
+                    _HTTP_406_RETRY_AFTER_SECONDS
+                    if status == 406
+                    else _DEFAULT_RETRY_AFTER_SECONDS
+                )
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP {status}). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            return _rate_limited_response(
+                message,
+                retry_after_seconds=retry_after,
+                status_code=status,
+            )
+        # Handle other HTTP errors
         return _error(
-            f"arXiv source request failed with HTTP {exc.response.status_code}",
+            f"arXiv source request failed with HTTP {status}",
             paper_id,
         )
     except LatexSourceError as exc:
@@ -468,8 +538,43 @@ async def handle_get_paper_latex_section(
         )
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
     except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        # Handle rate limiting (406/429/503)
+        if status in (406, 429, 503):
+            from .search import (
+                _HTTP_406_RETRY_AFTER_SECONDS,
+                _DEFAULT_RETRY_AFTER_SECONDS,
+            )
+
+            # Parse Retry-After header
+            retry_after = None
+            retry_after_header = exc.response.headers.get("Retry-After")
+            if retry_after_header:
+                try:
+                    retry_after = float(retry_after_header)
+                except ValueError:
+                    pass
+
+            # Use defaults if no Retry-After header
+            if retry_after is None:
+                retry_after = (
+                    _HTTP_406_RETRY_AFTER_SECONDS
+                    if status == 406
+                    else _DEFAULT_RETRY_AFTER_SECONDS
+                )
+
+            message = (
+                f"arXiv is rate limiting this IP (HTTP {status}). "
+                f"Please wait {int(retry_after)} seconds before retrying."
+            )
+            return _rate_limited_response(
+                message,
+                retry_after_seconds=retry_after,
+                status_code=status,
+            )
+        # Handle other HTTP errors
         return _error(
-            f"arXiv source request failed with HTTP {exc.response.status_code}",
+            f"arXiv source request failed with HTTP {status}",
             paper_id,
         )
     except LatexSourceError as exc:

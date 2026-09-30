@@ -410,6 +410,7 @@ async def test_html_fetch_406_raises_rate_limit_error():
 
     mock_response = MagicMock()
     mock_response.status_code = 406
+    mock_response.headers = {}  # No Retry-After header
 
     with patch.object(httpx, "get", return_value=mock_response):
         with pytest.raises(ArxivRateLimitError) as exc_info:
@@ -520,3 +521,127 @@ async def test_download_pdf_http_error_no_traceback(temp_storage_path, mocker, c
     # Should log error, not exception (no traceback)
     assert "Download error for 2103.12345" in caplog.text
     assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_download_existence_check_500_no_url_leak(temp_storage_path, mocker):
+    """Existence check HTTP 500 should not leak URL or log traceback (#166, #277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+    import httpx
+    import logging
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+
+    # Mock _rate_limited_get to raise HTTPStatusError for 500
+    request = httpx.Request(
+        "GET", "https://export.arxiv.org/api/query?id_list=2103.12345"
+    )
+    response = httpx.Response(500, request=request)
+    mocker.patch.object(
+        download_module,
+        "_rate_limited_get",
+        side_effect=httpx.HTTPStatusError(
+            "Server error '500 Internal Server Error' for url 'https://export.arxiv.org/api/query?id_list=2103.12345'",
+            request=request,
+            response=response,
+        ),
+    )
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 500)" in result["message"]
+    # No URLs should appear
+    assert "https://" not in result["message"]
+    assert "http://" not in result["message"]
+    assert "export.arxiv.org" not in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, mocker):
+    """PDF metadata lookup 406 should be rate_limited, not leak URL (#166, #277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.tools.search import ArxivRateLimitError
+    import arxiv
+    import httpx
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+
+    # Mock arxiv client to raise HTTPError with URL
+    mock_client = mocker.MagicMock()
+    request = httpx.Request(
+        "GET", "https://export.arxiv.org/api/query?id_list=2103.12345"
+    )
+    response = httpx.Response(406, request=request)
+    mock_client.results.side_effect = httpx.HTTPStatusError(
+        "Page request resulted in HTTP 406 (https://export.arxiv.org/api/query?id_list=2103.12345)",
+        request=request,
+        response=response,
+    )
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 406
+    assert result["retry_after_seconds"] == 600.0
+    # No URLs should appear
+    assert "https://" not in result["message"]
+    assert "http://" not in result["message"]
+    assert "export.arxiv.org" not in result["message"]
+    # Should make minimal requests (check mock was called minimal times)
+    # arxiv client itself may retry, but we should catch and handle it
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_metadata_lookup_500_no_url_leak(temp_storage_path, mocker):
+    """PDF metadata lookup 500 should not leak URL (#166, #277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    import httpx
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+
+    # Mock arxiv client to raise HTTPError with URL
+    mock_client = mocker.MagicMock()
+    request = httpx.Request(
+        "GET", "https://export.arxiv.org/api/query?id_list=2103.12345"
+    )
+    response = httpx.Response(500, request=request)
+    mock_client.results.side_effect = httpx.HTTPStatusError(
+        "Server error '500 Internal Server Error' for url 'https://export.arxiv.org/api/query?id_list=2103.12345'",
+        request=request,
+        response=response,
+    )
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    assert "arXiv API HTTP error (HTTP 500)" in result["message"]
+    # No URLs should appear
+    assert "https://" not in result["message"]
+    assert "http://" not in result["message"]
+    assert "export.arxiv.org" not in result["message"]
