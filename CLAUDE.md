@@ -92,5 +92,5 @@ Paper storage is selected with the `--storage-path` command-line option and defa
 - Add a failing regression test before fixing a bug.
 - Run targeted tests during development, then the complete suite before proposing a merge.
 - Update user documentation for installation, configuration, tool-schema, or behavior changes.
-- Keep versions synchronized across `pyproject.toml`, `uv.lock`, `server.json`, `manifest.json`, and `.codex-plugin/plugin.json`.
+- Keep versions synchronized across `pyproject.toml`, `uv.lock`, `server.json`, `manifest.json`, `.codex-plugin/plugin.json`, and `.claude-plugin/plugin.json`.
 - Never include downloaded papers, local indexes, credentials, or private paths in commits or fixtures.
