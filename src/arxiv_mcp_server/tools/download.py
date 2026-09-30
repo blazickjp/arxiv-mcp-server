@@ -868,23 +868,24 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
         # arxiv.HTTPError has a status attribute
         status = e.status
         # Create httpx.HTTPStatusError for consistent handling by caller
-        request = httpx.Request("GET", f"(arXiv metadata for {paper_id})")
+        request = httpx.Request("GET", "(arXiv metadata)")
         response = httpx.Response(status, request=request)
         raise httpx.HTTPStatusError(
-            f"arXiv metadata request failed",
+            "arXiv metadata request failed",
             request=request,
             response=response,
         )
     except (
         requests.exceptions.ConnectionError,
         requests.exceptions.Timeout,
-        requests.exceptions.RequestException,
-    ) as e:
+    ):
         # Network errors: report cleanly without URL or traceback
-        raise RuntimeError(f"Could not reach arXiv (network error)")
-    except Exception:
-        # Other exceptions should propagate as-is
-        raise
+        raise RuntimeError("Could not reach arXiv (network error)") from None
+    finally:
+        # Close the per-call session created by the num_retries=0 client
+        session = getattr(client, "_session", None)
+        if session and hasattr(session, "close"):
+            session.close()
 
     pdf_path = get_paper_path(paper_id, ".pdf")
     _download_arxiv_pdf_to_path(paper, pdf_path)
@@ -1294,8 +1295,8 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Clean HTTP errors from stream_pdf_to_path (issue #166)
         safe_id = locals().get("paper_id") or "unknown"
         message = str(e)
-        # Only log traceback if it's not a known HTTP error
-        if "HTTP error" in message:
+        # Only log traceback if it's not a known HTTP or network error
+        if "HTTP error" in message or "network error" in message:
             logger.error("Download error for %s: %s", safe_id, message)
         else:
             logger.exception("Unexpected runtime error downloading %s", safe_id)

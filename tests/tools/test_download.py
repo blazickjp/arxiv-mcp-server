@@ -933,3 +933,42 @@ async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocke
     assert "https://" not in result["message"]
     assert "http://" not in result["message"]
     assert "export.arxiv.org" not in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_metadata_network_error_no_traceback_or_url_in_logs(
+    temp_storage_path, mocker, caplog
+):
+    """Network errors during PDF metadata lookup should not log traceback or URL (#277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    import requests
+    import logging
+
+    caplog.set_level(logging.ERROR)
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+
+    # Mock get_arxiv_client to return a client that raises ConnectionError with URL
+    mock_client = mocker.MagicMock()
+    mock_client.results.side_effect = requests.exceptions.ConnectionError(
+        "Connection refused for https://export.arxiv.org/api/query?id_list=2103.12345"
+    )
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    # Check logs: should have error log but no traceback
+    assert "Download error for 2103.12345" in caplog.text
+    assert "Traceback" not in caplog.text
+    # No URL should appear in logs
+    assert "export.arxiv.org" not in caplog.text
+    assert "https://" not in caplog.text
