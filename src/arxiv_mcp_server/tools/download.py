@@ -5,6 +5,7 @@ import gc
 import json
 import asyncio
 import httpx
+import requests
 from html.parser import HTMLParser
 import re
 from pathlib import Path
@@ -853,8 +854,10 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
         )
 
     # Use a client with minimal retries for the metadata lookup to avoid
-    # making many requests on 406/429/503 (issue #277)
-    client = arxiv.Client(num_retries=0, delay_seconds=3.0)
+    # making many requests on 406/429/503 (issue #277).
+    # Note: Retry-After headers cannot be honored on this path because the
+    # arxiv package's HTTPError does not preserve response headers.
+    client = get_arxiv_client(num_retries=0)
     try:
         paper = ARXIV_RATE_LIMITER.run_sync(
             lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
@@ -872,8 +875,15 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
             request=request,
             response=response,
         )
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.RequestException,
+    ) as e:
+        # Network errors: report cleanly without URL or traceback
+        raise RuntimeError(f"Could not reach arXiv (network error)")
     except Exception:
-        # Non-HTTP exceptions (network errors, etc.) should not be mapped to HTTP status
+        # Other exceptions should propagate as-is
         raise
 
     pdf_path = get_paper_path(paper_id, ".pdf")

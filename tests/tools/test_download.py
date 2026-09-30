@@ -581,14 +581,14 @@ async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, m
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise HTTPError with status 406
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 406
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2103.12345",
         0,
         406,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2103.12345"})
     result = json.loads(response[0].text)
@@ -617,14 +617,14 @@ async def test_download_pdf_metadata_lookup_500_no_url_leak(temp_storage_path, m
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise HTTPError with status 500
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 500
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2103.12345",
         0,
         500,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2103.12345"})
     result = json.loads(response[0].text)
@@ -655,14 +655,14 @@ async def test_pdf_metadata_500_on_2406_id_not_406_rate_limit(
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise arxiv.HTTPError with status 500
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 500
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2406.12345",
         0,
         500,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2406.12345"})
     result = json.loads(response[0].text)
@@ -694,14 +694,14 @@ async def test_pdf_metadata_500_on_2503_id_not_503_rate_limit(
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise arxiv.HTTPError with status 500
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 500
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2503.01234",
         0,
         500,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2503.01234"})
     result = json.loads(response[0].text)
@@ -732,14 +732,14 @@ async def test_pdf_metadata_502_on_2406_id_not_406_rate_limit(
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise arxiv.HTTPError with status 502
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 502
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2406.12345",
         0,
         502,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2406.12345"})
     result = json.loads(response[0].text)
@@ -770,14 +770,14 @@ async def test_pdf_metadata_502_on_2503_id_not_503_rate_limit(
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise arxiv.HTTPError with status 502
+    # Mock get_arxiv_client to return a client that raises HTTPError with status 502
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2503.01234",
         0,
         502,
     )
-    mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2503.01234"})
     result = json.loads(response[0].text)
@@ -806,12 +806,12 @@ async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocke
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise ConnectionError
+    # Mock get_arxiv_client to return a client that raises ConnectionError
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = requests.exceptions.ConnectionError(
         "Connection refused"
     )
-    mocker.patch.object(download_module.arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2406.12345"})
     result = json.loads(response[0].text)
@@ -819,8 +819,10 @@ async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocke
     assert result["status"] == "error"
     # Must NOT be reported as rate limit
     assert result["status"] != "rate_limited"
-    # Should mention connection error
-    assert "Connection" in result["message"] or "error" in result["message"]
+    # Should mention network error
+    assert (
+        "network" in result["message"].lower() or "reach" in result["message"].lower()
+    )
     # No URLs should appear
     assert "https://" not in result["message"]
     assert "http://" not in result["message"]
@@ -841,12 +843,12 @@ async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocke
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to raise ConnectionError
+    # Mock get_arxiv_client to return a client that raises ConnectionError
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = requests.exceptions.ConnectionError(
         "Connection refused"
     )
-    mocker.patch.object(download_module.arxiv, "Client", return_value=mock_client)
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
 
     response = await handle_download({"paper_id": "2503.01234"})
     result = json.loads(response[0].text)
@@ -854,8 +856,10 @@ async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocke
     assert result["status"] == "error"
     # Must NOT be reported as rate limit
     assert result["status"] != "rate_limited"
-    # Should mention connection error
-    assert "Connection" in result["message"] or "error" in result["message"]
+    # Should mention network error
+    assert (
+        "network" in result["message"].lower() or "reach" in result["message"].lower()
+    )
     # No URLs should appear
     assert "https://" not in result["message"]
     assert "http://" not in result["message"]
@@ -876,21 +880,56 @@ async def test_pdf_metadata_406_minimal_retries(temp_storage_path, mocker):
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
 
-    # Mock arxiv.Client to track call count
+    # Mock get_arxiv_client to track call count
     mock_client = mocker.MagicMock()
     mock_client.results.side_effect = arxiv.HTTPError(
         "https://export.arxiv.org/api/query?id_list=2103.12345",
         0,
         406,
     )
-    mock_client_ctor = mocker.patch.object(arxiv, "Client", return_value=mock_client)
+    mock_get_client = mocker.patch.object(
+        download_module, "get_arxiv_client", return_value=mock_client
+    )
 
     response = await handle_download({"paper_id": "2103.12345"})
     result = json.loads(response[0].text)
 
     assert result["status"] == "rate_limited"
     assert result["http_status"] == 406
-    # Verify client was created with num_retries=0 (1 attempt total)
-    mock_client_ctor.assert_called_once()
-    call_kwargs = mock_client_ctor.call_args[1]
-    assert call_kwargs["num_retries"] == 0
+    # Verify get_arxiv_client was called with num_retries=0
+    mock_get_client.assert_called_once_with(num_retries=0)
+
+
+@pytest.mark.asyncio
+async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocker):
+    """Network errors during PDF metadata lookup should report cleanly without URL or traceback (#277)."""
+    from arxiv_mcp_server.tools import download as download_module
+    import requests
+
+    mocker.patch.object(
+        download_module,
+        "get_paper_path",
+        side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
+    )
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+
+    # Mock get_arxiv_client to return a client that raises ConnectionError
+    mock_client = mocker.MagicMock()
+    mock_client.results.side_effect = requests.exceptions.ConnectionError(
+        "Connection refused for https://export.arxiv.org/api/query?id_list=2103.12345"
+    )
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    response = await handle_download({"paper_id": "2103.12345"})
+    result = json.loads(response[0].text)
+
+    assert result["status"] == "error"
+    # Should mention network error but not URLs
+    assert (
+        "network" in result["message"].lower() or "reach" in result["message"].lower()
+    )
+    assert "https://" not in result["message"]
+    assert "http://" not in result["message"]
+    assert "export.arxiv.org" not in result["message"]
