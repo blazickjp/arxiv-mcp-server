@@ -852,54 +852,28 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
             "pip install arxiv-mcp-server[pdf]"
         )
 
-    client = get_arxiv_client()
+    # Use a client with minimal retries for the metadata lookup to avoid
+    # making many requests on 406/429/503 (issue #277)
+    client = arxiv.Client(num_retries=0, delay_seconds=3.0)
     try:
         paper = ARXIV_RATE_LIMITER.run_sync(
             lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
         )
     except StopIteration:
         raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
-    except httpx.HTTPStatusError:
-        # Let HTTPStatusError propagate - caller will handle 406/429/503 vs other codes
-        raise
-    except Exception as e:
-        # arxiv package may raise other HTTP-related exceptions
-        # Check if it's an HTTP error and convert to httpx.HTTPStatusError for consistent handling
-        error_str = str(e).lower()
-        if "406" in error_str or "not acceptable" in error_str:
-            # Create a mock response for 406
-            request = httpx.Request("GET", f"(arXiv API query for {paper_id})")
-            response = httpx.Response(406, request=request)
-            raise httpx.HTTPStatusError(
-                f"arXiv metadata request HTTP 406",
-                request=request,
-                response=response,
-            )
-        elif "429" in error_str or "rate limit" in error_str:
-            request = httpx.Request("GET", f"(arXiv API query for {paper_id})")
-            response = httpx.Response(429, request=request)
-            raise httpx.HTTPStatusError(
-                f"arXiv metadata request HTTP 429",
-                request=request,
-                response=response,
-            )
-        elif "503" in error_str or "service unavailable" in error_str:
-            request = httpx.Request("GET", f"(arXiv API query for {paper_id})")
-            response = httpx.Response(503, request=request)
-            raise httpx.HTTPStatusError(
-                f"arXiv metadata request HTTP 503",
-                request=request,
-                response=response,
-            )
-        elif "500" in error_str or "internal server error" in error_str:
-            request = httpx.Request("GET", f"(arXiv API query for {paper_id})")
-            response = httpx.Response(500, request=request)
-            raise httpx.HTTPStatusError(
-                f"arXiv metadata request HTTP 500",
-                request=request,
-                response=response,
-            )
-        # For other exceptions, just re-raise
+    except arxiv.HTTPError as e:
+        # arxiv.HTTPError has a status attribute
+        status = e.status
+        # Create httpx.HTTPStatusError for consistent handling by caller
+        request = httpx.Request("GET", f"(arXiv metadata for {paper_id})")
+        response = httpx.Response(status, request=request)
+        raise httpx.HTTPStatusError(
+            f"arXiv metadata request failed",
+            request=request,
+            response=response,
+        )
+    except Exception:
+        # Non-HTTP exceptions (network errors, etc.) should not be mapped to HTTP status
         raise
 
     pdf_path = get_paper_path(paper_id, ".pdf")
