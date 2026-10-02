@@ -19,6 +19,7 @@ from ..arxiv_api import (
     ARXIV_RATE_LIMITER,
     stream_pdf_to_path,
     ArxivRateLimitError,
+    ArxivTimeoutError,
     retry_with_backoff,
 )
 from .content import add_content_payload, CONTENT_WARNING
@@ -762,27 +763,32 @@ download_tool = types.Tool(
 # ---------------------------------------------------------------------------
 
 
-def _fetch_html_content(paper_id: str) -> str | None:
+def _fetch_html_content(paper_id: str, deadline: float) -> str | None:
     """Try to get paper content from the arXiv HTML endpoint (sync wrapper).
 
     This function is called via asyncio.to_thread() from async code, so it runs
     in a worker thread. Rate limiter lock acquired per attempt, not held through sleeps.
+
+    Args:
+        paper_id: arXiv paper ID.
+        deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
+
+    Returns:
+        HTML text content on success, None if HTML is unavailable or budget exhausted.
     """
     import random
 
     # Retry loop is outside rate limiter so lock is released during sleeps
     last_exception: Exception | None = None
-    start_time = time.monotonic()
-    max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
+
+    def remaining_time() -> float:
+        return max(0.0, deadline - time.monotonic())
 
     for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
         # Check budget before attempt
-        elapsed = time.monotonic() - start_time
-        remaining = max_total_time - elapsed
+        remaining = remaining_time()
         if remaining <= 0.1:
-            logger.info(
-                f"HTML fetch budget exhausted ({elapsed:.1f}s >= {max_total_time}s), will try PDF"
-            )
+            logger.info(f"HTML fetch budget exhausted, will try PDF")
             return None
 
         try:
@@ -790,6 +796,9 @@ def _fetch_html_content(paper_id: str) -> str | None:
             attempt_timeout = min(
                 float(settings.ARXIV_REQUEST_TIMEOUT), remaining * 0.9
             )
+            if attempt_timeout < 1.0:
+                logger.info(f"HTML fetch insufficient budget for attempt, will try PDF")
+                return None
             # Rate limiter only holds lock for this attempt
             return ARXIV_RATE_LIMITER.run_sync(
                 lambda: _fetch_html_content_single_attempt(paper_id, attempt_timeout)
@@ -807,7 +816,7 @@ def _fetch_html_content(paper_id: str) -> str | None:
                     settings.ARXIV_MAX_BACKOFF,
                 )
                 # Cap wait to remaining budget
-                remaining = max_total_time - (time.monotonic() - start_time)
+                remaining = remaining_time()
                 if wait >= remaining or remaining <= 0.1:
                     logger.info(
                         f"HTML fetch timeout: insufficient budget for retry, will try PDF"
@@ -837,7 +846,7 @@ def _fetch_html_content(paper_id: str) -> str | None:
                     settings.ARXIV_MAX_BACKOFF,
                 )
                 # Cap wait to remaining budget
-                remaining = max_total_time - (time.monotonic() - start_time)
+                remaining = remaining_time()
                 if wait >= remaining or remaining <= 0.1:
                     logger.info(
                         f"HTML fetch connection error: insufficient budget for retry, will try PDF"
@@ -891,23 +900,12 @@ def _fetch_html_content_single_attempt(
         logger.info(f"HTML not available for {paper_id}, will try PDF")
         return None
     elif response.status_code in (406, 429, 503):
-        # 406 is IP-level burst throttling - caller will retry minimally
-        from ..arxiv_api import _parse_retry_after_seconds
-
-        retry_after_seconds = 60.0
-        if response.status_code == 406:
-            retry_after_seconds = 600.0
-        retry_after_header = response.headers.get("Retry-After")
-        if retry_after_header:
-            parsed = _parse_retry_after_seconds(retry_after_header)
-            if parsed is not None:
-                retry_after_seconds = parsed
-        raise ArxivRateLimitError(
-            f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-            f"Please wait {int(retry_after_seconds)} seconds before retrying.",
-            status_code=response.status_code,
-            retry_after_seconds=retry_after_seconds,
+        # HTML rate limiting: fall back to PDF (restore main's behavior)
+        # 406 is IP-level burst throttling, 429 is quota, 503 is temporary unavailability
+        logger.info(
+            f"HTML rate limited (HTTP {response.status_code}) for {paper_id}, will try PDF"
         )
+        return None
     else:
         # Other status codes are not retryable
         logger.info(
@@ -933,8 +931,16 @@ async def _paper_exists_on_arxiv(paper_id: str) -> bool:
     return bool(root.findall("atom:entry", ARXIV_NS))
 
 
-def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
-    """Persist an arXiv PDF using the version-independent streaming helper."""
+def _download_arxiv_pdf_to_path(
+    paper: arxiv.Result, pdf_path: Path, deadline: float
+) -> None:
+    """Persist an arXiv PDF using the version-independent streaming helper.
+
+    Args:
+        paper: arXiv result with PDF URL.
+        pdf_path: Path where the PDF will be saved.
+        deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
+    """
     stream_pdf_to_path(
         paper,
         pdf_path,
@@ -943,22 +949,32 @@ def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
             f"{settings.APP_NAME}/{settings.APP_VERSION} "
             "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
         ),
+        deadline=deadline,
     )
 
 
-def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
+def _fetch_pdf_content_unlocked(
+    paper_id: str, deadline: float
+) -> tuple[str, arxiv.Result]:
     """Download the PDF from arXiv and convert it to Markdown synchronously.
 
     The PDF bytes are fetched with :func:`_download_arxiv_pdf_to_path` rather
     than ``arxiv.Result.download_pdf()`` to avoid truncated downloads on
     ``export.arxiv.org`` for some files.
 
-    Returns (markdown_text, arxiv_result).
-    Raises PaperNotFoundError if the paper does not exist, or other exceptions
-    on network/conversion failures.
-    Raises ImportError (with a helpful message) if the [pdf] extra is not installed.
-    Raises ArxivRateLimitError on 406/429/503 (406 uses minimal retry per #277).
-    Raises httpx.HTTPStatusError on other HTTP errors (cleaned by caller).
+    Args:
+        paper_id: arXiv paper ID.
+        deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
+
+    Returns:
+        (markdown_text, arxiv_result).
+
+    Raises:
+        PaperNotFoundError if the paper does not exist, or other exceptions
+        on network/conversion failures.
+        ImportError (with a helpful message) if the [pdf] extra is not installed.
+        ArxivRateLimitError on 406/429/503 (406 uses minimal retry per #277).
+        httpx.HTTPStatusError on other HTTP errors (cleaned by caller).
     """
     if not _load_pdf_dependencies():
         raise ImportError(
@@ -1001,7 +1017,7 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
             session.close()
 
     pdf_path = get_paper_path(paper_id, ".pdf")
-    _download_arxiv_pdf_to_path(paper, pdf_path)
+    _download_arxiv_pdf_to_path(paper, pdf_path, deadline)
 
     try:
         logger.info(f"Converting PDF to markdown for {paper_id}")
@@ -1017,11 +1033,16 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
             pass
 
 
-def _fetch_pdf_content(paper_id: str) -> tuple[str, arxiv.Result]:
-    """Serialize download and conversion for requests targeting the same paper."""
+def _fetch_pdf_content(paper_id: str, deadline: float) -> tuple[str, arxiv.Result]:
+    """Serialize download and conversion for requests targeting the same paper.
+
+    Args:
+        paper_id: arXiv paper ID.
+        deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
+    """
     lock = _pdf_conversion_locks[hash(paper_id) % len(_pdf_conversion_locks)]
     with lock:
-        return _fetch_pdf_content_unlocked(paper_id)
+        return _fetch_pdf_content_unlocked(paper_id, deadline)
 
 
 def _metadata_from_arxiv_result(paper_id: str, paper) -> dict[str, Any]:
@@ -1106,7 +1127,16 @@ def _persist_paper_metadata(
 
 
 async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
-    """Handle paper download requests synchronously (HTML first, then PDF)."""
+    """Handle paper download requests synchronously (HTML first, then PDF).
+
+    Uses a single deadline for the entire operation (HTML + existence check + PDF)
+    to ensure the total time stays within ARXIV_MAX_TOTAL_TIME.
+    """
+    # Create single deadline for entire operation
+    start_time = time.monotonic()
+    max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
+    deadline = start_time + max_total_time
+
     try:
         raw_id = arguments["paper_id"]
         paper_id = parse_arxiv_id(raw_id) if isinstance(raw_id, str) else None
@@ -1200,7 +1230,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 ]
 
         # --- Try HTML endpoint first ---
-        html_text = await asyncio.to_thread(_fetch_html_content, paper_id)
+        html_text = await asyncio.to_thread(_fetch_html_content, paper_id, deadline)
 
         if html_text is not None:
             # Save to cache under the bare ID
@@ -1262,7 +1292,9 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             ]
 
         logger.info(f"Falling back to PDF download for {paper_id}")
-        markdown, arxiv_result = await asyncio.to_thread(_fetch_pdf_content, paper_id)
+        markdown, arxiv_result = await asyncio.to_thread(
+            _fetch_pdf_content, paper_id, deadline
+        )
 
         # Save to cache under the bare ID
         md_path.write_text(markdown, encoding="utf-8")
@@ -1400,6 +1432,22 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                     {
                         "status": "error",
                         "message": f"Storage error while saving paper {safe_id}",
+                    }
+                ),
+            )
+        ]
+    except ArxivTimeoutError as e:
+        # Budget exhaustion from HTML, PDF, or existence check
+        safe_id = locals().get("paper_id") or "unknown"
+        message = str(e)
+        logger.error("Timeout downloading %s: %s", safe_id, message)
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "status": "error",
+                        "message": message,
                     }
                 ),
             )

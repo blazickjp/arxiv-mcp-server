@@ -79,8 +79,9 @@ def _download_source_archive(paper_id: str) -> bytes:
                         pass
                 chunks: list[bytes] = []
                 received = 0
-                for chunk in response.iter_bytes(chunk_size=256 * 1024):
-                    # Check wall-clock deadline
+                # Use smaller chunk size for trickle detection (32KB vs 256KB)
+                for chunk in response.iter_bytes(chunk_size=32 * 1024):
+                    # Check wall-clock deadline before processing each chunk
                     if time.monotonic() >= deadline:
                         raise LatexSourceError(
                             f"LaTeX source download exceeded deadline (trickling response)"

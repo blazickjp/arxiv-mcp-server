@@ -443,21 +443,25 @@ def stream_pdf_to_path(
     *,
     request_timeout: float,
     user_agent: str,
+    deadline: float | None = None,
 ) -> None:
     """Stream an arXiv PDF to disk with bounded memory usage.
 
     Handles arXiv HTTP 406/429/503 (throttling) with retries and exponential backoff.
     HTTP 406 uses minimal retries to avoid prolonging IP-level block (#277).
+
+    Args:
+        paper: arXiv result with PDF URL.
+        destination: Path where the PDF will be saved.
+        request_timeout: Per-attempt read timeout in seconds.
+        user_agent: User-Agent string for HTTP requests.
+        deadline: Optional wall-clock deadline (time.monotonic()) for the entire
+            download_paper operation. When provided, this function caps its attempts
+            to the remaining time and starts a fresh budget only if deadline is None.
     """
     from .config import Settings
 
     settings = Settings()
-    timeout = httpx.Timeout(
-        connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-        read=request_timeout,
-        write=30.0,
-        pool=30.0,
-    )
     headers = {"User-Agent": user_agent}
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, staging_name = tempfile.mkstemp(
@@ -468,38 +472,62 @@ def stream_pdf_to_path(
     os.close(descriptor)
     staging = Path(staging_name)
 
-    try:
-
-        def sync_download() -> None:
-            """Synchronous download operation wrapped for retry logic."""
-            with httpx.Client(
-                timeout=timeout, follow_redirects=True, headers=headers
-            ) as client:
-                with client.stream("GET", canonical_pdf_url(paper)) as response:
-                    response.raise_for_status()
-                    with staging.open("wb") as output:
-                        for chunk in response.iter_bytes(chunk_size=256 * 1024):
-                            output.write(chunk)
-
-        # Run the download with retry logic (synchronous path)
-        # Note: We can't use async retry here, so we do manual retry
-        import random
-
-        last_exception: Exception | None = None
-        start_time = time.monotonic()
+    # Use provided deadline or start fresh budget
+    start_time = time.monotonic()
+    if deadline is None:
         max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
+        deadline = start_time + max_total_time
+
+    def remaining_time() -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    def sync_download(attempt_timeout: float) -> None:
+        """Synchronous download operation with capped timeout."""
+        timeout = httpx.Timeout(
+            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+            read=attempt_timeout,
+            write=30.0,
+            pool=30.0,
+        )
+        with httpx.Client(
+            timeout=timeout, follow_redirects=True, headers=headers
+        ) as client:
+            with client.stream("GET", canonical_pdf_url(paper)) as response:
+                response.raise_for_status()
+                with staging.open("wb") as output:
+                    # Use smaller chunk size for trickle detection (32KB vs 256KB)
+                    for chunk in response.iter_bytes(chunk_size=32 * 1024):
+                        # Check wall-clock deadline for trickling responses
+                        if time.monotonic() >= deadline:
+                            raise ArxivTimeoutError(
+                                "PDF download exceeded deadline (trickling response). "
+                                "Please retry shortly."
+                            )
+                        output.write(chunk)
+
+    try:
+        last_exception: Exception | None = None
 
         for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
-            # Check budget before attempt
-            elapsed = time.monotonic() - start_time
-            if elapsed >= max_total_time:
+            # Check remaining budget before attempt
+            remaining = remaining_time()
+            if remaining <= 0.1:
                 staging.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"PDF download budget exhausted after {int(elapsed)}s. Please retry shortly."
+                raise ArxivTimeoutError(
+                    f"PDF download budget exhausted. Please retry shortly."
                 )
 
             try:
-                sync_download()
+                # Cap this attempt's timeout to remaining budget
+                attempt_timeout = min(request_timeout, remaining * 0.9)
+                if attempt_timeout < 1.0:
+                    # Not enough time for a meaningful attempt
+                    staging.unlink(missing_ok=True)
+                    raise ArxivTimeoutError(
+                        f"PDF download timed out (insufficient budget for retry). "
+                        f"Please retry shortly."
+                    )
+                sync_download(attempt_timeout)
                 staging.replace(destination)
                 return
             except httpx.TimeoutException as e:
@@ -512,10 +540,10 @@ def stream_pdf_to_path(
                         settings.ARXIV_MAX_BACKOFF,
                     )
                     # Cap wait to remaining budget
-                    remaining = max_total_time - (time.monotonic() - start_time)
+                    remaining = remaining_time()
                     if wait >= remaining:
                         staging.unlink(missing_ok=True)
-                        raise RuntimeError(
+                        raise ArxivTimeoutError(
                             f"PDF download timed out (insufficient budget for retry). "
                             f"Please retry shortly."
                         ) from e
@@ -530,8 +558,7 @@ def stream_pdf_to_path(
                     time.sleep(wait)
                 else:
                     staging.unlink(missing_ok=True)
-                    # PDF timeout is an honest timeout, not rate limiting
-                    raise RuntimeError(
+                    raise ArxivTimeoutError(
                         f"arXiv PDF download timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts. "
                         f"The arXiv PDF server may be slow or overloaded. Please retry shortly."
                     ) from e
@@ -545,10 +572,10 @@ def stream_pdf_to_path(
                         settings.ARXIV_MAX_BACKOFF,
                     )
                     # Cap wait to remaining budget
-                    remaining = max_total_time - (time.monotonic() - start_time)
+                    remaining = remaining_time()
                     if wait >= remaining:
                         staging.unlink(missing_ok=True)
-                        raise RuntimeError(
+                        raise ArxivTimeoutError(
                             f"Could not connect to arXiv for PDF download (insufficient budget for retry)"
                         ) from e
                     wait = min(wait, remaining * 0.9)
@@ -576,28 +603,41 @@ def stream_pdf_to_path(
                     )
                     if attempt < max_retries_for_status:
                         retry_after = e.response.headers.get("Retry-After")
+                        parsed_retry_after = _parse_retry_after_seconds(retry_after)
+
+                        # If Retry-After exceeds max_backoff or remaining budget,
+                        # return rate_limited immediately instead of sleeping and retrying
+                        remaining = remaining_time()
+                        if parsed_retry_after is not None:
+                            if (
+                                parsed_retry_after > settings.ARXIV_MAX_BACKOFF
+                                or parsed_retry_after >= remaining
+                            ):
+                                staging.unlink(missing_ok=True)
+                                raise ArxivRateLimitError(
+                                    f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
+                                    f"Please wait {int(parsed_retry_after)} seconds before retrying.",
+                                    status_code=e.response.status_code,
+                                    retry_after_seconds=parsed_retry_after,
+                                ) from e
+
+                        # Calculate exponential backoff
                         wait = min(
                             settings.ARXIV_INITIAL_BACKOFF
                             * (2**attempt)
                             * (0.5 + random.random()),
                             settings.ARXIV_MAX_BACKOFF,
                         )
-                        if retry_after:
-                            try:
-                                wait = min(
-                                    max(wait, float(retry_after)),
-                                    settings.ARXIV_MAX_BACKOFF,
-                                )
-                            except ValueError:
-                                pass
+                        # Use Retry-After as floor if available and within limits
+                        if parsed_retry_after is not None:
+                            wait = max(wait, parsed_retry_after)
 
                         # Cap wait to remaining budget
-                        remaining = max_total_time - (time.monotonic() - start_time)
                         if wait >= remaining:
                             staging.unlink(missing_ok=True)
                             retry_after_seconds = (
-                                float(retry_after)
-                                if retry_after
+                                parsed_retry_after
+                                if parsed_retry_after is not None
                                 else (600.0 if e.response.status_code == 406 else 60.0)
                             )
                             raise ArxivRateLimitError(
@@ -606,7 +646,7 @@ def stream_pdf_to_path(
                                 status_code=e.response.status_code,
                                 retry_after_seconds=retry_after_seconds,
                             ) from e
-                        wait = min(wait, remaining * 0.9)  # Leave 10% buffer
+                        wait = min(wait, remaining * 0.9)
 
                         logger.warning(
                             "PDF download HTTP %d; retrying in %.1fs (attempt %d/%d)",
