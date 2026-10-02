@@ -313,8 +313,12 @@ async def _s2_get(
         )
     except Exception as e:
         # Convert arXiv-prefixed errors to Semantic Scholar equivalents for this tool
-        from ..arxiv_api import ArxivRateLimitError, ArxivTimeoutError, ArxivConnectionError
-        
+        from ..arxiv_api import (
+            ArxivRateLimitError,
+            ArxivTimeoutError,
+            ArxivConnectionError,
+        )
+
         if isinstance(e, ArxivRateLimitError):
             # Provide accurate message based on status code
             if e.status_code == 503:

@@ -407,17 +407,20 @@ async def test_html_fetch_406_raises_rate_limit_error():
     from arxiv_mcp_server.tools.search import ArxivRateLimitError
     import httpx
     from unittest.mock import MagicMock, patch
+    import time
 
     mock_response = MagicMock()
     mock_response.status_code = 406
     mock_response.headers = {}  # No Retry-After header
 
     with patch.object(httpx, "get", return_value=mock_response):
-        with pytest.raises(ArxivRateLimitError) as exc_info:
-            _fetch_html_content("2103.12345")
+        with patch.object(time, "sleep"):  # Mock sleep to avoid delays
+            with pytest.raises(ArxivRateLimitError) as exc_info:
+                _fetch_html_content("2103.12345")
 
         assert exc_info.value.status_code == 406
         assert exc_info.value.retry_after_seconds == 600.0
+        assert "HTTP 406" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

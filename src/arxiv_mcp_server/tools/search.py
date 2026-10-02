@@ -90,11 +90,12 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
 
     async def single_request() -> httpx.Response:
         """Single request wrapped with rate limiting."""
+
         async def request() -> httpx.Response:
             response = await client.get(url, headers=ARXIV_HEADERS)
             response.raise_for_status()
             return response
-        
+
         # Rate limiter only holds lock for the actual request
         return await ARXIV_RATE_LIMITER.run_async(request)
 

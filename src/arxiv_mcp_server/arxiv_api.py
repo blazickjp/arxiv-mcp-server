@@ -100,7 +100,7 @@ class ArxivRateLimitError(RetryableError):
 
 def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
     """Parse Retry-After header into seconds.
-    
+
     Supports both delay-seconds (integer) and HTTP-date formats.
     Returns None if unparseable or not provided.
     """
@@ -111,12 +111,12 @@ def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
         return float(retry_after)
     except ValueError:
         pass
-    
+
     # Try as HTTP-date (RFC 7231)
     try:
         from email.utils import parsedate_to_datetime
         import datetime
-        
+
         retry_dt = parsedate_to_datetime(retry_after)
         now = datetime.datetime.now(datetime.timezone.utc)
         delta = (retry_dt - now).total_seconds()
@@ -145,17 +145,17 @@ def _compute_backoff_seconds(
         Retry-After (if provided) is used as a floor BEFORE jitter.
     """
     delay = min(initial_backoff * (2**attempt), max_backoff)
-    
+
     # Parse and apply Retry-After as floor
     parsed_retry_after = _parse_retry_after_seconds(retry_after)
     if parsed_retry_after is not None:
         delay = max(delay, parsed_retry_after)
-    
+
     # Apply jitter (0.5 to 1.0 multiplier) but respect Retry-After floor
     jittered = delay * (0.5 + random.random())
     if parsed_retry_after is not None:
         jittered = max(jittered, parsed_retry_after)
-    
+
     return min(jittered, max_backoff)
 
 
@@ -245,9 +245,7 @@ async def retry_with_backoff(
                     max_total_time,
                 )
                 # Determine if this was due to rate limiting
-                if last_exception and isinstance(
-                    last_exception, httpx.HTTPStatusError
-                ):
+                if last_exception and isinstance(last_exception, httpx.HTTPStatusError):
                     status_code = last_exception.response.status_code
                     if status_code in (429, 503, 406):
                         # Budget expired while handling rate limit
@@ -489,7 +487,7 @@ def stream_pdf_to_path(
         last_exception: Exception | None = None
         start_time = time.monotonic()
         max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
-        
+
         for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
             # Check budget before attempt
             elapsed = time.monotonic() - start_time
@@ -498,7 +496,7 @@ def stream_pdf_to_path(
                 raise RuntimeError(
                     f"PDF download budget exhausted after {int(elapsed)}s. Please retry shortly."
                 )
-            
+
             try:
                 sync_download()
                 staging.replace(destination)
@@ -521,7 +519,7 @@ def stream_pdf_to_path(
                             f"Please retry shortly."
                         ) from e
                     wait = min(wait, remaining - 1.0)
-                    
+
                     logger.warning(
                         "PDF download timed out; retrying in %.1fs (attempt %d/%d)",
                         wait,
@@ -553,7 +551,7 @@ def stream_pdf_to_path(
                             f"Could not connect to arXiv for PDF download (insufficient budget for retry)"
                         ) from e
                     wait = min(wait, remaining - 1.0)
-                    
+
                     logger.warning(
                         "PDF download connection error; retrying in %.1fs (attempt %d/%d)",
                         wait,
@@ -591,12 +589,16 @@ def stream_pdf_to_path(
                                 )
                             except ValueError:
                                 pass
-                        
+
                         # Cap wait to remaining budget
                         remaining = max_total_time - (time.monotonic() - start_time)
                         if wait >= remaining:
                             staging.unlink(missing_ok=True)
-                            retry_after_seconds = float(retry_after) if retry_after else (600.0 if e.response.status_code == 406 else 60.0)
+                            retry_after_seconds = (
+                                float(retry_after)
+                                if retry_after
+                                else (600.0 if e.response.status_code == 406 else 60.0)
+                            )
                             raise ArxivRateLimitError(
                                 f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
                                 f"Please wait {int(retry_after_seconds)} seconds before retrying.",
@@ -604,7 +606,7 @@ def stream_pdf_to_path(
                                 retry_after_seconds=retry_after_seconds,
                             ) from e
                         wait = min(wait, remaining - 1.0)
-                        
+
                         logger.warning(
                             "PDF download HTTP %d; retrying in %.1fs (attempt %d/%d)",
                             e.response.status_code,
