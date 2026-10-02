@@ -481,29 +481,32 @@ def stream_pdf_to_path(
     def remaining_time() -> float:
         return max(0.0, deadline - time.monotonic())
 
-    def sync_download(attempt_timeout: float) -> None:
-        """Synchronous download operation with capped timeout."""
-        timeout = httpx.Timeout(
-            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-            read=attempt_timeout,
-            write=30.0,
-            pool=30.0,
-        )
-        with httpx.Client(
-            timeout=timeout, follow_redirects=True, headers=headers
-        ) as client:
-            with client.stream("GET", canonical_pdf_url(paper)) as response:
-                response.raise_for_status()
-                with staging.open("wb") as output:
-                    # Use smaller chunk size for trickle detection (32KB vs 256KB)
-                    for chunk in response.iter_bytes(chunk_size=32 * 1024):
-                        # Check wall-clock deadline for trickling responses
-                        if time.monotonic() >= deadline:
-                            raise ArxivTimeoutError(
-                                "PDF download exceeded deadline (trickling response). "
-                                "Please retry shortly."
-                            )
-                        output.write(chunk)
+        def sync_download(attempt_timeout: float) -> None:
+            """Synchronous download operation with capped timeout."""
+            timeout = httpx.Timeout(
+                connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+                read=attempt_timeout,
+                write=30.0,
+                pool=30.0,
+            )
+            with httpx.Client(
+                timeout=timeout, follow_redirects=True, headers=headers
+            ) as client:
+                with client.stream("GET", canonical_pdf_url(paper)) as response:
+                    response.raise_for_status()
+                    with staging.open("wb") as output:
+                        # Use iter_raw() instead of iter_bytes() for true per-read deadline check
+                        # iter_bytes() buffers until chunk_size arrives, so with 1-byte drip
+                        # the deadline check never runs
+                        for chunk in response.iter_raw(chunk_size=32 * 1024):
+                            # Check wall-clock deadline for trickling responses
+                            if time.monotonic() >= deadline:
+                                raise ArxivTimeoutError(
+                                    "PDF download exceeded deadline (trickling response). "
+                                    "Please retry shortly."
+                                )
+                            if chunk:  # iter_raw can return empty chunks
+                                output.write(chunk)
 
     try:
         last_exception: Exception | None = None

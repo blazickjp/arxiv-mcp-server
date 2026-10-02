@@ -79,19 +79,22 @@ def _download_source_archive(paper_id: str) -> bytes:
                         pass
                 chunks: list[bytes] = []
                 received = 0
-                # Use smaller chunk size for trickle detection (32KB vs 256KB)
-                for chunk in response.iter_bytes(chunk_size=32 * 1024):
+                # Use iter_raw() instead of iter_bytes() for true per-read deadline check
+                # iter_bytes() buffers until chunk_size arrives, so with 1-byte drip
+                # the deadline check never runs
+                for chunk in response.iter_raw(chunk_size=32 * 1024):
                     # Check wall-clock deadline before processing each chunk
                     if time.monotonic() >= deadline:
                         raise LatexSourceError(
                             f"LaTeX source download exceeded deadline (trickling response)"
                         )
-                    received += len(chunk)
-                    if received > MAX_ARCHIVE_BYTES:
-                        raise SourceArchiveLimitError(
-                            "LaTeX source compressed archive exceeds safety limit"
-                        )
-                    chunks.append(chunk)
+                    if chunk:  # iter_raw can return empty chunks
+                        received += len(chunk)
+                        if received > MAX_ARCHIVE_BYTES:
+                            raise SourceArchiveLimitError(
+                                "LaTeX source compressed archive exceeds safety limit"
+                            )
+                        chunks.append(chunk)
         return b"".join(chunks)
 
     for attempt in range(settings.ARXIV_MAX_RETRIES + 1):

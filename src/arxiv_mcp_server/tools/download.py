@@ -899,9 +899,17 @@ def _fetch_html_content_single_attempt(
     elif response.status_code == 404:
         logger.info(f"HTML not available for {paper_id}, will try PDF")
         return None
-    elif response.status_code in (406, 429, 503):
-        # HTML rate limiting: fall back to PDF (restore main's behavior)
-        # 406 is IP-level burst throttling, 429 is quota, 503 is temporary unavailability
+    elif response.status_code == 406:
+        # HTTP 406 is IP-level burst throttling - return rate_limited, don't fall back to PDF (#277)
+        from .search import _HTTP_406_RETRY_AFTER_SECONDS
+        raise ArxivRateLimitError(
+            f"arXiv is rate limiting this IP (HTTP 406). "
+            f"Please wait {int(_HTTP_406_RETRY_AFTER_SECONDS)} seconds before retrying.",
+            status_code=406,
+            retry_after_seconds=_HTTP_406_RETRY_AFTER_SECONDS,
+        )
+    elif response.status_code in (429, 503):
+        # HTML 429/503: fall back to PDF within single deadline (restore main's behavior)
         logger.info(
             f"HTML rate limited (HTTP {response.status_code}) for {paper_id}, will try PDF"
         )
@@ -918,15 +926,30 @@ class PaperNotFoundError(Exception):
     """Raised when an arXiv paper ID cannot be found."""
 
 
-async def _paper_exists_on_arxiv(paper_id: str) -> bool:
+async def _paper_exists_on_arxiv(paper_id: str, deadline: float) -> bool:
     """Return True if arXiv has this paper/version.
 
     Uses the same Atom ``id_list`` lookup as ``get_abstract``, so a missing
     paper and a missing version both report as absent (empty feed).
+    
+    Args:
+        paper_id: arXiv paper ID.
+        deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
     """
     url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
+    
+    # Use retry_with_backoff with the remaining budget from the shared deadline
+    remaining = max(0.1, deadline - time.monotonic())
+    
     async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await _rate_limited_get(client, url)
+        response = await retry_with_backoff(
+            lambda: _rate_limited_get(client, url),
+            max_retries=settings.ARXIV_MAX_RETRIES,
+            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+            max_backoff=settings.ARXIV_MAX_BACKOFF,
+            max_total_time=remaining,
+            operation_name="existence check",
+        )
     root = ET.fromstring(response.text)
     return bool(root.findall("atom:entry", ARXIV_NS))
 
@@ -1271,7 +1294,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Distinguish a missing paper/version from a missing [pdf] extra so
         # callers are not told to pip-install when the ID simply does not exist
         # (issue #196). Same Atom id_list check as get_abstract.
-        if not await _paper_exists_on_arxiv(paper_id):
+        if not await _paper_exists_on_arxiv(paper_id, deadline):
             raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
 
         if not _load_pdf_dependencies():

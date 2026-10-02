@@ -415,9 +415,10 @@ async def test_download_paper_return_full_text_opt_in(temp_storage_path, mocker)
 
 
 @pytest.mark.asyncio
-async def test_html_fetch_406_falls_back_to_pdf():
-    """HTML fetch should fall back to PDF on 406 (restore main's behavior)."""
+async def test_html_fetch_406_raises_rate_limit_error():
+    """HTML fetch should raise ArxivRateLimitError on 406, not return None (#277)."""
     from arxiv_mcp_server.tools.download import _fetch_html_content
+    from arxiv_mcp_server.arxiv_api import ArxivRateLimitError
     import httpx
     from unittest.mock import MagicMock, patch
     import time
@@ -430,39 +431,45 @@ async def test_html_fetch_406_falls_back_to_pdf():
         patch("httpx.get", return_value=mock_response),
         patch("time.monotonic", return_value=0.0),
     ):
-        # Should return None (to trigger PDF fallback), not raise
-        result = await asyncio.to_thread(_fetch_html_content, "2103.14030", 50.0)
-        assert result is None
+        with pytest.raises(ArxivRateLimitError) as exc_info:
+            await asyncio.to_thread(_fetch_html_content, "2103.12345", 50.0)
+
+        assert exc_info.value.status_code == 406
+        assert exc_info.value.retry_after_seconds == 600.0
+        assert "HTTP 406" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_download_html_406_falls_back_to_pdf_attempt(temp_storage_path, mocker):
-    """HTML 406 should fall back to PDF, not return rate_limited immediately (restore main)."""
+async def test_download_html_406_returns_rate_limited_response(
+    temp_storage_path, mocker
+):
+    """Download should return rate_limited response when HTML fetch gets 406 (#277)."""
     from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server.arxiv_api import ArxivRateLimitError
 
     mocker.patch.object(
         download_module,
         "get_paper_path",
         side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
     )
-    # HTML returns None (406 falls back to PDF)
-    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
-    # Mock paper exists check to pass
-    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
-    # Mock PDF dependencies
-    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=False)
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        side_effect=ArxivRateLimitError(
+            "arXiv is rate limiting this IP (HTTP 406). "
+            "Please wait 600 seconds before retrying.",
+            status_code=406,
+            retry_after_seconds=600.0,
+        ),
+    )
 
     response = await handle_download({"paper_id": "2103.12345"})
     result = json.loads(response[0].text)
 
-    # Should attempt PDF and fail with missing dependencies (HTML 406 fell back to PDF)
-    assert result["status"] == "error"
-    assert (
-        "pdf extra" in result["message"].lower()
-        or "pdf conversion" in result["message"].lower()
-    )
-    # When HTML gets 406 and returns None (for PDF fallback), but PDF deps are missing,
-    # we just get a "missing dependencies" error without rate limit info
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 406
+    assert result["retry_after_seconds"] == 600.0
+    assert "HTTP 406" in result["message"]
 
 
 @pytest.mark.asyncio
