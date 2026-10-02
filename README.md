@@ -458,7 +458,14 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 |---|---:|---|
 | `--storage-path` | `~/.arxiv-mcp-server/papers` | Paper, source-cache, alert, and index storage |
 | `MAX_RESULTS` | `50` | Server-side cap for result counts |
-| `REQUEST_TIMEOUT` | `60` | PDF fallback download timeout in seconds |
+| `REQUEST_TIMEOUT` | `60` | **Legacy**: use `ARXIV_REQUEST_TIMEOUT` instead |
+| `ARXIV_REQUEST_TIMEOUT` | `30` | Per-attempt read timeout in seconds for API, HTML, PDF, and LaTeX requests |
+| `ARXIV_CONNECT_TIMEOUT` | `10` | Connection timeout in seconds for all arXiv requests |
+| `ARXIV_MAX_TOTAL_TIME` | `50` | Total budget in seconds for each tool call (HTML + PDF combined for `download_paper`) |
+| `ARXIV_MAX_RETRIES` | `2` | Maximum retry attempts for transient failures (timeouts, connections, 429, 503) |
+| `ARXIV_HTTP_406_MAX_RETRIES` | `1` | Maximum retry attempts for HTTP 406 (IP-level throttling, use minimal retries) |
+| `ARXIV_INITIAL_BACKOFF` | `1.0` | Initial exponential backoff delay in seconds |
+| `ARXIV_MAX_BACKOFF` | `30` | Maximum backoff delay in seconds (Retry-After can exceed this and causes immediate return) |
 | `TRANSPORT` | `stdio` | `stdio`, `http`, or `streamable-http` |
 | `HOST` | `127.0.0.1` | HTTP bind host |
 | `PORT` | `8000` | HTTP bind port |
