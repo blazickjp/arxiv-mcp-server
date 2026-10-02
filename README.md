@@ -461,7 +461,7 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 | `ARXIV_REQUEST_TIMEOUT` | `30` | Per-attempt read timeout in seconds for all arXiv requests (API, HTML, PDF, LaTeX) |
 | `REQUEST_TIMEOUT` | – | **Deprecated.** Legacy alias for `ARXIV_REQUEST_TIMEOUT` (applies to all requests). Only used when `ARXIV_REQUEST_TIMEOUT` is not set. Effective default: 30s |
 | `ARXIV_CONNECT_TIMEOUT` | `10` | Connection timeout in seconds for all arXiv requests |
-| `ARXIV_MAX_TOTAL_TIME` | `50` | Total budget in seconds for each tool call (HTML + PDF combined for `download_paper`) |
+| `ARXIV_MAX_TOTAL_TIME` | `50` | Total budget in seconds for each tool call (HTML + PDF combined for `download_paper`). **Note**: Very small budgets (under ~6s) may leave insufficient time for HTML-to-PDF fallback due to the process-wide 3s rate-limiter delay. |
 | `ARXIV_MAX_RETRIES` | `2` | Maximum retry attempts for transient failures (timeouts, connections, 429, 503) |
 | `ARXIV_HTTP_406_MAX_RETRIES` | `1` | Maximum retry attempts for HTTP 406 (IP-level throttling, use minimal retries) |
 | `ARXIV_INITIAL_BACKOFF` | `2.0` | Initial exponential backoff delay in seconds |

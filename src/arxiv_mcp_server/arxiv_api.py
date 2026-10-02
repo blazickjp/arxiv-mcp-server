@@ -39,6 +39,14 @@ class ArxivRateLimiter:
             return 0.0
         return max(0.0, self.min_interval - (self._clock() - self._last_started))
 
+    def seconds_until_next_slot(self) -> float:
+        """Return seconds until the next request slot is available.
+
+        Returns 0.0 if a slot is immediately available.
+        This does not acquire the lock, so the value is advisory.
+        """
+        return self._remaining_delay()
+
     def run_sync(self, operation: Callable[[], T]) -> T:
         """Run a blocking operation inside the shared request gate."""
         with self._lock:

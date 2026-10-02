@@ -121,6 +121,34 @@ class Settings(BaseSettings):
     TRANSPORT: str = "stdio"
     HOST: str = "127.0.0.1"
     PORT: int = 8000
+    ALLOWED_HOSTS: str = ""
+    ALLOWED_ORIGINS: str = ""
+    SEMANTIC_SCHOLAR_API_KEY: str = ""
+    model_config = SettingsConfigDict(extra="allow")
+
+    def model_post_init(self, __context) -> None:
+        """Validate timeout settings after initialization."""
+        # Validate positive timeouts
+        if self.ARXIV_REQUEST_TIMEOUT <= 0:
+            logger.warning(
+                f"ARXIV_REQUEST_TIMEOUT must be positive (got {self.ARXIV_REQUEST_TIMEOUT}), using default 30"
+            )
+            self.ARXIV_REQUEST_TIMEOUT = 30
+        if self.ARXIV_CONNECT_TIMEOUT <= 0:
+            logger.warning(
+                f"ARXIV_CONNECT_TIMEOUT must be positive (got {self.ARXIV_CONNECT_TIMEOUT}), using default 10"
+            )
+            self.ARXIV_CONNECT_TIMEOUT = 10
+        if self.ARXIV_MAX_TOTAL_TIME <= 0:
+            logger.warning(
+                f"ARXIV_MAX_TOTAL_TIME must be positive (got {self.ARXIV_MAX_TOTAL_TIME}), using default 50"
+            )
+            self.ARXIV_MAX_TOTAL_TIME = 50
+        if self.ARXIV_MAX_BACKOFF <= 0:
+            logger.warning(
+                f"ARXIV_MAX_BACKOFF must be positive (got {self.ARXIV_MAX_BACKOFF}), using default 30"
+            )
+            self.ARXIV_MAX_BACKOFF = 30.0
 
     def get_request_timeout(self) -> int:
         """Get request timeout with fallback to legacy REQUEST_TIMEOUT.

@@ -800,11 +800,13 @@ def _fetch_html_content(paper_id: str, deadline: float) -> str | None:
                 logger.info(f"HTML fetch insufficient budget for attempt, will try PDF")
                 return None
             # Rate limiter only holds lock for this attempt
-            # Check deadline before waiting on rate limiter (limiter enforces 3s minimum)
+            # Check if we have enough time for the rate-limiter wait plus a minimal attempt
+            pending_wait = ARXIV_RATE_LIMITER.seconds_until_next_slot()
             remaining_before_limiter = deadline - time.monotonic()
-            if remaining_before_limiter < 3.5:  # Need headroom for 3s rate-limiter wait
+            min_attempt_time = 1.0  # Minimum time needed for the actual request
+            if remaining_before_limiter < pending_wait + min_attempt_time:
                 logger.info(
-                    f"HTML fetch insufficient time for rate-limiter wait ({remaining_before_limiter:.1f}s < 3.5s), will try PDF"
+                    f"HTML fetch insufficient budget (need {pending_wait + min_attempt_time:.1f}s, have {remaining_before_limiter:.1f}s), will try PDF"
                 )
                 return None
             return ARXIV_RATE_LIMITER.run_sync(
@@ -1043,11 +1045,13 @@ def _fetch_pdf_content_unlocked(
     # Note: Retry-After headers cannot be honored on this path because the
     # arxiv package's HTTPError does not preserve response headers.
 
-    # Check deadline before metadata lookup (need 3.5s headroom for rate limiter)
+    # Check deadline before metadata lookup
+    pending_wait = ARXIV_RATE_LIMITER.seconds_until_next_slot()
     remaining = deadline - time.monotonic()
-    if remaining < 3.5:
+    min_attempt_time = 1.0  # Minimum time needed for metadata lookup
+    if remaining < pending_wait + min_attempt_time:
         raise ArxivTimeoutError(
-            f"PDF metadata lookup skipped (insufficient time for rate-limiter wait: {remaining:.1f}s < 3.5s). "
+            f"PDF metadata lookup skipped (need {pending_wait + min_attempt_time:.1f}s, have {remaining:.1f}s). "
             f"Please retry shortly."
         )
 
