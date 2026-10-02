@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import logging
 from pathlib import PurePosixPath
 import posixpath
 import tarfile
@@ -14,6 +15,7 @@ from ..arxiv_api import ARXIV_RATE_LIMITER
 from ..config import Settings
 
 settings = Settings()
+logger = logging.getLogger("arxiv-mcp-server")
 
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 2_000
@@ -38,10 +40,22 @@ class SourceArchiveLimitError(LatexSourceError):
 
 
 def _download_source_archive(paper_id: str) -> bytes:
-    """Download one arXiv e-print while enforcing a compressed-size limit."""
+    """Download one arXiv e-print while enforcing a compressed-size limit and budget."""
+    import random
+    import time
 
-    def operation() -> bytes:
-        timeout = httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
+    last_exception: Exception | None = None
+    start_time = time.monotonic()
+    max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
+
+    def single_attempt() -> bytes:
+        """Single download attempt."""
+        timeout = httpx.Timeout(
+            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+            read=float(settings.ARXIV_REQUEST_TIMEOUT),
+            write=30.0,
+            pool=30.0,
+        )
         headers = {
             "User-Agent": (
                 f"{settings.APP_NAME}/{settings.APP_VERSION} "
@@ -74,7 +88,123 @@ def _download_source_archive(paper_id: str) -> bytes:
                     chunks.append(chunk)
         return b"".join(chunks)
 
-    return ARXIV_RATE_LIMITER.run_sync(operation)
+    for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
+        # Check budget before attempt
+        elapsed = time.monotonic() - start_time
+        if elapsed >= max_total_time:
+            raise LatexSourceError(
+                f"LaTeX source download budget exhausted after {int(elapsed)}s"
+            )
+
+        try:
+            # Rate limiter only holds lock for this attempt
+            return ARXIV_RATE_LIMITER.run_sync(single_attempt)
+        except httpx.TimeoutException as e:
+            last_exception = e
+            if attempt < settings.ARXIV_MAX_RETRIES:
+                wait = min(
+                    settings.ARXIV_INITIAL_BACKOFF
+                    * (2**attempt)
+                    * (0.5 + random.random()),
+                    settings.ARXIV_MAX_BACKOFF,
+                )
+                # Cap wait to remaining budget
+                remaining = max_total_time - (time.monotonic() - start_time)
+                if wait >= remaining or remaining <= 0.1:
+                    raise LatexSourceError(
+                        f"LaTeX source download timed out (insufficient budget for retry)"
+                    ) from e
+                wait = min(wait, remaining * 0.9)
+                logger.warning(
+                    "LaTeX source download timed out; retrying in %.1fs (attempt %d/%d)",
+                    wait,
+                    attempt + 1,
+                    settings.ARXIV_MAX_RETRIES + 1,
+                )
+                time.sleep(wait)
+            else:
+                raise LatexSourceError(
+                    f"LaTeX source download timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts"
+                ) from e
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            last_exception = e
+            if attempt < settings.ARXIV_MAX_RETRIES:
+                wait = min(
+                    settings.ARXIV_INITIAL_BACKOFF
+                    * (2**attempt)
+                    * (0.5 + random.random()),
+                    settings.ARXIV_MAX_BACKOFF,
+                )
+                # Cap wait to remaining budget
+                remaining = max_total_time - (time.monotonic() - start_time)
+                if wait >= remaining or remaining <= 0.1:
+                    raise LatexSourceError(
+                        f"Could not connect to arXiv for LaTeX source (insufficient budget for retry)"
+                    ) from e
+                wait = min(wait, remaining * 0.9)
+                logger.warning(
+                    "LaTeX source download connection error; retrying in %.1fs (attempt %d/%d)",
+                    wait,
+                    attempt + 1,
+                    settings.ARXIV_MAX_RETRIES + 1,
+                )
+                time.sleep(wait)
+            else:
+                raise LatexSourceError(
+                    f"Could not connect to arXiv for LaTeX source after {settings.ARXIV_MAX_RETRIES + 1} attempts"
+                ) from e
+        except httpx.HTTPStatusError as e:
+            # Don't retry HTTP errors other than timeouts/connection
+            if e.response is not None and e.response.status_code in (429, 503, 406):
+                last_exception = e
+                max_retries_for_status = (
+                    settings.ARXIV_HTTP_406_MAX_RETRIES
+                    if e.response.status_code == 406
+                    else settings.ARXIV_MAX_RETRIES
+                )
+                if attempt < max_retries_for_status:
+                    retry_after = e.response.headers.get("Retry-After")
+                    wait = min(
+                        settings.ARXIV_INITIAL_BACKOFF
+                        * (2**attempt)
+                        * (0.5 + random.random()),
+                        settings.ARXIV_MAX_BACKOFF,
+                    )
+                    if retry_after:
+                        try:
+                            wait = min(
+                                max(wait, float(retry_after)),
+                                settings.ARXIV_MAX_BACKOFF,
+                            )
+                        except ValueError:
+                            pass
+                    # Cap wait to remaining budget
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining or remaining <= 0.1:
+                        raise LatexSourceError(
+                            f"arXiv is rate limiting LaTeX source requests (HTTP {e.response.status_code})"
+                        ) from e
+                    wait = min(wait, remaining * 0.9)
+                    logger.warning(
+                        "LaTeX source download HTTP %d; retrying in %.1fs (attempt %d/%d)",
+                        e.response.status_code,
+                        wait,
+                        attempt + 1,
+                        max_retries_for_status + 1,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise LatexSourceError(
+                        f"arXiv is rate limiting LaTeX source requests (HTTP {e.response.status_code})"
+                    ) from e
+            else:
+                # Non-retryable HTTP error
+                raise
+
+    # Should not reach here
+    if last_exception:
+        raise last_exception
+    raise LatexSourceError("LaTeX source download failed after exhausting retries")
 
 
 def _safe_member_name(name: str) -> str:
