@@ -780,8 +780,18 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
     )
 
     last_exception: Exception | None = None
+    start_time = time.monotonic()
+    max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
 
     for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
+        # Check budget before attempt
+        elapsed = time.monotonic() - start_time
+        if elapsed >= max_total_time:
+            logger.info(
+                f"HTML fetch budget exhausted ({elapsed:.1f}s >= {max_total_time}s), will try PDF"
+            )
+            return None
+        
         try:
             response = httpx.get(url, timeout=timeout, follow_redirects=True)
             if response.status_code == 200:
@@ -818,6 +828,21 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                             )
                         except ValueError:
                             pass
+                    
+                    # Cap wait to remaining budget
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining:
+                        logger.info(
+                            f"HTML fetch: insufficient budget for retry (wait {wait:.1f}s >= remaining {remaining:.1f}s), will try PDF"
+                        )
+                        raise ArxivRateLimitError(
+                            f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
+                            f"Please wait {int(retry_after_seconds if retry_after else 60)} seconds before retrying.",
+                            status_code=response.status_code,
+                            retry_after_seconds=float(retry_after if retry_after else 60),
+                        )
+                    wait = min(wait, remaining - 1.0)
+                    
                     logger.warning(
                         "HTML fetch HTTP %d; retrying in %.1fs (attempt %d/%d)",
                         response.status_code,
@@ -861,6 +886,15 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                     * (0.5 + random.random()),
                     settings.ARXIV_MAX_BACKOFF,
                 )
+                # Cap wait to remaining budget
+                remaining = max_total_time - (time.monotonic() - start_time)
+                if wait >= remaining:
+                    logger.info(
+                        f"HTML fetch timeout: insufficient budget for retry, will try PDF"
+                    )
+                    return None
+                wait = min(wait, remaining - 1.0)
+                
                 logger.warning(
                     "HTML fetch timed out; retrying in %.1fs (attempt %d/%d)",
                     wait,
@@ -883,6 +917,15 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                     * (0.5 + random.random()),
                     settings.ARXIV_MAX_BACKOFF,
                 )
+                # Cap wait to remaining budget
+                remaining = max_total_time - (time.monotonic() - start_time)
+                if wait >= remaining:
+                    logger.info(
+                        f"HTML fetch connection error: insufficient budget for retry, will try PDF"
+                    )
+                    return None
+                wait = min(wait, remaining - 1.0)
+                
                 logger.warning(
                     "HTML fetch connection error; retrying in %.1fs (attempt %d/%d)",
                     wait,

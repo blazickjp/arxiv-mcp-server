@@ -455,7 +455,7 @@ def stream_pdf_to_path(
     settings = Settings()
     timeout = httpx.Timeout(
         connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-        read=max(120.0, request_timeout),
+        read=request_timeout,
         write=30.0,
         pool=30.0,
     )
@@ -487,7 +487,18 @@ def stream_pdf_to_path(
         import random
 
         last_exception: Exception | None = None
+        start_time = time.monotonic()
+        max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
+        
         for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
+            # Check budget before attempt
+            elapsed = time.monotonic() - start_time
+            if elapsed >= max_total_time:
+                staging.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"PDF download budget exhausted after {int(elapsed)}s. Please retry shortly."
+                )
+            
             try:
                 sync_download()
                 staging.replace(destination)
@@ -501,6 +512,16 @@ def stream_pdf_to_path(
                         * (0.5 + random.random()),
                         settings.ARXIV_MAX_BACKOFF,
                     )
+                    # Cap wait to remaining budget
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining:
+                        staging.unlink(missing_ok=True)
+                        raise RuntimeError(
+                            f"PDF download timed out (insufficient budget for retry). "
+                            f"Please retry shortly."
+                        ) from e
+                    wait = min(wait, remaining - 1.0)
+                    
                     logger.warning(
                         "PDF download timed out; retrying in %.1fs (attempt %d/%d)",
                         wait,
@@ -524,6 +545,15 @@ def stream_pdf_to_path(
                         * (0.5 + random.random()),
                         settings.ARXIV_MAX_BACKOFF,
                     )
+                    # Cap wait to remaining budget
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining:
+                        staging.unlink(missing_ok=True)
+                        raise RuntimeError(
+                            f"Could not connect to arXiv for PDF download (insufficient budget for retry)"
+                        ) from e
+                    wait = min(wait, remaining - 1.0)
+                    
                     logger.warning(
                         "PDF download connection error; retrying in %.1fs (attempt %d/%d)",
                         wait,
@@ -561,6 +591,20 @@ def stream_pdf_to_path(
                                 )
                             except ValueError:
                                 pass
+                        
+                        # Cap wait to remaining budget
+                        remaining = max_total_time - (time.monotonic() - start_time)
+                        if wait >= remaining:
+                            staging.unlink(missing_ok=True)
+                            retry_after_seconds = float(retry_after) if retry_after else (600.0 if e.response.status_code == 406 else 60.0)
+                            raise ArxivRateLimitError(
+                                f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
+                                f"Please wait {int(retry_after_seconds)} seconds before retrying.",
+                                status_code=e.response.status_code,
+                                retry_after_seconds=retry_after_seconds,
+                            ) from e
+                        wait = min(wait, remaining - 1.0)
+                        
                         logger.warning(
                             "PDF download HTTP %d; retrying in %.1fs (attempt %d/%d)",
                             e.response.status_code,
