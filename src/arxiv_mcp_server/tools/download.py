@@ -869,10 +869,11 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                 )
                 time.sleep(wait)
             else:
-                raise RuntimeError(
-                    f"arXiv HTML fetch timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts. "
-                    f"Please retry shortly."
-                ) from e
+                # After retries exhausted, return None to allow PDF fallback
+                logger.info(
+                    f"HTML fetch timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts, will try PDF"
+                )
+                return None
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             last_exception = e
             if attempt < settings.ARXIV_MAX_RETRIES:
@@ -890,9 +891,11 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                 )
                 time.sleep(wait)
             else:
-                raise RuntimeError(
-                    f"Could not connect to arXiv HTML server after {settings.ARXIV_MAX_RETRIES + 1} attempts"
-                ) from e
+                # After retries exhausted, return None to allow PDF fallback
+                logger.info(
+                    f"HTML connection failed after {settings.ARXIV_MAX_RETRIES + 1} attempts, will try PDF"
+                )
+                return None
         except httpx.RequestError as e:
             # Other request errors (not timeout/connection) - don't retry
             logger.warning(f"HTML fetch request error for {paper_id}: {e}")

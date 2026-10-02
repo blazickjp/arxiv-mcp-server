@@ -510,11 +510,10 @@ def stream_pdf_to_path(
                     time.sleep(wait)
                 else:
                     staging.unlink(missing_ok=True)
-                    raise ArxivRateLimitError(
+                    # PDF timeout is an honest timeout, not rate limiting
+                    raise RuntimeError(
                         f"arXiv PDF download timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts. "
-                        f"The arXiv PDF server may be slow or overloaded. Please retry shortly.",
-                        status_code=0,
-                        retry_after_seconds=60.0,
+                        f"The arXiv PDF server may be slow or overloaded. Please retry shortly."
                     ) from e
             except (httpx.ConnectError, httpx.ConnectTimeout) as e:
                 last_exception = e
