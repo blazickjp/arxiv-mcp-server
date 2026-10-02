@@ -99,12 +99,30 @@ class ArxivRateLimitError(RetryableError):
 
 
 def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
-    """Parse a numeric Retry-After header value, if present."""
+    """Parse Retry-After header into seconds.
+    
+    Supports both delay-seconds (integer) and HTTP-date formats.
+    Returns None if unparseable or not provided.
+    """
     if not retry_after:
         return None
     try:
+        # Try as integer/float seconds first
         return float(retry_after)
     except ValueError:
+        pass
+    
+    # Try as HTTP-date (RFC 7231)
+    try:
+        from email.utils import parsedate_to_datetime
+        import datetime
+        
+        retry_dt = parsedate_to_datetime(retry_after)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        delta = (retry_dt - now).total_seconds()
+        return max(0.0, delta)  # Don't return negative
+    except Exception:
+        logger.warning(f"Could not parse Retry-After header: {retry_after}")
         return None
 
 
@@ -114,24 +132,30 @@ def _compute_backoff_seconds(
     initial_backoff: float,
     max_backoff: float,
 ) -> float:
-    """Exponential backoff with jitter, honoring numeric Retry-After when present.
+    """Exponential backoff with jitter, with Retry-After as floor.
 
     Args:
         attempt: Zero-based retry attempt number.
-        retry_after: Optional Retry-After header value.
+        retry_after: Optional Retry-After header value (int or HTTP-date).
         initial_backoff: Initial backoff delay in seconds.
         max_backoff: Maximum backoff delay in seconds.
 
     Returns:
         Computed backoff delay in seconds with jitter applied.
+        Retry-After (if provided) is used as a floor BEFORE jitter.
     """
     delay = min(initial_backoff * (2**attempt), max_backoff)
-    if retry_after:
-        try:
-            delay = min(max(delay, float(retry_after)), max_backoff)
-        except ValueError:
-            pass
+    
+    # Parse and apply Retry-After as floor
+    parsed_retry_after = _parse_retry_after_seconds(retry_after)
+    if parsed_retry_after is not None:
+        delay = max(delay, parsed_retry_after)
+    
+    # Apply jitter (0.5 to 1.0 multiplier) but respect Retry-After floor
     jittered = delay * (0.5 + random.random())
+    if parsed_retry_after is not None:
+        jittered = max(jittered, parsed_retry_after)
+    
     return min(jittered, max_backoff)
 
 
@@ -196,26 +220,73 @@ async def retry_with_backoff(
                 )
 
         try:
-            # If budget is constrained, wrap operation with asyncio.wait_for
-            # to enforce remaining budget as timeout
+            # Always enforce remaining budget with asyncio.wait_for
             if max_total_time is not None:
                 remaining = max_total_time - (time.monotonic() - start_time)
-                if remaining < settings.ARXIV_REQUEST_TIMEOUT:
-                    logger.debug(
-                        "%s using remaining budget %.1fs as timeout for attempt %d",
-                        operation_name,
-                        remaining,
-                        attempt + 1,
-                    )
-                    return await asyncio.wait_for(operation(), timeout=remaining)
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("Budget exhausted before attempt")
+                logger.debug(
+                    "%s attempt %d with %.1fs budget",
+                    operation_name,
+                    attempt + 1,
+                    remaining,
+                )
+                return await asyncio.wait_for(operation(), timeout=remaining)
 
             return await operation()
+        except asyncio.TimeoutError as e:
+            # Raised by wait_for when budget expires during an operation
+            if max_total_time is not None:
+                elapsed = time.monotonic() - start_time
+                logger.error(
+                    "%s timed out after %.1fs (budget: %.1fs)",
+                    operation_name,
+                    elapsed,
+                    max_total_time,
+                )
+                # Determine if this was due to rate limiting
+                if last_exception and isinstance(
+                    last_exception, httpx.HTTPStatusError
+                ):
+                    status_code = last_exception.response.status_code
+                    if status_code in (429, 503, 406):
+                        # Budget expired while handling rate limit
+                        retry_after = 60.0 if status_code != 406 else 600.0
+                        raise ArxivRateLimitError(
+                            f"arXiv is rate limiting this IP (HTTP {status_code}). "
+                            f"Please wait {int(retry_after)} seconds before retrying.",
+                            status_code=status_code,
+                            retry_after_seconds=retry_after,
+                        ) from e
+                # Otherwise it's a genuine timeout
+                raise ArxivTimeoutError(
+                    f"arXiv request timed out after {int(elapsed)}s. "
+                    f"The arXiv API may be slow or overloaded. Please retry shortly."
+                ) from e
+            # Re-raise if no budget was set
+            raise
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
             last_exception = e
             if attempt < max_retries:
                 wait = _compute_backoff_seconds(
                     attempt, None, initial_backoff, max_backoff
                 )
+                # Cap wait to remaining budget if set
+                if max_total_time is not None:
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining:
+                        # Not enough budget for backoff + retry
+                        logger.warning(
+                            "%s insufficient budget for retry (%.1fs < %.1fs wait)",
+                            operation_name,
+                            remaining,
+                            wait,
+                        )
+                        raise ArxivConnectionError(
+                            f"Could not connect to arXiv after {attempt + 1} attempts. "
+                            f"Please check your network connection and retry shortly."
+                        ) from e
+                    wait = min(wait, remaining - 1.0)  # Leave 1s for attempt
                 logger.warning(
                     "%s connection error; retrying in %.1fs (attempt %d/%d)",
                     operation_name,
@@ -240,6 +311,21 @@ async def retry_with_backoff(
                 wait = _compute_backoff_seconds(
                     attempt, None, initial_backoff, max_backoff
                 )
+                # Cap wait to remaining budget if set
+                if max_total_time is not None:
+                    remaining = max_total_time - (time.monotonic() - start_time)
+                    if wait >= remaining:
+                        logger.warning(
+                            "%s insufficient budget for retry (%.1fs < %.1fs wait)",
+                            operation_name,
+                            remaining,
+                            wait,
+                        )
+                        raise ArxivTimeoutError(
+                            f"arXiv request timed out after {attempt + 1} attempts. "
+                            f"The arXiv API may be slow or overloaded. Please retry shortly."
+                        ) from e
+                    wait = min(wait, remaining - 1.0)
                 logger.warning(
                     "%s timed out; retrying in %.1fs (attempt %d/%d)",
                     operation_name,
@@ -271,6 +357,30 @@ async def retry_with_backoff(
                     wait = _compute_backoff_seconds(
                         attempt, retry_after, initial_backoff, max_backoff
                     )
+                    # Cap wait to remaining budget if set
+                    if max_total_time is not None:
+                        remaining = max_total_time - (time.monotonic() - start_time)
+                        if wait >= remaining:
+                            # Retry-After or backoff exceeds budget - return rate_limited immediately
+                            parsed_retry_after = _parse_retry_after_seconds(retry_after)
+                            if parsed_retry_after is None:
+                                parsed_retry_after = (
+                                    600.0 if e.response.status_code == 406 else 60.0
+                                )
+                            logger.warning(
+                                "%s HTTP %d: Retry-After (%.1fs) exceeds budget (%.1fs), returning immediately",
+                                operation_name,
+                                e.response.status_code,
+                                wait,
+                                remaining,
+                            )
+                            raise ArxivRateLimitError(
+                                f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
+                                f"Please wait {int(parsed_retry_after)} seconds before retrying.",
+                                status_code=e.response.status_code,
+                                retry_after_seconds=parsed_retry_after,
+                            ) from e
+                        wait = min(wait, remaining - 1.0)
                     logger.warning(
                         "%s HTTP %d; retrying in %.1fs (attempt %d/%d)",
                         operation_name,
