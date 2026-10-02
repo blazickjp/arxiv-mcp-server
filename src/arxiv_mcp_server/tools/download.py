@@ -764,7 +764,7 @@ download_tool = types.Tool(
 
 def _fetch_html_content_sync(paper_id: str) -> str | None:
     """Synchronous HTML fetch with retry (called from thread pool).
-    
+
     Returns the extracted text on success, or None if the HTML endpoint
     is not available (404).
 
@@ -799,7 +799,8 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                 if attempt < settings.ARXIV_MAX_RETRIES:
                     retry_after = response.headers.get("Retry-After")
                     wait = min(
-                        settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                        settings.ARXIV_INITIAL_BACKOFF
+                        * (2**attempt)
                         * (0.5 + random.random()),
                         settings.ARXIV_MAX_BACKOFF,
                     )
@@ -847,7 +848,8 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
             last_exception = e
             if attempt < settings.ARXIV_MAX_RETRIES:
                 wait = min(
-                    settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                    settings.ARXIV_INITIAL_BACKOFF
+                    * (2**attempt)
                     * (0.5 + random.random()),
                     settings.ARXIV_MAX_BACKOFF,
                 )
@@ -867,7 +869,8 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
             last_exception = e
             if attempt < settings.ARXIV_MAX_RETRIES:
                 wait = min(
-                    settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                    settings.ARXIV_INITIAL_BACKOFF
+                    * (2**attempt)
                     * (0.5 + random.random()),
                     settings.ARXIV_MAX_BACKOFF,
                 )
@@ -895,15 +898,13 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
 
 def _fetch_html_content(paper_id: str) -> str | None:
     """Try to get paper content from the arXiv HTML endpoint (sync wrapper).
-    
+
     This function is called via asyncio.to_thread() from async code, so it runs
     in a worker thread. It uses synchronous HTTP with the shared rate limiter.
     """
     import random
 
-    return ARXIV_RATE_LIMITER.run_sync(
-        lambda: _fetch_html_content_sync(paper_id)
-    )
+    return ARXIV_RATE_LIMITER.run_sync(lambda: _fetch_html_content_sync(paper_id))
 
 
 class PaperNotFoundError(Exception):

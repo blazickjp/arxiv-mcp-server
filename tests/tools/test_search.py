@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import httpx
 from unittest.mock import patch, MagicMock, AsyncMock
 from arxiv_mcp_server.tools import handle_search
 from arxiv_mcp_server.tools import search as search_module
@@ -1167,7 +1168,12 @@ async def test_search_retries_on_429_then_succeeds():
     rate_limited.status_code = 429
     rate_limited.headers = {}
     rate_limited.text = ""
-    rate_limited.raise_for_status = MagicMock()
+    # Make raise_for_status actually raise for 429 (retry infrastructure expects this)
+    rate_limited.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "429", request=MagicMock(), response=rate_limited
+        )
+    )
 
     xml = _atom_feed_with_totals(entry_count=1, total_results=1)
     ok = MagicMock()
@@ -1206,7 +1212,12 @@ async def test_search_429_exhausted_returns_soft_rate_limited():
     rate_limited.status_code = 429
     rate_limited.headers = {"Retry-After": "30"}
     rate_limited.text = ""
-    rate_limited.raise_for_status = MagicMock()
+    # Make raise_for_status actually raise for 429 (retry infrastructure expects this)
+    rate_limited.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "429", request=MagicMock(), response=rate_limited
+        )
+    )
 
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=rate_limited)
@@ -1237,7 +1248,10 @@ async def test_rate_limited_get_retries_503_then_succeeds():
     limited.status_code = 503
     limited.headers = {}
     limited.text = ""
-    limited.raise_for_status = MagicMock()
+    # Make raise_for_status actually raise for 503 (retry infrastructure expects this)
+    limited.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("503", request=MagicMock(), response=limited)
+    )
 
     ok = MagicMock()
     ok.status_code = 200
@@ -1268,7 +1282,10 @@ async def test_rate_limited_get_retries_406_minimally_then_succeeds():
     limited.status_code = 406
     limited.headers = {}
     limited.text = ""
-    limited.raise_for_status = MagicMock()
+    # Make raise_for_status actually raise for 406 (retry infrastructure expects this)
+    limited.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("406", request=MagicMock(), response=limited)
+    )
 
     ok = MagicMock()
     ok.status_code = 200
@@ -1299,7 +1316,12 @@ async def test_search_406_exhausted_returns_soft_rate_limited():
     rate_limited.status_code = 406
     rate_limited.headers = {}
     rate_limited.text = ""
-    rate_limited.raise_for_status = MagicMock()
+    # Make raise_for_status actually raise for 406 (retry infrastructure expects this)
+    rate_limited.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "406", request=MagicMock(), response=rate_limited
+        )
+    )
 
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=rate_limited)

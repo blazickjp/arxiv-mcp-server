@@ -293,7 +293,7 @@ async def _s2_get(
     client: httpx.AsyncClient, url: str, params: Dict[str, Any] | None = None
 ) -> httpx.Response:
     """GET a Semantic Scholar URL with retry on HTTP 429 and timeout/connection errors.
-    
+
     Uses the unified retry_with_backoff infrastructure for consistency.
     """
 

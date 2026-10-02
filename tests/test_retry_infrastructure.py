@@ -90,9 +90,7 @@ class TestRetryWithBackoff:
 
     async def test_raises_arxiv_timeout_error_after_max_retries(self):
         """ArxivTimeoutError raised after exhausting retries on timeout."""
-        mock_op = AsyncMock(
-            side_effect=httpx.TimeoutException("persistent timeout")
-        )
+        mock_op = AsyncMock(side_effect=httpx.TimeoutException("persistent timeout"))
         with pytest.raises(ArxivTimeoutError) as exc_info:
             await retry_with_backoff(
                 mock_op,
@@ -315,7 +313,7 @@ class TestRetryWithBackoff:
 
         # Use return_exceptions=True so all tasks complete
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # All should have failed with ArxivTimeoutError
         assert all(isinstance(r, ArxivTimeoutError) for r in results)
 

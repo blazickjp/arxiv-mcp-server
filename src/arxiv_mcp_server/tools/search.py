@@ -82,7 +82,7 @@ def _rate_limited_response(
 
 async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     """Make an HTTP request through the process-wide arXiv request gate with retry.
-    
+
     Retries HTTP 429/503/406 and timeouts/connection errors with exponential backoff.
     Uses the unified retry_with_backoff infrastructure from arxiv_api.
     """

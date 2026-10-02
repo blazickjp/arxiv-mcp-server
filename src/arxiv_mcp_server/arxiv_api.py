@@ -115,13 +115,13 @@ def _compute_backoff_seconds(
     max_backoff: float,
 ) -> float:
     """Exponential backoff with jitter, honoring numeric Retry-After when present.
-    
+
     Args:
         attempt: Zero-based retry attempt number.
         retry_after: Optional Retry-After header value.
         initial_backoff: Initial backoff delay in seconds.
         max_backoff: Maximum backoff delay in seconds.
-    
+
     Returns:
         Computed backoff delay in seconds with jitter applied.
     """
@@ -145,13 +145,13 @@ async def retry_with_backoff(
     operation_name: str = "operation",
 ) -> T:
     """Execute an async operation with exponential backoff on retryable errors.
-    
+
     Retries on:
     - httpx.TimeoutException
     - httpx.ConnectError, httpx.ConnectTimeout
     - httpx.HTTPStatusError with status 429, 503, 406
     - ArxivTimeoutError, ArxivConnectionError, ArxivRateLimitError
-    
+
     Args:
         operation: Async callable to execute.
         max_retries: Maximum number of retry attempts.
@@ -159,10 +159,10 @@ async def retry_with_backoff(
         max_backoff: Maximum backoff delay in seconds.
         max_total_time: Optional maximum total time in seconds (raises on exceed).
         operation_name: Name for logging.
-    
+
     Returns:
         Result of the operation.
-    
+
     Raises:
         Original exception after exhausting retries, wrapped with context.
     """
@@ -362,7 +362,8 @@ def stream_pdf_to_path(
                 last_exception = e
                 if attempt < settings.ARXIV_MAX_RETRIES:
                     wait = min(
-                        settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                        settings.ARXIV_INITIAL_BACKOFF
+                        * (2**attempt)
                         * (0.5 + random.random()),
                         settings.ARXIV_MAX_BACKOFF,
                     )
@@ -385,7 +386,8 @@ def stream_pdf_to_path(
                 last_exception = e
                 if attempt < settings.ARXIV_MAX_RETRIES:
                     wait = min(
-                        settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                        settings.ARXIV_INITIAL_BACKOFF
+                        * (2**attempt)
                         * (0.5 + random.random()),
                         settings.ARXIV_MAX_BACKOFF,
                     )
@@ -407,7 +409,8 @@ def stream_pdf_to_path(
                     if attempt < settings.ARXIV_MAX_RETRIES:
                         retry_after = e.response.headers.get("Retry-After")
                         wait = min(
-                            settings.ARXIV_INITIAL_BACKOFF * (2**attempt)
+                            settings.ARXIV_INITIAL_BACKOFF
+                            * (2**attempt)
                             * (0.5 + random.random()),
                             settings.ARXIV_MAX_BACKOFF,
                         )
@@ -434,9 +437,7 @@ def stream_pdf_to_path(
                             e.response.headers.get("Retry-After")
                         )
                         if retry_after_seconds is None:
-                            retry_after_seconds = (
-                                600.0 if status_code == 406 else 60.0
-                            )
+                            retry_after_seconds = 600.0 if status_code == 406 else 60.0
                         message = (
                             f"arXiv is rate limiting this IP (HTTP {status_code}). "
                             f"Please wait {int(retry_after_seconds)} seconds before retrying."

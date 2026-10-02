@@ -553,7 +553,7 @@ async def test_citation_graph_cache_rate_limited_expires_quickly():
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
-        patch.object(citation_graph_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
         patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
         patch.object(citation_graph_module, "CACHE_TTL_RATE_LIMITED_SECONDS", 0.1),
     ):
