@@ -794,12 +794,18 @@ def _fetch_html_content(paper_id: str, deadline: float) -> str | None:
         try:
             # Cap this attempt's timeout to remaining budget
             attempt_timeout = min(
-                float(settings.ARXIV_REQUEST_TIMEOUT), remaining * 0.9
+                float(settings.get_request_timeout()), remaining * 0.9
             )
             if attempt_timeout < 1.0:
                 logger.info(f"HTML fetch insufficient budget for attempt, will try PDF")
                 return None
             # Rate limiter only holds lock for this attempt
+            # Check deadline before waiting on rate limiter
+            if time.monotonic() >= deadline:
+                logger.info(
+                    f"HTML fetch deadline exceeded before rate-limiter wait, will try PDF"
+                )
+                return None
             return ARXIV_RATE_LIMITER.run_sync(
                 lambda: _fetch_html_content_single_attempt(paper_id, attempt_timeout)
             )
@@ -901,13 +907,23 @@ def _fetch_html_content_single_attempt(
         return None
     elif response.status_code == 406:
         # HTTP 406 is IP-level burst throttling - return rate_limited, don't fall back to PDF (#277)
+        from ..arxiv_api import _parse_retry_after_seconds
         from .search import _HTTP_406_RETRY_AFTER_SECONDS
+
+        # Parse Retry-After header (supports numeric seconds and HTTP-date)
+        retry_after_header = response.headers.get("Retry-After")
+        retry_after = None
+        if retry_after_header:
+            retry_after = _parse_retry_after_seconds(retry_after_header)
+        # Use 600s default only if no valid Retry-After header
+        if retry_after is None:
+            retry_after = _HTTP_406_RETRY_AFTER_SECONDS
 
         raise ArxivRateLimitError(
             f"arXiv is rate limiting this IP (HTTP 406). "
-            f"Please wait {int(_HTTP_406_RETRY_AFTER_SECONDS)} seconds before retrying.",
+            f"Please wait {int(retry_after)} seconds before retrying.",
             status_code=406,
-            retry_after_seconds=_HTTP_406_RETRY_AFTER_SECONDS,
+            retry_after_seconds=retry_after,
         )
     elif response.status_code in (429, 503):
         # HTML 429/503: fall back to PDF within single deadline (restore main's behavior)
@@ -927,7 +943,9 @@ class PaperNotFoundError(Exception):
     """Raised when an arXiv paper ID cannot be found."""
 
 
-async def _paper_exists_on_arxiv(paper_id: str, deadline: float) -> bool:
+async def _paper_exists_on_arxiv(
+    paper_id: str, deadline: float, overall_start: float
+) -> bool:
     """Return True if arXiv has this paper/version.
 
     Uses the same Atom ``id_list`` lookup as ``get_abstract``, so a missing
@@ -936,20 +954,33 @@ async def _paper_exists_on_arxiv(paper_id: str, deadline: float) -> bool:
     Args:
         paper_id: arXiv paper ID.
         deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
+        overall_start: Start time of the entire download_paper operation.
     """
     url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
 
     # Use retry_with_backoff with the remaining budget from the shared deadline
     remaining = max(0.1, deadline - time.monotonic())
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await retry_with_backoff(
-            lambda: _rate_limited_get(client, url),
-            max_retries=settings.ARXIV_MAX_RETRIES,
-            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
-            max_backoff=settings.ARXIV_MAX_BACKOFF,
-            max_total_time=remaining,
-            operation_name="existence check",
+    try:
+        async with httpx.AsyncClient(
+            timeout=float(settings.get_request_timeout())
+        ) as client:
+            response = await retry_with_backoff(
+                lambda: _rate_limited_get(client, url),
+                max_retries=settings.ARXIV_MAX_RETRIES,
+                initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+                max_backoff=settings.ARXIV_MAX_BACKOFF,
+                max_total_time=remaining,
+                operation_name="existence check",
+            )
+    except ArxivTimeoutError:
+        # Re-raise with overall elapsed time instead of just the existence check budget
+        overall_elapsed = time.monotonic() - overall_start
+        overall_budget = deadline - overall_start
+        raise ArxivTimeoutError(
+            f"Paper metadata lookup timed out after {overall_elapsed:.0f}s "
+            f"(total budget: {overall_budget:.0f}s). "
+            f"The arXiv API may be slow or overloaded. Please retry shortly."
         )
     root = ET.fromstring(response.text)
     return bool(root.findall("atom:entry", ARXIV_NS))
@@ -968,7 +999,7 @@ def _download_arxiv_pdf_to_path(
     stream_pdf_to_path(
         paper,
         pdf_path,
-        request_timeout=float(settings.ARXIV_REQUEST_TIMEOUT),
+        request_timeout=float(settings.get_request_timeout()),
         user_agent=(
             f"{settings.APP_NAME}/{settings.APP_VERSION} "
             "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
@@ -1010,6 +1041,14 @@ def _fetch_pdf_content_unlocked(
     # making many requests on 406/429/503 (issue #277: 406 is IP-level throttling).
     # Note: Retry-After headers cannot be honored on this path because the
     # arxiv package's HTTPError does not preserve response headers.
+
+    # Check deadline before metadata lookup
+    if time.monotonic() >= deadline:
+        raise ArxivTimeoutError(
+            f"PDF metadata lookup skipped (deadline exceeded). "
+            f"Please retry shortly."
+        )
+
     client = get_arxiv_client(num_retries=0)
     try:
         paper = ARXIV_RATE_LIMITER.run_sync(
@@ -1295,7 +1334,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         # Distinguish a missing paper/version from a missing [pdf] extra so
         # callers are not told to pip-install when the ID simply does not exist
         # (issue #196). Same Atom id_list check as get_abstract.
-        if not await _paper_exists_on_arxiv(paper_id, deadline):
+        if not await _paper_exists_on_arxiv(paper_id, deadline, start_time):
             raise PaperNotFoundError(f"Paper {paper_id} not found on arXiv")
 
         if not _load_pdf_dependencies():
@@ -1372,17 +1411,16 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
         status = e.response.status_code if e.response is not None else "unknown"
         # Handle 406 as rate limiting
         if status == 406:
+            from ..arxiv_api import _parse_retry_after_seconds
             from .search import _HTTP_406_RETRY_AFTER_SECONDS
 
-            # Check if Retry-After header is present
+            # Parse Retry-After header (supports numeric seconds and HTTP-date)
             retry_after = None
             if e.response is not None:
                 retry_after_header = e.response.headers.get("Retry-After")
                 if retry_after_header:
-                    try:
-                        retry_after = float(retry_after_header)
-                    except ValueError:
-                        pass
+                    retry_after = _parse_retry_after_seconds(retry_after_header)
+            # Use 600s default only if no valid Retry-After header
             if retry_after is None:
                 retry_after = _HTTP_406_RETRY_AFTER_SECONDS
 

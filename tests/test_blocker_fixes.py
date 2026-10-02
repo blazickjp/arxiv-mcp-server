@@ -330,6 +330,7 @@ class TestLatexRateLimiting:
     async def test_latex_429_rate_limited_one_call(self):
         """LaTeX 429 should give rate_limited after 1 call, honoring Retry-After."""
         from arxiv_mcp_server.tools.latex import handle_get_paper_latex
+        from arxiv_mcp_server import arxiv_api
         import itertools
 
         request = httpx.Request("GET", "https://arxiv.org/e-print/2103.14030")
@@ -340,6 +341,9 @@ class TestLatexRateLimiting:
         with (
             patch("time.monotonic", side_effect=(x * 0.1 for x in itertools.count())),
             patch("time.sleep") as mock_sleep,
+            patch.object(
+                arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+            ),
         ):
             with patch("httpx.Client") as mock_client_cls:
                 mock_client = MagicMock()
@@ -367,11 +371,14 @@ class TestLatexRateLimiting:
                 assert "120 seconds" in payload["message"]
                 # Should not have retried or slept
                 mock_sleep.assert_not_called()
+                # Should only make 1 HTTP call
+                assert mock_client.stream.call_count == 1
 
     @pytest.mark.asyncio
     async def test_latex_503_rate_limited_one_call(self):
         """LaTeX 503 should give rate_limited after 1 call with 60s retry_after."""
         from arxiv_mcp_server.tools.latex import handle_get_paper_latex
+        from arxiv_mcp_server import arxiv_api
         import itertools
 
         request = httpx.Request("GET", "https://arxiv.org/e-print/2103.14030")
@@ -380,6 +387,9 @@ class TestLatexRateLimiting:
         with (
             patch("time.monotonic", side_effect=(x * 0.1 for x in itertools.count())),
             patch("time.sleep") as mock_sleep,
+            patch.object(
+                arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+            ),
         ):
             with patch("httpx.Client") as mock_client_cls:
                 mock_client = MagicMock()
@@ -406,6 +416,8 @@ class TestLatexRateLimiting:
                 assert "rate limiting" in payload["message"].lower()
                 # Should not have retried or slept
                 mock_sleep.assert_not_called()
+                # Should only make 1 HTTP call
+                assert mock_client.stream.call_count == 1
 
 
 class TestNewBlockerFixes:
@@ -416,6 +428,7 @@ class TestNewBlockerFixes:
         """LaTeX trickling body is cut off by wall-clock deadline."""
         from arxiv_mcp_server.tools.latex_archive import _download_source_archive
         from arxiv_mcp_server.tools.latex_archive import LatexSourceError
+        from arxiv_mcp_server import arxiv_api
 
         # Mock a trickling stream that yields 1 byte at a time indefinitely
         class TricklingStream:
@@ -429,6 +442,9 @@ class TestNewBlockerFixes:
         with (
             patch("time.monotonic") as mock_monotonic,
             patch("time.sleep") as mock_sleep,
+            patch.object(
+                arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+            ),
         ):
             # Mock time to progress on each check
             call_count = [-1]  # Start at -1 so first call returns 0.0
@@ -536,6 +552,7 @@ class TestNewBlockerFixes:
             _fetch_html_content,
             _fetch_pdf_content,
         )
+        from arxiv_mcp_server import arxiv_api
 
         # Mock HTML to return None (triggering PDF fallback)
         with patch(
@@ -550,6 +567,9 @@ class TestNewBlockerFixes:
             with (
                 patch("time.monotonic") as mock_monotonic,
                 patch("time.sleep") as mock_sleep,
+                patch.object(
+                    arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+                ),
             ):
                 # Deadline at 2.0s, HTML uses 1.2s, leaving 0.8s for PDF
                 mock_monotonic.side_effect = [

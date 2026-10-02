@@ -141,18 +141,22 @@ def _compute_backoff_seconds(
         max_backoff: Maximum backoff delay in seconds.
 
     Returns:
-        Computed backoff delay in seconds with jitter applied.
-        Retry-After (if provided) is used as a floor and NOT capped to max_backoff.
+        Computed backoff delay in seconds with jitter (0.5-1.5x) applied.
+        Retry-After (if provided) is used as a strict floor before and after jitter,
+        and is NOT capped to max_backoff.
     """
+    # Compute exponential backoff with cap
     delay = min(initial_backoff * (2**attempt), max_backoff)
 
-    # Parse and apply Retry-After as floor
+    # Parse Retry-After and apply as floor before jitter
     parsed_retry_after = _parse_retry_after_seconds(retry_after)
     if parsed_retry_after is not None:
         delay = max(delay, parsed_retry_after)
 
-    # Apply jitter (0.5 to 1.0 multiplier) but respect Retry-After floor
+    # Apply jitter (0.5 to 1.5x multiplier)
     jittered = delay * (0.5 + random.random())
+
+    # Ensure jitter never shortens the Retry-After floor
     if parsed_retry_after is not None:
         jittered = max(jittered, parsed_retry_after)
 
@@ -207,11 +211,13 @@ async def retry_with_backoff(
         if max_total_time is not None:
             elapsed = time.monotonic() - start_time
             if elapsed >= max_total_time:
+                attempts_word = "attempt" if attempt == 0 else "attempts"
                 logger.error(
-                    "%s exceeded max total time %.1fs after %d attempts",
+                    "%s exceeded max total time %.1fs after %d %s",
                     operation_name,
                     max_total_time,
                     attempt,
+                    attempts_word,
                 )
                 if last_exception:
                     raise ArxivTimeoutError(

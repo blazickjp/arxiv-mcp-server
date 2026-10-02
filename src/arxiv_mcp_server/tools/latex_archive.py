@@ -109,7 +109,7 @@ def _download_source_archive(paper_id: str) -> bytes:
         try:
             # Cap this attempt's timeout to remaining budget
             attempt_timeout = min(
-                float(settings.ARXIV_REQUEST_TIMEOUT), remaining * 0.9
+                float(settings.get_request_timeout()), remaining * 0.9
             )
             deadline = start_time + max_total_time
             # Rate limiter only holds lock for this attempt

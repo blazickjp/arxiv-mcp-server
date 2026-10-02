@@ -301,7 +301,7 @@ async def _raw_arxiv_search(
     # Make the request via rate-limited helper with generous timeout for slow searches
     timeout = httpx.Timeout(
         connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-        read=float(settings.ARXIV_REQUEST_TIMEOUT),
+        read=float(settings.get_request_timeout()),
         write=30.0,
         pool=30.0,
     )

@@ -153,20 +153,24 @@ def _rate_limited_payload(
         "status": "rate_limited",
         "error": "RATE_LIMITED",
         "message": message if message is not None else _rate_limit_message(),
-        "warning": "This is NOT an empty citation graph. The API request was blocked by rate limiting.",
         "citation_count": 0,
         "reference_count": 0,
         "citations": [],
         "references": [],
     }
+    # Only include warning and hint for non-503 errors (quota/throttling, not service unavailable)
+    if message is None or "503" not in message:
+        payload["warning"] = (
+            "This is NOT an empty citation graph. The API request was blocked by rate limiting."
+        )
+        if not _has_api_key():
+            payload["hint"] = (
+                "Get a free API key at https://www.semanticscholar.org/product/api#api-key and set SEMANTIC_SCHOLAR_API_KEY"
+            )
     if arxiv_id is not None:
         payload["arxiv_id"] = arxiv_id
     if max_citations is not None:
         payload["max_citations"] = max_citations
-    if not _has_api_key():
-        payload["hint"] = (
-            "Get a free API key at https://www.semanticscholar.org/product/api#api-key and set SEMANTIC_SCHOLAR_API_KEY"
-        )
     return payload
 
 
@@ -456,7 +460,7 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
         timeout = httpx.Timeout(
             connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-            read=float(settings.ARXIV_REQUEST_TIMEOUT),
+            read=float(settings.get_request_timeout()),
             write=30.0,
             pool=30.0,
         )

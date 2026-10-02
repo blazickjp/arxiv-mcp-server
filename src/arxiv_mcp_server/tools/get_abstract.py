@@ -76,7 +76,7 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
 
         timeout = httpx.Timeout(
             connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-            read=float(settings.ARXIV_REQUEST_TIMEOUT),
+            read=float(settings.get_request_timeout()),
             write=30.0,
             pool=30.0,
         )

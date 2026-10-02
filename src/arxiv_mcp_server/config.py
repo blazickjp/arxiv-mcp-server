@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = _PACKAGE_VERSION
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
-    REQUEST_TIMEOUT: int = 60
+    REQUEST_TIMEOUT: int = 60  # Deprecated: use ARXIV_REQUEST_TIMEOUT
     ARXIV_REQUEST_TIMEOUT: int = 30
     ARXIV_CONNECT_TIMEOUT: int = 10
     ARXIV_MAX_RETRIES: int = 2
@@ -121,6 +121,24 @@ class Settings(BaseSettings):
     TRANSPORT: str = "stdio"
     HOST: str = "127.0.0.1"
     PORT: int = 8000
+
+    def get_request_timeout(self) -> int:
+        """Get request timeout with fallback to legacy REQUEST_TIMEOUT.
+
+        Returns ARXIV_REQUEST_TIMEOUT if explicitly set, otherwise falls back
+        to REQUEST_TIMEOUT for backward compatibility.
+        """
+        # Check if ARXIV_REQUEST_TIMEOUT was explicitly set (non-default)
+        import os
+
+        if "ARXIV_REQUEST_TIMEOUT" in os.environ:
+            return self.ARXIV_REQUEST_TIMEOUT
+        # Fall back to REQUEST_TIMEOUT if it was explicitly set
+        if "REQUEST_TIMEOUT" in os.environ:
+            return self.REQUEST_TIMEOUT
+        # Use ARXIV_REQUEST_TIMEOUT default
+        return self.ARXIV_REQUEST_TIMEOUT
+
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
     SEMANTIC_SCHOLAR_API_KEY: str = ""

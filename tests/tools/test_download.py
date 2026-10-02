@@ -440,6 +440,32 @@ async def test_html_fetch_406_raises_rate_limit_error():
 
 
 @pytest.mark.asyncio
+async def test_html_fetch_406_honors_retry_after_header():
+    """HTML 406 should honor Retry-After header (issue C5_html406_RA30)."""
+    from arxiv_mcp_server.tools.download import _fetch_html_content
+    from arxiv_mcp_server.arxiv_api import ArxivRateLimitError
+    from unittest.mock import MagicMock, patch
+    import time
+
+    mock_response = MagicMock()
+    mock_response.status_code = 406
+    # Server sends Retry-After: 30
+    mock_response.headers = {"Retry-After": "30"}
+
+    with (
+        patch("httpx.get", return_value=mock_response),
+        patch("time.monotonic", return_value=0.0),
+    ):
+        with pytest.raises(ArxivRateLimitError) as exc_info:
+            await asyncio.to_thread(_fetch_html_content, "2103.12345", 50.0)
+
+        assert exc_info.value.status_code == 406
+        # Should use the server's Retry-After value (30), not the default (600)
+        assert exc_info.value.retry_after_seconds == 30.0
+        assert "HTTP 406" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_download_html_406_returns_rate_limited_response(
     temp_storage_path, mocker
 ):
@@ -587,6 +613,7 @@ async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, m
     """PDF metadata lookup 406 should be rate_limited, not leak URL (#166, #277)."""
     from arxiv_mcp_server.tools import download as download_module
     from arxiv_mcp_server.tools.search import ArxivRateLimitError
+    from arxiv_mcp_server import arxiv_api
     import arxiv
     import httpx
 
@@ -598,6 +625,9 @@ async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, m
     mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
     mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
     mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=True)
+    mocker.patch.object(
+        arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+    )
 
     # Mock get_arxiv_client to return a client that raises HTTPError with status 406
     mock_client = mocker.MagicMock()
