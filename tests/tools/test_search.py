@@ -1277,46 +1277,35 @@ async def test_rate_limited_get_retries_503_then_succeeds():
 
 @pytest.mark.asyncio
 async def test_rate_limited_get_retries_406_minimally_then_succeeds():
-    """406 is retried with minimal attempts to avoid prolonging the block (#277)."""
+    """406 is NOT retried (not throttling per #277 clarification)."""
     limited = MagicMock()
     limited.status_code = 406
     limited.headers = {}
     limited.text = ""
-    # Make raise_for_status actually raise for 406 (retry infrastructure expects this)
+    # Make raise_for_status actually raise for 406
     limited.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("406", request=MagicMock(), response=limited)
     )
 
-    ok = MagicMock()
-    ok.status_code = 200
-    ok.headers = {}
-    ok.text = "<feed/>"
-    ok.raise_for_status = MagicMock()
-
     mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=[limited, ok])
+    mock_client.get = AsyncMock(return_value=limited)
 
-    with (
-        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch("random.random", return_value=0.5),
-    ):
-        response = await _rate_limited_get(
-            mock_client, "https://export.arxiv.org/api/query"
-        )
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await _rate_limited_get(mock_client, "https://export.arxiv.org/api/query")
 
-    assert response is ok
-    assert mock_client.get.call_count == 2
-    sleep.assert_awaited_once_with(2.0)
+    # Should NOT retry - only 1 call
+    assert mock_client.get.call_count == 1
+    assert exc_info.value.response.status_code == 406
 
 
 @pytest.mark.asyncio
 async def test_search_406_exhausted_returns_soft_rate_limited():
-    """Persistent arXiv 406s soft-fail as status=rate_limited JSON (#277)."""
+    """406 is NOT retried and returns an error (not rate limiting per #277 clarification)."""
     rate_limited = MagicMock()
     rate_limited.status_code = 406
     rate_limited.headers = {}
     rate_limited.text = ""
-    # Make raise_for_status actually raise for 406 (retry infrastructure expects this)
+    # Make raise_for_status actually raise for 406
     rate_limited.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError(
             "406", request=MagicMock(), response=rate_limited
@@ -1328,22 +1317,12 @@ async def test_search_406_exhausted_returns_soft_rate_limited():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    with (
-        patch("httpx.AsyncClient", return_value=mock_client),
-        patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch("random.random", return_value=0.5),
-    ):
+    with (patch("httpx.AsyncClient", return_value=mock_client),):
         result = await handle_search({"query": "transformers", "max_results": 1})
 
     content = json.loads(result[0].text)
-    assert content["status"] == "rate_limited"
-    assert "HTTP 406" in content["message"]
-    assert content["http_status"] == 406
-    assert content["retry_after_seconds"] == 600.0
-    assert not result[0].text.startswith("Error:")
-    # Now 406 uses the same retry count as other rate-limited statuses
-    from arxiv_mcp_server.config import Settings
-
-    settings = Settings()
-    assert mock_client.get.call_count == settings.ARXIV_MAX_RETRIES + 1
-    assert sleep.await_count == settings.ARXIV_MAX_RETRIES
+    # 406 should return error status, not rate_limited
+    assert content["status"] == "error"
+    assert "406" in content["message"] or "HTTP" in content["message"]
+    # Should NOT retry - only 1 call
+    assert mock_client.get.call_count == 1

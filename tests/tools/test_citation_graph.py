@@ -288,13 +288,13 @@ def test_backoff_seconds_longer_with_jitter():
             _compute_backoff_seconds(
                 4, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
             )
-            == 32.0
+            == min(32.0, settings.ARXIV_MAX_BACKOFF)
         )
         assert (
             _compute_backoff_seconds(
                 5, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
             )
-            == 60.0
+            == min(64.0, settings.ARXIV_MAX_BACKOFF)
         )
 
     with patch("random.random", return_value=0.0):
@@ -313,12 +313,12 @@ def test_backoff_seconds_longer_with_jitter():
         )
 
     with patch("random.random", return_value=1.0):
-        # Retry-After can raise the floor before jitter, still capped.
+        # Retry-After can raise the floor before jitter, still capped at max_backoff.
         assert (
             _compute_backoff_seconds(
                 0, "45", settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
             )
-            == 60.0
+            == settings.ARXIV_MAX_BACKOFF
         )
 
 

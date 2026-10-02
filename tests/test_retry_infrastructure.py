@@ -175,25 +175,26 @@ class TestRetryWithBackoff:
         assert result == response_200
         assert mock_op.call_count == 2
 
-    async def test_retries_on_http_406(self):
-        """HTTP 406 status triggers retry."""
+    async def test_http_406_not_retried(self):
+        """HTTP 406 is NOT retried (not throttling per #277 clarification)."""
         request = httpx.Request("GET", "https://example.com")
         response_406 = httpx.Response(406, request=request, headers={})
-        response_200 = httpx.Response(200, request=request)
         mock_op = AsyncMock(
-            side_effect=[
-                httpx.HTTPStatusError("406", request=request, response=response_406),
-                response_200,
-            ]
+            side_effect=httpx.HTTPStatusError(
+                "406", request=request, response=response_406
+            )
         )
-        result = await retry_with_backoff(
-            mock_op,
-            max_retries=3,
-            initial_backoff=0.01,
-            max_backoff=0.1,
-        )
-        assert result == response_200
-        assert mock_op.call_count == 2
+        # Should raise immediately without retry
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await retry_with_backoff(
+                mock_op,
+                max_retries=3,
+                initial_backoff=0.01,
+                max_backoff=0.1,
+            )
+        assert exc_info.value.response.status_code == 406
+        # Should NOT retry - only 1 call
+        assert mock_op.call_count == 1
 
     async def test_raises_arxiv_rate_limit_error_after_max_retries_429(self):
         """ArxivRateLimitError raised after exhausting retries on HTTP 429."""
@@ -216,8 +217,8 @@ class TestRetryWithBackoff:
         assert "rate limiting" in str(exc_info.value).lower()
         assert mock_op.call_count == 3
 
-    async def test_raises_arxiv_rate_limit_error_406_with_long_retry(self):
-        """ArxivRateLimitError for HTTP 406 uses 600s default retry."""
+    async def test_http_406_not_treated_as_rate_limit(self):
+        """HTTP 406 is NOT treated as rate limiting."""
         request = httpx.Request("GET", "https://example.com")
         response_406 = httpx.Response(406, request=request, headers={})
         mock_op = AsyncMock(
@@ -225,16 +226,17 @@ class TestRetryWithBackoff:
                 "406", request=request, response=response_406
             )
         )
-        with pytest.raises(ArxivRateLimitError) as exc_info:
+        # Should raise HTTPStatusError, NOT ArxivRateLimitError
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             await retry_with_backoff(
                 mock_op,
                 max_retries=1,
                 initial_backoff=0.01,
                 max_backoff=0.1,
             )
-        assert exc_info.value.status_code == 406
-        assert exc_info.value.retry_after_seconds == 600.0
-        assert "600 seconds" in str(exc_info.value)
+        assert exc_info.value.response.status_code == 406
+        # Should NOT retry
+        assert mock_op.call_count == 1
 
     async def test_honors_retry_after_header(self):
         """Retry-After header value is captured in ArxivRateLimitError."""

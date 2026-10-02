@@ -148,9 +148,11 @@ async def retry_with_backoff(
 
     Retries on:
     - httpx.TimeoutException
-    - httpx.ConnectError, httpx.ConnectTimeout
-    - httpx.HTTPStatusError with status 429, 503, 406
-    - ArxivTimeoutError, ArxivConnectionError, ArxivRateLimitError
+    - httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError
+    - httpx.HTTPStatusError with status 429, 503 (NOT 406 - see note)
+
+    Note: HTTP 406 is NOT retried. arXiv's 406 responses are not throttling
+    and retrying them does not help (may prolong IP-level blocks).
 
     Args:
         operation: Async callable to execute.
@@ -241,7 +243,9 @@ async def retry_with_backoff(
                     f"The arXiv API may be slow or overloaded. Please retry shortly."
                 ) from e
         except httpx.HTTPStatusError as e:
-            if e.response is not None and e.response.status_code in (429, 503, 406):
+            if e.response is not None and e.response.status_code in (429, 503):
+                # Only retry 429 and 503 (rate limiting/service unavailable)
+                # HTTP 406 is NOT throttling and should not be retried
                 last_exception = e
                 retry_after = e.response.headers.get("Retry-After")
                 if attempt < max_retries:
@@ -260,10 +264,7 @@ async def retry_with_backoff(
                 else:
                     parsed_retry_after = _parse_retry_after_seconds(retry_after)
                     if parsed_retry_after is None:
-                        if e.response.status_code == 406:
-                            parsed_retry_after = 600.0
-                        else:
-                            parsed_retry_after = 60.0
+                        parsed_retry_after = 60.0
                     logger.error(
                         "%s HTTP %d after %d attempts",
                         operation_name,
@@ -277,6 +278,7 @@ async def retry_with_backoff(
                         retry_after_seconds=parsed_retry_after,
                     ) from e
             else:
+                # Non-retryable HTTP errors (including 406)
                 raise
         except (ArxivTimeoutError, ArxivConnectionError, ArxivRateLimitError):
             raise
@@ -313,8 +315,8 @@ def stream_pdf_to_path(
 ) -> None:
     """Stream an arXiv PDF to disk with bounded memory usage.
 
-    Handles arXiv HTTP 406/429/503 (throttling) with retries and exponential backoff.
-    Now uses the unified retry infrastructure for consistency.
+    Handles arXiv HTTP 429/503 (rate limiting) with retries and exponential backoff.
+    HTTP 406 is NOT retried (not throttling, may indicate IP-level block).
     """
     from .config import Settings
 
@@ -404,7 +406,8 @@ def stream_pdf_to_path(
                         f"Could not connect to arXiv for PDF download after {settings.ARXIV_MAX_RETRIES + 1} attempts"
                     ) from e
             except httpx.HTTPStatusError as e:
-                if e.response is not None and e.response.status_code in (406, 429, 503):
+                if e.response is not None and e.response.status_code in (429, 503):
+                    # Only retry 429/503 (rate limiting). 406 is NOT retried.
                     last_exception = e
                     if attempt < settings.ARXIV_MAX_RETRIES:
                         retry_after = e.response.headers.get("Retry-After")
@@ -437,7 +440,7 @@ def stream_pdf_to_path(
                             e.response.headers.get("Retry-After")
                         )
                         if retry_after_seconds is None:
-                            retry_after_seconds = 600.0 if status_code == 406 else 60.0
+                            retry_after_seconds = 60.0
                         message = (
                             f"arXiv is rate limiting this IP (HTTP {status_code}). "
                             f"Please wait {int(retry_after_seconds)} seconds before retrying."
@@ -448,7 +451,7 @@ def stream_pdf_to_path(
                             retry_after_seconds=retry_after_seconds,
                         ) from e
                 else:
-                    # Non-retryable HTTP error
+                    # Non-retryable HTTP error (including 406)
                     staging.unlink(missing_ok=True)
                     status = (
                         e.response.status_code if e.response is not None else "unknown"
