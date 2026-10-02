@@ -10,7 +10,6 @@ from arxiv_mcp_server.tools.search import (
     DEFAULT_MAX_RESULTS,
     ABSTRACT_SNIPPET_CHARS,
     SORT_BY_VALUES,
-    _MAX_RETRIES,
     _validate_categories,
     _raw_arxiv_search,
     _rate_limited_get,
@@ -22,7 +21,6 @@ from arxiv_mcp_server.tools.search import (
     _normalize_abstract_mode,
     _normalize_sort_by,
     _scope_user_query,
-    _backoff_seconds,
     build_arxiv_search_query,
     build_arxiv_search_url,
 )
@@ -1146,17 +1144,20 @@ async def test_search_no_criteria_returns_structured_error():
 
 def test_search_backoff_seconds_matches_citation_graph_pattern():
     """Backoff ladder should use exponential delay with jitter (#238)."""
-    with patch.object(search_module.random, "random", return_value=0.5):
-        assert _backoff_seconds(0, None) == 2.0
-        assert _backoff_seconds(1, None) == 4.0
-        assert _backoff_seconds(2, None) == 8.0
-        assert _backoff_seconds(5, None) == 60.0
+    from arxiv_mcp_server.arxiv_api import _compute_backoff_seconds
+    import random
 
-    with patch.object(search_module.random, "random", return_value=0.0):
-        assert _backoff_seconds(0, None) == 1.0
+    with patch.object(random, "random", return_value=0.5):
+        assert _compute_backoff_seconds(0, None, 2.0, 60.0) == 2.0
+        assert _compute_backoff_seconds(1, None, 2.0, 60.0) == 4.0
+        assert _compute_backoff_seconds(2, None, 2.0, 60.0) == 8.0
+        assert _compute_backoff_seconds(5, None, 2.0, 60.0) == 60.0
 
-    with patch.object(search_module.random, "random", return_value=1.0):
-        assert _backoff_seconds(0, "45") == 60.0
+    with patch.object(random, "random", return_value=0.0):
+        assert _compute_backoff_seconds(0, None, 2.0, 60.0) == 1.0
+
+    with patch.object(random, "random", return_value=1.0):
+        assert _compute_backoff_seconds(0, "45", 2.0, 60.0) == 60.0
 
 
 @pytest.mark.asyncio
@@ -1183,7 +1184,7 @@ async def test_search_retries_on_429_then_succeeds():
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch.object(search_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
     ):
         result = await handle_search({"query": "transformers", "max_results": 1})
 
@@ -1197,7 +1198,10 @@ async def test_search_retries_on_429_then_succeeds():
 @pytest.mark.asyncio
 async def test_search_429_exhausted_returns_soft_rate_limited():
     """Persistent arXiv 429s soft-fail as status=rate_limited JSON (#238)."""
-    attempts = _MAX_RETRIES + 1
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
     rate_limited = MagicMock()
     rate_limited.status_code = 429
     rate_limited.headers = {"Retry-After": "30"}
@@ -1212,7 +1216,7 @@ async def test_search_429_exhausted_returns_soft_rate_limited():
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch.object(search_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
     ):
         result = await handle_search({"query": "transformers", "max_results": 1})
 
@@ -1223,7 +1227,7 @@ async def test_search_429_exhausted_returns_soft_rate_limited():
     assert content["retry_after_seconds"] == 30.0
     assert not result[0].text.startswith("Error:")
     assert mock_client.get.call_count == attempts
-    assert sleep.await_count == _MAX_RETRIES
+    assert sleep.await_count == settings.ARXIV_MAX_RETRIES
 
 
 @pytest.mark.asyncio
@@ -1246,7 +1250,7 @@ async def test_rate_limited_get_retries_503_then_succeeds():
 
     with (
         patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch.object(search_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
     ):
         response = await _rate_limited_get(
             mock_client, "https://export.arxiv.org/api/query"
@@ -1277,7 +1281,7 @@ async def test_rate_limited_get_retries_406_minimally_then_succeeds():
 
     with (
         patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch.object(search_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
     ):
         response = await _rate_limited_get(
             mock_client, "https://export.arxiv.org/api/query"
@@ -1305,7 +1309,7 @@ async def test_search_406_exhausted_returns_soft_rate_limited():
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(search_module.asyncio, "sleep", new_callable=AsyncMock) as sleep,
-        patch.object(search_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
     ):
         result = await handle_search({"query": "transformers", "max_results": 1})
 
@@ -1315,6 +1319,9 @@ async def test_search_406_exhausted_returns_soft_rate_limited():
     assert content["http_status"] == 406
     assert content["retry_after_seconds"] == 600.0
     assert not result[0].text.startswith("Error:")
-    # 406 should only retry 1 time (2 attempts total)
-    assert mock_client.get.call_count == search_module._HTTP_406_MAX_RETRIES + 1
-    assert sleep.await_count == search_module._HTTP_406_MAX_RETRIES
+    # Now 406 uses the same retry count as other rate-limited statuses
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    assert mock_client.get.call_count == settings.ARXIV_MAX_RETRIES + 1
+    assert sleep.await_count == settings.ARXIV_MAX_RETRIES

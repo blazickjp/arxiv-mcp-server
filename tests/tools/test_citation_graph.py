@@ -84,7 +84,9 @@ def _json_response(payload, status_code=200, headers=None):
     response.status_code = status_code
     response.headers = headers or {}
     response.json.return_value = payload
-    if status_code >= 400 and status_code != 429:
+    # With the new retry infrastructure, 429/503/406 must raise HTTPStatusError
+    # so the retry logic can catch them
+    if status_code >= 400:
         response.raise_for_status.side_effect = httpx.HTTPStatusError(
             "error", request=MagicMock(), response=response
         )
@@ -170,7 +172,7 @@ async def test_citation_graph_retries_on_429_then_succeeds():
         patch.object(
             citation_graph_module.asyncio, "sleep", new_callable=AsyncMock
         ) as sleep,
-        patch.object(citation_graph_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
         patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
     ):
         mock_cache_dir.return_value = Path("/tmp/nonexistent_cache")
@@ -187,14 +189,17 @@ async def test_citation_graph_retries_on_429_then_succeeds():
 @pytest.mark.asyncio
 async def test_citation_graph_429_exhausted_returns_soft_rate_limited():
     """Persistent 429s should soft-fail with unmistakable API-key guidance."""
-    attempts = citation_graph_module._MAX_RETRIES + 1
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
     rate_limited = _json_response({}, status_code=429)
     mock_client = _mock_async_client([rate_limited] * attempts)
 
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
-        patch.object(citation_graph_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
         patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
     ):
         mock_cache_dir.return_value = Path("/tmp/nonexistent_cache")
@@ -221,7 +226,10 @@ async def test_citation_graph_429_exhausted_returns_soft_rate_limited():
 @pytest.mark.asyncio
 async def test_citation_graph_429_exhausted_with_api_key_guidance():
     """When an API key is set, rate-limit guidance should mention that fact."""
-    attempts = citation_graph_module._MAX_RETRIES + 1
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
     rate_limited = _json_response({}, status_code=429)
     mock_client = _mock_async_client([rate_limited] * attempts)
 
@@ -246,23 +254,72 @@ async def test_citation_graph_429_exhausted_with_api_key_guidance():
 
 def test_backoff_seconds_longer_with_jitter():
     """Backoff should start higher than the old 1s ladder and include jitter."""
-    with patch.object(citation_graph_module.random, "random", return_value=0.5):
+    from arxiv_mcp_server.arxiv_api import _compute_backoff_seconds
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    with patch("random.random", return_value=0.5):
         # 0.5 jitter multiplier => delay * 1.0 (0.5 + 0.5)
-        assert citation_graph_module._backoff_seconds(0, None) == 2.0
-        assert citation_graph_module._backoff_seconds(1, None) == 4.0
-        assert citation_graph_module._backoff_seconds(2, None) == 8.0
-        assert citation_graph_module._backoff_seconds(3, None) == 16.0
-        assert citation_graph_module._backoff_seconds(4, None) == 32.0
-        assert citation_graph_module._backoff_seconds(5, None) == 60.0
+        assert (
+            _compute_backoff_seconds(
+                0, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 2.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                1, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 4.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                2, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 8.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                3, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 16.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                4, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 32.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                5, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 60.0
+        )
 
-    with patch.object(citation_graph_module.random, "random", return_value=0.0):
+    with patch("random.random", return_value=0.0):
         # Minimum jitter is 50% of the exponential delay.
-        assert citation_graph_module._backoff_seconds(0, None) == 1.0
-        assert citation_graph_module._backoff_seconds(1, None) == 2.0
+        assert (
+            _compute_backoff_seconds(
+                0, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 1.0
+        )
+        assert (
+            _compute_backoff_seconds(
+                1, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 2.0
+        )
 
-    with patch.object(citation_graph_module.random, "random", return_value=1.0):
+    with patch("random.random", return_value=1.0):
         # Retry-After can raise the floor before jitter, still capped.
-        assert citation_graph_module._backoff_seconds(0, "45") == 60.0
+        assert (
+            _compute_backoff_seconds(
+                0, "45", settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+            )
+            == 60.0
+        )
 
 
 @pytest.mark.asyncio
@@ -486,7 +543,10 @@ async def test_citation_graph_cache_respects_max_citations():
 @pytest.mark.asyncio
 async def test_citation_graph_cache_rate_limited_expires_quickly():
     """Rate-limited results should expire quickly from cache."""
-    attempts = citation_graph_module._MAX_RETRIES + 1
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
     rate_limited = _json_response({}, status_code=429)
     mock_client = _mock_async_client([rate_limited] * attempts + [_success_response()])
 
@@ -526,7 +586,10 @@ async def test_citation_graph_cache_rate_limited_expires_quickly():
 @pytest.mark.asyncio
 async def test_citation_graph_rate_limited_cached_not_as_empty_success():
     """Rate-limited results ARE cached but served with unmistakable rate-limit markers, NOT as empty success."""
-    attempts = citation_graph_module._MAX_RETRIES + 1
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
     rate_limited = _json_response({}, status_code=429)
     # Only provide responses for first call; second call should serve from cache
     mock_client = _mock_async_client([rate_limited] * attempts)
@@ -534,7 +597,7 @@ async def test_citation_graph_rate_limited_cached_not_as_empty_success():
     with (
         patch("httpx.AsyncClient", return_value=mock_client),
         patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
-        patch.object(citation_graph_module.random, "random", return_value=0.5),
+        patch("random.random", return_value=0.5),
         patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
     ):
         cache_dir = Path("/tmp/test_citation_cache_rate_limited_not_empty")

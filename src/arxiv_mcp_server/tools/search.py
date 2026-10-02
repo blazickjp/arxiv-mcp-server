@@ -4,7 +4,6 @@ import json
 import logging
 import httpx
 import asyncio
-import random
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from typing import Dict, Any, List, Optional
@@ -13,7 +12,11 @@ from dateutil import parser
 import mcp.types as types
 from mcp.types import ToolAnnotations
 from ..config import Settings
-from ..arxiv_api import ARXIV_RATE_LIMITER
+from ..arxiv_api import (
+    ARXIV_RATE_LIMITER,
+    ArxivRateLimitError,
+    retry_with_backoff,
+)
 from .content import CONTENT_WARNING
 
 logger = logging.getLogger("arxiv-mcp-server")
@@ -34,54 +37,15 @@ ARXIV_HEADERS = {
     )
 }
 
-# Retry/backoff for arXiv 429/503 — parity with citation_graph soft handling (#238).
-_MAX_RETRIES = 5
-_INITIAL_BACKOFF_SECONDS = 2.0
-_MAX_BACKOFF_SECONDS = 60.0
-_DEFAULT_RETRY_AFTER_SECONDS = 60.0
+# Legacy retry constants for backward compatibility
+# (now managed by retry_with_backoff in arxiv_api)
 _HTTP_406_RETRY_AFTER_SECONDS = 600.0
+_DEFAULT_RETRY_AFTER_SECONDS = 60.0
 _HTTP_406_MAX_RETRIES = 1
+
 RATE_LIMIT_MESSAGE = (
     "arXiv is rate limiting this IP (HTTP 429). " "Please wait before retrying."
 )
-
-
-class ArxivRateLimitError(RuntimeError):
-    """Raised when arXiv keeps returning HTTP 429/503 after retries."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        status_code: int = 429,
-        retry_after_seconds: float | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.retry_after_seconds = retry_after_seconds
-
-
-def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
-    """Exponential backoff with jitter, honoring numeric Retry-After when present."""
-    delay = min(_INITIAL_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
-    if retry_after:
-        try:
-            delay = min(max(delay, float(retry_after)), _MAX_BACKOFF_SECONDS)
-        except ValueError:
-            pass
-    # Full-ish jitter keeps concurrent clients from retrying in lockstep.
-    jittered = delay * (0.5 + random.random())
-    return min(jittered, _MAX_BACKOFF_SECONDS)
-
-
-def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
-    """Parse a numeric Retry-After header value, if present."""
-    if not retry_after:
-        return None
-    try:
-        return float(retry_after)
-    except ValueError:
-        return None
 
 
 def _status_response(
@@ -117,73 +81,27 @@ def _rate_limited_response(
 
 
 async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """Make an HTTP request through the process-wide arXiv request gate.
-
-    Retries HTTP 429/503 with exponential backoff + jitter (citation_graph parity).
-    Retries HTTP 406 with minimal attempts to avoid prolonging the IP-level block.
-    One additional retry on timeout only, independent of the rate-limit budget.
+    """Make an HTTP request through the process-wide arXiv request gate with retry.
+    
+    Retries HTTP 429/503/406 and timeouts/connection errors with exponential backoff.
+    Uses the unified retry_with_backoff infrastructure from arxiv_api.
     """
 
     async def request() -> httpx.Response:
-        last_response: httpx.Response | None = None
-        for attempt in range(_MAX_RETRIES + 1):
-            response: httpx.Response | None = None
-            for timeout_attempt in range(2):
-                try:
-                    response = await client.get(url, headers=ARXIV_HEADERS)
-                    break
-                except httpx.TimeoutException:
-                    if timeout_attempt == 0:
-                        logger.warning("arXiv request timed out, retrying once")
-                        await asyncio.sleep(5.0)
-                    else:
-                        raise RuntimeError("arXiv request timed out after retry")
-            assert response is not None
-            if response.status_code in (429, 503, 406):
-                last_response = response
-                max_retries_for_status = (
-                    _HTTP_406_MAX_RETRIES
-                    if response.status_code == 406
-                    else _MAX_RETRIES
-                )
-                if attempt == max_retries_for_status:
-                    break
-                wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
-                logger.warning(
-                    "arXiv %s; retrying in %.1fs (attempt %s/%s)",
-                    response.status_code,
-                    wait,
-                    attempt + 1,
-                    max_retries_for_status + 1,
-                )
-                await asyncio.sleep(wait)
-                continue
-            response.raise_for_status()
-            return response
+        response = await client.get(url, headers=ARXIV_HEADERS)
+        response.raise_for_status()
+        return response
 
-        status_code = last_response.status_code if last_response is not None else 429
-        retry_after = None
-        if last_response is not None:
-            retry_after = _parse_retry_after_seconds(
-                last_response.headers.get("Retry-After")
-            )
-        if retry_after is None:
-            retry_after = (
-                _HTTP_406_RETRY_AFTER_SECONDS
-                if status_code == 406
-                else _DEFAULT_RETRY_AFTER_SECONDS
-            )
-        message = (
-            f"arXiv is rate limiting this IP (HTTP {status_code}). "
-            f"Please wait {int(retry_after)} seconds before retrying."
+    return await ARXIV_RATE_LIMITER.run_async(
+        lambda: retry_with_backoff(
+            request,
+            max_retries=settings.ARXIV_MAX_RETRIES,
+            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+            max_backoff=settings.ARXIV_MAX_BACKOFF,
+            max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
+            operation_name=f"arXiv API request to {url[:100]}",
         )
-        raise ArxivRateLimitError(
-            message,
-            status_code=status_code,
-            retry_after_seconds=retry_after,
-        )
-
-    return await ARXIV_RATE_LIMITER.run_async(request)
+    )
 
 
 # arXiv API endpoint for raw queries (bypasses arxiv package URL encoding issues)
@@ -374,8 +292,14 @@ async def _raw_arxiv_search(
     )
     logger.debug(f"Raw API URL: {url}")
 
-    # Make the request via rate-limited helper
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    # Make the request via rate-limited helper with generous timeout for slow searches
+    timeout = httpx.Timeout(
+        connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+        read=float(settings.ARXIV_REQUEST_TIMEOUT),
+        write=30.0,
+        pool=30.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await _rate_limited_get(client, url)
 
     papers = _parse_arxiv_atom_response(response.text)

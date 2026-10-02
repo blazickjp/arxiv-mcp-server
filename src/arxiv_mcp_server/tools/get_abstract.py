@@ -12,13 +12,15 @@ from .content import CONTENT_WARNING
 from .search import (
     _rate_limited_get,
     ARXIV_API_URL,
-    ArxivRateLimitError,
     _rate_limited_response,
 )
+from ..arxiv_api import ArxivRateLimitError
+from ..config import Settings
 import httpx
 import xml.etree.ElementTree as ET
 
 logger = logging.getLogger("arxiv-mcp-server")
+settings = Settings()
 
 abstract_tool = types.Tool(
     name="get_abstract",
@@ -72,7 +74,13 @@ async def handle_get_abstract(arguments: Dict[str, Any]) -> List[types.TextConte
 
         url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        timeout = httpx.Timeout(
+            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+            read=float(settings.ARXIV_REQUEST_TIMEOUT),
+            write=30.0,
+            pool=30.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await _rate_limited_get(client, url)
 
         root = ET.fromstring(response.text)

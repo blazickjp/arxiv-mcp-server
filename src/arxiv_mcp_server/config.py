@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
     REQUEST_TIMEOUT: int = 60
+    ARXIV_REQUEST_TIMEOUT: int = 90
+    ARXIV_CONNECT_TIMEOUT: int = 30
+    ARXIV_MAX_RETRIES: int = 3
+    ARXIV_INITIAL_BACKOFF: float = 2.0
+    ARXIV_MAX_BACKOFF: float = 60.0
+    ARXIV_MAX_TOTAL_TIME: int = 300
     TRANSPORT: str = "stdio"
     HOST: str = "127.0.0.1"
     PORT: int = 8000

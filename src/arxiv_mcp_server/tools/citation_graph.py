@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -16,6 +15,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
+from ..arxiv_api import retry_with_backoff
 from .arxiv_ids import (
     arxiv_version_suffix,
     bare_arxiv_id,
@@ -48,9 +48,6 @@ RATE_LIMIT_MESSAGE_WITH_KEY = (
     "This is NOT an empty graph—the API blocked the request. "
     "Wait and retry, or reduce max_citations."
 )
-_MAX_RETRIES = 5
-_INITIAL_BACKOFF_SECONDS = 2.0
-_MAX_BACKOFF_SECONDS = 60.0
 # Cache citation graphs on disk to reduce repeated S2 calls. Rate-limited results
 # expire quickly; successful graphs persist longer.
 CACHE_TTL_SUCCESS_SECONDS = 7 * 24 * 3600  # 7 days
@@ -292,34 +289,35 @@ def _save_cached_graph(
         logger.warning("Failed to cache citation graph to %s: %s", cache_file.name, exc)
 
 
-def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
-    """Exponential backoff with jitter, honoring numeric Retry-After when present."""
-    delay = min(_INITIAL_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
-    if retry_after:
-        try:
-            delay = min(max(delay, float(retry_after)), _MAX_BACKOFF_SECONDS)
-        except ValueError:
-            pass
-    # Full-ish jitter keeps concurrent clients from retrying in lockstep.
-    jittered = delay * (0.5 + random.random())
-    return min(jittered, _MAX_BACKOFF_SECONDS)
-
-
 async def _s2_get(
     client: httpx.AsyncClient, url: str, params: Dict[str, Any] | None = None
 ) -> httpx.Response:
-    """GET a Semantic Scholar URL, retrying with backoff on HTTP 429."""
-    for attempt in range(_MAX_RETRIES + 1):
+    """GET a Semantic Scholar URL with retry on HTTP 429 and timeout/connection errors.
+    
+    Uses the unified retry_with_backoff infrastructure for consistency.
+    """
+
+    async def request() -> httpx.Response:
         response = await client.get(url, params=params, headers=_s2_headers())
-        if response.status_code != 429:
-            response.raise_for_status()
-            return response
-        if attempt == _MAX_RETRIES:
-            break
-        wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
-        logger.warning("Semantic Scholar 429 on %s; retrying in %.1fs", url, wait)
-        await asyncio.sleep(wait)
-    raise SemanticScholarRateLimitError(_rate_limit_message())
+        response.raise_for_status()
+        return response
+
+    try:
+        return await retry_with_backoff(
+            request,
+            max_retries=settings.ARXIV_MAX_RETRIES,
+            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+            max_backoff=settings.ARXIV_MAX_BACKOFF,
+            max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
+            operation_name=f"Semantic Scholar request to {url[:100]}",
+        )
+    except Exception as e:
+        # Convert our ArxivRateLimitError to SemanticScholarRateLimitError for this tool
+        from ..arxiv_api import ArxivRateLimitError
+
+        if isinstance(e, ArxivRateLimitError):
+            raise SemanticScholarRateLimitError(_rate_limit_message()) from e
+        raise
 
 
 def _extract_citations(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -430,7 +428,13 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             # /citations and /references calls, but that defeats the quota goal.
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        timeout = httpx.Timeout(
+            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+            read=float(settings.ARXIV_REQUEST_TIMEOUT),
+            write=30.0,
+            pool=30.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             paper_response = await _s2_get(client, paper_url, params)
 
         payload = paper_response.json()
