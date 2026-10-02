@@ -211,12 +211,13 @@ async def retry_with_backoff(
                     attempt,
                 )
                 if last_exception:
-                    raise RuntimeError(
-                        f"{operation_name} timed out after {max_total_time:.0f}s "
-                        f"(exceeded maximum total time)"
+                    raise ArxivTimeoutError(
+                        f"{operation_name} timed out after {max_total_time:.0f}s. "
+                        f"The arXiv API may be slow or overloaded. Please retry shortly."
                     ) from last_exception
-                raise RuntimeError(
-                    f"{operation_name} timed out after {max_total_time:.0f}s"
+                raise ArxivTimeoutError(
+                    f"{operation_name} timed out after {max_total_time:.0f}s. "
+                    f"The arXiv API may be slow or overloaded. Please retry shortly."
                 )
 
         try:
