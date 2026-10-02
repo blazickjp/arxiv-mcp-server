@@ -495,12 +495,12 @@ def stream_pdf_to_path(
             with client.stream("GET", canonical_pdf_url(paper)) as response:
                 response.raise_for_status()
                 with staging.open("wb") as output:
-                    # Use iter_raw() instead of iter_bytes() for true per-read deadline check
-                    # iter_bytes() buffers until chunk_size arrives, so with 1-byte drip
-                    # the deadline check never runs
-                    for chunk in response.iter_raw(chunk_size=32 * 1024):
+                    # Use iter_raw() with NO chunk_size to get each transport read immediately
+                    # This avoids ByteChunker buffering and allows deadline check on every read
+                    for chunk in response.iter_raw():
                         # Check wall-clock deadline for trickling responses
-                        if time.monotonic() >= deadline:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
                             raise ArxivTimeoutError(
                                 "PDF download exceeded deadline (trickling response). "
                                 "Please retry shortly."

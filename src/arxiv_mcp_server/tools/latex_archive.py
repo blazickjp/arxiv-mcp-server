@@ -79,12 +79,12 @@ def _download_source_archive(paper_id: str) -> bytes:
                         pass
                 chunks: list[bytes] = []
                 received = 0
-                # Use iter_raw() instead of iter_bytes() for true per-read deadline check
-                # iter_bytes() buffers until chunk_size arrives, so with 1-byte drip
-                # the deadline check never runs
-                for chunk in response.iter_raw(chunk_size=32 * 1024):
+                # Use iter_raw() with NO chunk_size to get each transport read immediately
+                # This avoids ByteChunker buffering and allows deadline check on every read
+                for chunk in response.iter_raw():
                     # Check wall-clock deadline before processing each chunk
-                    if time.monotonic() >= deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         raise LatexSourceError(
                             f"LaTeX source download exceeded deadline (trickling response)"
                         )

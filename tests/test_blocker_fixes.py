@@ -402,21 +402,131 @@ class TestNewBlockerFixes:
     async def test_latex_trickle_bounded_by_budget(self):
         """LaTeX trickling body is cut off by wall-clock deadline."""
         from arxiv_mcp_server.tools.latex_archive import _download_source_archive
+        from arxiv_mcp_server.tools.latex_archive import LatexSourceError
 
-        # Simply verify that a very slow trickle completes within reasonable time
-        # The actual implementation uses 32KB chunks and deadline checks
-        # We'll just ensure the timeout mechanism works by using a short REQUEST_TIMEOUT
+        # Mock a trickling stream that yields 1 byte every 0.15s
+        # With 1s budget, should timeout after ~6-7 chunks
+        class TricklingStream:
+            def __init__(self):
+                self.count = 0
+                self.start = time.monotonic()
 
-        # This test validates that trickling responses don't hang indefinitely
-        # The actual trickle detection is integration-tested via the user's sim logs
-        pass  # Covered by integration tests in timing evidence
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                self.count += 1
+                if self.count > 100:  # Safety limit
+                    raise StopIteration
+                # Simulate slow drip - each byte takes 0.15s
+                time.sleep(0.15)
+                return b"x"  # 1 byte at a time
+
+        with (
+            patch("time.monotonic") as mock_monotonic,
+            patch("time.sleep") as mock_sleep,
+        ):
+            # Mock time to progress on each check
+            call_count = [0]
+
+            def mock_time():
+                call_count[0] += 1
+                # Start at 0, increment by 0.2s each call to simulate slow progress
+                return call_count[0] * 0.2
+
+            mock_monotonic.side_effect = mock_time
+
+            with patch("httpx.Client") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_response = MagicMock()
+                mock_response.raise_for_status = MagicMock()
+                mock_response.headers = {}
+                mock_response.iter_raw = MagicMock(return_value=TricklingStream())
+                mock_stream = MagicMock()
+                mock_stream.__enter__ = MagicMock(return_value=mock_response)
+                mock_stream.__exit__ = MagicMock(return_value=False)
+                mock_client.stream.return_value = mock_stream
+                mock_client.__enter__ = MagicMock(return_value=mock_client)
+                mock_client.__exit__ = MagicMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+
+                # Should raise LatexSourceError due to deadline exceeded
+                with pytest.raises(LatexSourceError) as exc_info:
+                    with patch.dict(
+                        "os.environ", {"ARXIV_MAX_TOTAL_TIME": "1.0"}, clear=False
+                    ):
+                        _download_source_archive("2103.14030")
+
+                assert "exceeded deadline" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_pdf_trickle_bounded_by_budget(self):
         """PDF trickling body is cut off by wall-clock deadline."""
-        # Similar to LaTeX - the deadline check in iter_bytes prevents unbounded trickle
-        # This is validated by the timing evidence showing bounded PDF times
-        pass  # Covered by integration tests in timing evidence
+        from arxiv_mcp_server.arxiv_api import stream_pdf_to_path, ArxivTimeoutError
+        from pathlib import Path
+        import tempfile
+
+        mock_paper = MagicMock()
+        mock_paper.get_short_id.return_value = "2103.14030"
+
+        # Mock a trickling stream
+        class TricklingStream:
+            def __init__(self):
+                self.count = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                self.count += 1
+                if self.count > 100:
+                    raise StopIteration
+                time.sleep(0.15)
+                return b"x"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdf_path = Path(tmpdir) / "test.pdf"
+
+            with (
+                patch("time.monotonic") as mock_monotonic,
+                patch("time.sleep") as mock_sleep,
+            ):
+                call_count = [0]
+
+                def mock_time():
+                    call_count[0] += 1
+                    return call_count[0] * 0.2
+
+                mock_monotonic.side_effect = mock_time
+
+                with patch("httpx.Client") as mock_client_cls:
+                    mock_client = MagicMock()
+                    mock_response = MagicMock()
+                    mock_response.raise_for_status = MagicMock()
+                    mock_response.iter_raw = MagicMock(return_value=TricklingStream())
+                    mock_stream = MagicMock()
+                    mock_stream.__enter__ = MagicMock(return_value=mock_response)
+                    mock_stream.__exit__ = MagicMock(return_value=False)
+                    mock_client.stream.return_value = mock_stream
+                    mock_client.__enter__ = MagicMock(return_value=mock_client)
+                    mock_client.__exit__ = MagicMock(return_value=False)
+                    mock_client_cls.return_value = mock_client
+
+                    # Provide explicit deadline 1.0s from start
+                    with pytest.raises(ArxivTimeoutError) as exc_info:
+                        stream_pdf_to_path(
+                            mock_paper,
+                            pdf_path,
+                            request_timeout=30.0,
+                            user_agent="test",
+                            deadline=1.0,
+                        )
+
+                    # Should be caught by deadline check in iter_raw loop
+                    error_msg = str(exc_info.value).lower()
+                    assert (
+                        "exceeded deadline" in error_msg or "trickle" in error_msg
+                    ), f"Expected deadline/trickle error, got: {exc_info.value}"
 
     @pytest.mark.asyncio
     async def test_html_plus_pdf_stall_single_budget(self):
