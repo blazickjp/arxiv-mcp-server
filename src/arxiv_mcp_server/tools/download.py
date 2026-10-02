@@ -800,10 +800,11 @@ def _fetch_html_content(paper_id: str, deadline: float) -> str | None:
                 logger.info(f"HTML fetch insufficient budget for attempt, will try PDF")
                 return None
             # Rate limiter only holds lock for this attempt
-            # Check deadline before waiting on rate limiter
-            if time.monotonic() >= deadline:
+            # Check deadline before waiting on rate limiter (limiter enforces 3s minimum)
+            remaining_before_limiter = deadline - time.monotonic()
+            if remaining_before_limiter < 3.5:  # Need headroom for 3s rate-limiter wait
                 logger.info(
-                    f"HTML fetch deadline exceeded before rate-limiter wait, will try PDF"
+                    f"HTML fetch insufficient time for rate-limiter wait ({remaining_before_limiter:.1f}s < 3.5s), will try PDF"
                 )
                 return None
             return ARXIV_RATE_LIMITER.run_sync(
@@ -1042,10 +1043,11 @@ def _fetch_pdf_content_unlocked(
     # Note: Retry-After headers cannot be honored on this path because the
     # arxiv package's HTTPError does not preserve response headers.
 
-    # Check deadline before metadata lookup
-    if time.monotonic() >= deadline:
+    # Check deadline before metadata lookup (need 3.5s headroom for rate limiter)
+    remaining = deadline - time.monotonic()
+    if remaining < 3.5:
         raise ArxivTimeoutError(
-            f"PDF metadata lookup skipped (deadline exceeded). "
+            f"PDF metadata lookup skipped (insufficient time for rate-limiter wait: {remaining:.1f}s < 3.5s). "
             f"Please retry shortly."
         )
 

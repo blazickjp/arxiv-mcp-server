@@ -458,8 +458,8 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 |---|---:|---|
 | `--storage-path` | `~/.arxiv-mcp-server/papers` | Paper, source-cache, alert, and index storage |
 | `MAX_RESULTS` | `50` | Server-side cap for result counts |
-| `ARXIV_REQUEST_TIMEOUT` | `30` | Per-attempt read timeout in seconds for API, HTML, PDF, and LaTeX requests |
-| `REQUEST_TIMEOUT` | `60` | **Deprecated.** Legacy alias for `ARXIV_REQUEST_TIMEOUT` (used only if `ARXIV_REQUEST_TIMEOUT` not set) |
+| `ARXIV_REQUEST_TIMEOUT` | `30` | Per-attempt read timeout in seconds for all arXiv requests (API, HTML, PDF, LaTeX) |
+| `REQUEST_TIMEOUT` | – | **Deprecated.** Legacy alias for `ARXIV_REQUEST_TIMEOUT` (applies to all requests). Only used when `ARXIV_REQUEST_TIMEOUT` is not set. Effective default: 30s |
 | `ARXIV_CONNECT_TIMEOUT` | `10` | Connection timeout in seconds for all arXiv requests |
 | `ARXIV_MAX_TOTAL_TIME` | `50` | Total budget in seconds for each tool call (HTML + PDF combined for `download_paper`) |
 | `ARXIV_MAX_RETRIES` | `2` | Maximum retry attempts for transient failures (timeouts, connections, 429, 503) |

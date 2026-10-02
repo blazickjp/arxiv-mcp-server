@@ -112,6 +112,12 @@ def _download_source_archive(paper_id: str) -> bytes:
                 float(settings.get_request_timeout()), remaining * 0.9
             )
             deadline = start_time + max_total_time
+            # Check if we have enough time for rate-limiter wait (3s minimum)
+            remaining_before_limiter = deadline - time.monotonic()
+            if remaining_before_limiter < 3.5:
+                raise LatexSourceError(
+                    f"LaTeX source download: insufficient time for rate-limiter wait ({remaining_before_limiter:.1f}s < 3.5s)"
+                )
             # Rate limiter only holds lock for this attempt
             return ARXIV_RATE_LIMITER.run_sync(
                 lambda: single_attempt(attempt_timeout, deadline)

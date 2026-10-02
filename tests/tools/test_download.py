@@ -444,6 +444,7 @@ async def test_html_fetch_406_honors_retry_after_header():
     """HTML 406 should honor Retry-After header (issue C5_html406_RA30)."""
     from arxiv_mcp_server.tools.download import _fetch_html_content
     from arxiv_mcp_server.arxiv_api import ArxivRateLimitError
+    from arxiv_mcp_server import arxiv_api
     from unittest.mock import MagicMock, patch
     import time
 
@@ -455,6 +456,9 @@ async def test_html_fetch_406_honors_retry_after_header():
     with (
         patch("httpx.get", return_value=mock_response),
         patch("time.monotonic", return_value=0.0),
+        patch.object(
+            arxiv_api.ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f: f()
+        ),
     ):
         with pytest.raises(ArxivRateLimitError) as exc_info:
             await asyncio.to_thread(_fetch_html_content, "2103.12345", 50.0)

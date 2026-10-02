@@ -1,6 +1,7 @@
 """Tests for citation graph tool."""
 
 import json
+import shutil
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -704,6 +705,48 @@ async def test_citation_graph_cache_can_serve_smaller_limit():
         assert payload2["status"] == "success"
         assert payload2["max_citations"] == 10
         assert mock_client.get.call_count == 1  # No new call
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_s2_503_response_excludes_warning_and_hint():
+    """S2 503 (service unavailable) should not show generic rate-limit warning or API key hint."""
+    from arxiv_mcp_server.tools import citation_graph as cg_module
+    from arxiv_mcp_server.tools.citation_graph import (
+        handle_citation_graph,
+        SemanticScholarRateLimitError,
+    )
+    from unittest.mock import AsyncMock, patch
+    import json
+
+    # Mock _s2_get to raise SemanticScholarRateLimitError with 503
+    async def mock_fetch_503_with_status(*args, **kwargs):
+        exc = SemanticScholarRateLimitError(
+            "Semantic Scholar API is temporarily unavailable (HTTP 503). Please retry shortly."
+        )
+        # Add status_code attribute
+        exc.status_code = 503
+        raise exc
+
+    with (
+        patch.object(cg_module, "_s2_get", side_effect=mock_fetch_503_with_status),
+        patch.object(cg_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_s2_503")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        response = await handle_citation_graph({"paper_id": "1706.03762"})
+        payload = json.loads(response[0].text)
+
+        assert payload["status"] == "rate_limited"
+        assert "503" in payload["message"]
+        # 503 should NOT have the warning or hint
+        assert "warning" not in payload
+        assert "hint" not in payload
 
         # Clean up
         shutil.rmtree(cache_dir, ignore_errors=True)

@@ -125,16 +125,19 @@ class Settings(BaseSettings):
     def get_request_timeout(self) -> int:
         """Get request timeout with fallback to legacy REQUEST_TIMEOUT.
 
-        Returns ARXIV_REQUEST_TIMEOUT if explicitly set, otherwise falls back
-        to REQUEST_TIMEOUT for backward compatibility.
+        Returns ARXIV_REQUEST_TIMEOUT if explicitly set (case-insensitive),
+        otherwise falls back to REQUEST_TIMEOUT (case-insensitive) for
+        backward compatibility.
         """
-        # Check if ARXIV_REQUEST_TIMEOUT was explicitly set (non-default)
+        # Check if ARXIV_REQUEST_TIMEOUT was explicitly set (case-insensitive)
         import os
 
-        if "ARXIV_REQUEST_TIMEOUT" in os.environ:
+        env_keys = {k.upper(): k for k in os.environ.keys()}
+
+        if "ARXIV_REQUEST_TIMEOUT" in env_keys:
             return self.ARXIV_REQUEST_TIMEOUT
-        # Fall back to REQUEST_TIMEOUT if it was explicitly set
-        if "REQUEST_TIMEOUT" in os.environ:
+        # Fall back to REQUEST_TIMEOUT if it was explicitly set (case-insensitive)
+        if "REQUEST_TIMEOUT" in env_keys:
             return self.REQUEST_TIMEOUT
         # Use ARXIV_REQUEST_TIMEOUT default
         return self.ARXIV_REQUEST_TIMEOUT
