@@ -902,6 +902,7 @@ def _fetch_html_content_single_attempt(
     elif response.status_code == 406:
         # HTTP 406 is IP-level burst throttling - return rate_limited, don't fall back to PDF (#277)
         from .search import _HTTP_406_RETRY_AFTER_SECONDS
+
         raise ArxivRateLimitError(
             f"arXiv is rate limiting this IP (HTTP 406). "
             f"Please wait {int(_HTTP_406_RETRY_AFTER_SECONDS)} seconds before retrying.",
@@ -931,16 +932,16 @@ async def _paper_exists_on_arxiv(paper_id: str, deadline: float) -> bool:
 
     Uses the same Atom ``id_list`` lookup as ``get_abstract``, so a missing
     paper and a missing version both report as absent (empty feed).
-    
+
     Args:
         paper_id: arXiv paper ID.
         deadline: Wall-clock deadline (time.monotonic()) for the entire download_paper operation.
     """
     url = f"{ARXIV_API_URL}?id_list={paper_id}&max_results=1"
-    
+
     # Use retry_with_backoff with the remaining budget from the shared deadline
     remaining = max(0.1, deadline - time.monotonic())
-    
+
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await retry_with_backoff(
             lambda: _rate_limited_get(client, url),
