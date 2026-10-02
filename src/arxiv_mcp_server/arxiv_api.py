@@ -284,7 +284,7 @@ async def retry_with_backoff(
                             f"Could not connect to arXiv after {attempt + 1} attempts. "
                             f"Please check your network connection and retry shortly."
                         ) from e
-                    wait = min(wait, remaining - 1.0)  # Leave 1s for attempt
+                    wait = min(wait, remaining * 0.9)  # Leave 10% buffer
                 logger.warning(
                     "%s connection error; retrying in %.1fs (attempt %d/%d)",
                     operation_name,
@@ -312,9 +312,9 @@ async def retry_with_backoff(
                 # Cap wait to remaining budget if set
                 if max_total_time is not None:
                     remaining = max_total_time - (time.monotonic() - start_time)
-                    if wait >= remaining:
+                    if wait >= remaining or remaining <= 0.1:
                         logger.warning(
-                            "%s insufficient budget for retry (%.1fs < %.1fs wait)",
+                            "%s insufficient budget for retry (%.1fs remaining, %.1fs wait needed)",
                             operation_name,
                             remaining,
                             wait,
@@ -323,7 +323,7 @@ async def retry_with_backoff(
                             f"arXiv request timed out after {attempt + 1} attempts. "
                             f"The arXiv API may be slow or overloaded. Please retry shortly."
                         ) from e
-                    wait = min(wait, remaining - 1.0)
+                    wait = min(wait, remaining * 0.9)  # Leave 10% buffer
                 logger.warning(
                     "%s timed out; retrying in %.1fs (attempt %d/%d)",
                     operation_name,
@@ -378,7 +378,7 @@ async def retry_with_backoff(
                                 status_code=e.response.status_code,
                                 retry_after_seconds=parsed_retry_after,
                             ) from e
-                        wait = min(wait, remaining - 1.0)
+                        wait = min(wait, remaining * 0.9)  # Leave 10% buffer
                     logger.warning(
                         "%s HTTP %d; retrying in %.1fs (attempt %d/%d)",
                         operation_name,
@@ -518,7 +518,7 @@ def stream_pdf_to_path(
                             f"PDF download timed out (insufficient budget for retry). "
                             f"Please retry shortly."
                         ) from e
-                    wait = min(wait, remaining - 1.0)
+                    wait = min(wait, remaining * 0.9)
 
                     logger.warning(
                         "PDF download timed out; retrying in %.1fs (attempt %d/%d)",
@@ -550,7 +550,7 @@ def stream_pdf_to_path(
                         raise RuntimeError(
                             f"Could not connect to arXiv for PDF download (insufficient budget for retry)"
                         ) from e
-                    wait = min(wait, remaining - 1.0)
+                    wait = min(wait, remaining * 0.9)
 
                     logger.warning(
                         "PDF download connection error; retrying in %.1fs (attempt %d/%d)",
@@ -605,7 +605,7 @@ def stream_pdf_to_path(
                                 status_code=e.response.status_code,
                                 retry_after_seconds=retry_after_seconds,
                             ) from e
-                        wait = min(wait, remaining - 1.0)
+                        wait = min(wait, remaining * 0.9)  # Leave 10% buffer
 
                         logger.warning(
                             "PDF download HTTP %d; retrying in %.1fs (attempt %d/%d)",

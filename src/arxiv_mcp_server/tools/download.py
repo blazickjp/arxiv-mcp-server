@@ -843,7 +843,7 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                                 retry_after if retry_after else 60
                             ),
                         )
-                    wait = min(wait, remaining - 1.0)
+                    wait = min(wait, remaining * 0.9)
 
                     logger.warning(
                         "HTML fetch HTTP %d; retrying in %.1fs (attempt %d/%d)",
@@ -895,7 +895,7 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                         f"HTML fetch timeout: insufficient budget for retry, will try PDF"
                     )
                     return None
-                wait = min(wait, remaining - 1.0)
+                wait = min(wait, remaining * 0.9)
 
                 logger.warning(
                     "HTML fetch timed out; retrying in %.1fs (attempt %d/%d)",
@@ -926,7 +926,7 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                         f"HTML fetch connection error: insufficient budget for retry, will try PDF"
                     )
                     return None
-                wait = min(wait, remaining - 1.0)
+                wait = min(wait, remaining * 0.9)
 
                 logger.warning(
                     "HTML fetch connection error; retrying in %.1fs (attempt %d/%d)",

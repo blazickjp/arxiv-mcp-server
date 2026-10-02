@@ -281,9 +281,11 @@ class TestRetryWithBackoff:
 
     async def test_respects_max_total_time(self):
         """Operation stops retrying when max_total_time is exceeded."""
+        from arxiv_mcp_server.arxiv_api import ArxivTimeoutError
+
         mock_op = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
         start = asyncio.get_event_loop().time()
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises(ArxivTimeoutError) as exc_info:
             await retry_with_backoff(
                 mock_op,
                 max_retries=100,  # many retries
@@ -294,7 +296,7 @@ class TestRetryWithBackoff:
             )
         elapsed = asyncio.get_event_loop().time() - start
         assert elapsed < 1.0  # should stop well before exhausting 100 retries
-        assert "exceeded maximum total time" in str(exc_info.value)
+        assert "timed out" in str(exc_info.value).lower()
 
     async def test_budget_prevents_starting_attempt_that_cannot_finish(self):
         """Budget enforcement: attempts are cut short if they would exceed max_total_time."""
