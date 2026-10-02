@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import arxiv
 
+from arxiv_mcp_server.arxiv_api import ArxivTimeoutError
 from arxiv_mcp_server.tools.download import (
     EXTRACTOR_VERSION,
     handle_download,
@@ -65,7 +66,8 @@ def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
             return "2103.00000v2"
 
     dest = temp_storage_path / "paper.pdf"
-    _download_arxiv_pdf_to_path(Arxiv4Result(), dest)
+    # Provide deadline parameter (None means fresh budget)
+    _download_arxiv_pdf_to_path(Arxiv4Result(), dest, deadline=None)
 
     assert dest.read_bytes() == b"chunk-onechunk-two"
     http_client.stream.assert_called_once_with(
@@ -93,7 +95,9 @@ def test_download_arxiv_pdf_supports_legacy_ids(temp_storage_path, mocker):
         def get_short_id(self):
             return "hep-th/9901001v3"
 
-    _download_arxiv_pdf_to_path(LegacyResult(), temp_storage_path / "legacy.pdf")
+    _download_arxiv_pdf_to_path(
+        LegacyResult(), temp_storage_path / "legacy.pdf", deadline=None
+    )
 
     client.stream.assert_called_once_with(
         "GET", "https://arxiv.org/pdf/hep-th/9901001v3.pdf"
@@ -127,8 +131,8 @@ def test_download_arxiv_pdf_removes_partial_file_on_stream_failure(
             return "2401.00001"
 
     destination = temp_storage_path / "paper.pdf"
-    with pytest.raises(RuntimeError, match="connection lost"):
-        _download_arxiv_pdf_to_path(Result(), destination)
+    with pytest.raises(ArxivTimeoutError):
+        _download_arxiv_pdf_to_path(Result(), destination, deadline=None)
 
     assert not destination.exists()
     assert not destination.with_suffix(".pdf.part").exists()
@@ -153,7 +157,9 @@ def test_pdf_conversion_failure_removes_downloaded_pdf(temp_storage_path, mocker
     mocker.patch.object(
         download_module,
         "_download_arxiv_pdf_to_path",
-        side_effect=lambda _paper, destination: destination.write_bytes(b"pdf"),
+        side_effect=lambda _paper, destination, deadline: destination.write_bytes(
+            b"pdf"
+        ),
     )
     converter = MagicMock()
     converter.to_markdown.side_effect = RuntimeError("conversion failed")
@@ -401,10 +407,9 @@ async def test_download_paper_return_full_text_opt_in(temp_storage_path, mocker)
 
 
 @pytest.mark.asyncio
-async def test_html_fetch_406_raises_rate_limit_error():
-    """HTML fetch should raise ArxivRateLimitError on 406, not return None (#277)."""
+async def test_html_fetch_406_falls_back_to_pdf():
+    """HTML fetch should fall back to PDF on 406 (restore main's behavior)."""
     from arxiv_mcp_server.tools.download import _fetch_html_content
-    from arxiv_mcp_server.tools.search import ArxivRateLimitError
     import httpx
     from unittest.mock import MagicMock, patch
     import time
@@ -413,45 +418,41 @@ async def test_html_fetch_406_raises_rate_limit_error():
     mock_response.status_code = 406
     mock_response.headers = {}  # No Retry-After header
 
-    with patch.object(httpx, "get", return_value=mock_response):
-        with patch.object(time, "sleep"):  # Mock sleep to avoid delays
-            with pytest.raises(ArxivRateLimitError) as exc_info:
-                _fetch_html_content("2103.12345")
-
-        assert exc_info.value.status_code == 406
-        assert exc_info.value.retry_after_seconds == 600.0
-        assert "HTTP 406" in str(exc_info.value)
+    with (
+        patch("httpx.get", return_value=mock_response),
+        patch("time.monotonic", return_value=0.0),
+    ):
+        # Should return None (to trigger PDF fallback), not raise
+        result = await asyncio.to_thread(_fetch_html_content, "2103.14030", 50.0)
+        assert result is None
 
 
 @pytest.mark.asyncio
-async def test_download_html_406_returns_rate_limited_response(
-    temp_storage_path, mocker
-):
-    """Download should return rate_limited response when HTML fetch gets 406 (#277)."""
+async def test_download_html_406_falls_back_to_pdf_attempt(temp_storage_path, mocker):
+    """HTML 406 should fall back to PDF, not return rate_limited immediately (restore main)."""
     from arxiv_mcp_server.tools import download as download_module
-    from arxiv_mcp_server.tools.search import ArxivRateLimitError
 
     mocker.patch.object(
         download_module,
         "get_paper_path",
         side_effect=lambda pid, suffix=".md": temp_storage_path / f"{pid}{suffix}",
     )
-    mocker.patch.object(
-        download_module,
-        "_fetch_html_content",
-        side_effect=ArxivRateLimitError(
-            "arXiv is rate limiting this IP (HTTP 406). "
-            "Please wait 600 seconds before retrying.",
-            status_code=406,
-            retry_after_seconds=600.0,
-        ),
-    )
+    # HTML returns None (406 falls back to PDF)
+    mocker.patch.object(download_module, "_fetch_html_content", return_value=None)
+    # Mock paper exists check to pass
+    mocker.patch.object(download_module, "_paper_exists_on_arxiv", return_value=True)
+    # Mock PDF dependencies
+    mocker.patch.object(download_module, "_load_pdf_dependencies", return_value=False)
 
     response = await handle_download({"paper_id": "2103.12345"})
     result = json.loads(response[0].text)
 
-    assert result["status"] == "rate_limited"
-    assert result["http_status"] == 406
+    # Should attempt PDF and fail with missing dependencies, not return HTML rate_limited
+    assert result["status"] == "error"
+    assert (
+        "pdf extra" in result["message"].lower()
+        or "pdf conversion" in result["message"].lower()
+    )
     assert result["retry_after_seconds"] == 600.0
     assert "HTTP 406" in result["message"]
 
