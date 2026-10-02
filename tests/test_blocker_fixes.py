@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from arxiv_mcp_server.arxiv_api import retry_with_backoff, ArxivRateLimitError, ArxivTimeoutError
+from arxiv_mcp_server.arxiv_api import (
+    retry_with_backoff,
+    ArxivRateLimitError,
+    ArxivTimeoutError,
+)
 
 
 class TestBlockerFixes:
@@ -153,7 +157,9 @@ class TestBlockerFixes:
     async def test_retry_after_exceeds_budget_immediate_return(self):
         """Blocker 4: Retry-After longer than remaining budget returns immediately."""
         request = httpx.Request("GET", "https://example.com")
-        response_429 = httpx.Response(429, request=request, headers={"Retry-After": "60"})
+        response_429 = httpx.Response(
+            429, request=request, headers={"Retry-After": "60"}
+        )
 
         mock_op = AsyncMock(
             side_effect=httpx.HTTPStatusError(

@@ -968,16 +968,21 @@ def _fetch_html_content(paper_id: str) -> str | None:
     for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
         # Check budget before attempt
         elapsed = time.monotonic() - start_time
-        if elapsed >= max_total_time:
+        remaining = max_total_time - elapsed
+        if remaining <= 0.1:
             logger.info(
                 f"HTML fetch budget exhausted ({elapsed:.1f}s >= {max_total_time}s), will try PDF"
             )
             return None
 
         try:
+            # Cap this attempt's timeout to remaining budget
+            attempt_timeout = min(
+                float(settings.ARXIV_REQUEST_TIMEOUT), remaining * 0.9
+            )
             # Rate limiter only holds lock for this attempt
             return ARXIV_RATE_LIMITER.run_sync(
-                lambda: _fetch_html_content_single_attempt(paper_id)
+                lambda: _fetch_html_content_single_attempt(paper_id, attempt_timeout)
             )
         except ArxivRateLimitError:
             # Rate limit errors should propagate immediately
@@ -1049,7 +1054,9 @@ def _fetch_html_content(paper_id: str) -> str | None:
     return None
 
 
-def _fetch_html_content_single_attempt(paper_id: str) -> str | None:
+def _fetch_html_content_single_attempt(
+    paper_id: str, timeout_seconds: float
+) -> str | None:
     """Single HTML fetch attempt (called with rate limiter lock held).
 
     Returns the extracted text on success, or None if the HTML endpoint
@@ -1061,7 +1068,7 @@ def _fetch_html_content_single_attempt(paper_id: str) -> str | None:
     url = f"https://arxiv.org/html/{paper_id}"
     timeout = httpx.Timeout(
         connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-        read=float(settings.ARXIV_REQUEST_TIMEOUT),
+        read=timeout_seconds,
         write=30.0,
         pool=30.0,
     )
@@ -1120,7 +1127,7 @@ def _download_arxiv_pdf_to_path(paper: arxiv.Result, pdf_path: Path) -> None:
     stream_pdf_to_path(
         paper,
         pdf_path,
-        request_timeout=float(settings.REQUEST_TIMEOUT),
+        request_timeout=float(settings.ARXIV_REQUEST_TIMEOUT),
         user_agent=(
             f"{settings.APP_NAME}/{settings.APP_VERSION} "
             "(https://github.com/blazickjp/arxiv-mcp-server; research tool)"
