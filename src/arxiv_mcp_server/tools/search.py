@@ -99,7 +99,7 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
             initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
             max_backoff=settings.ARXIV_MAX_BACKOFF,
             max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
-            operation_name=f"arXiv API request to {url[:100]}",
+            operation_name="arXiv API request",
         )
     )
 

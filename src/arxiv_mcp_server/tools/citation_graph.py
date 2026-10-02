@@ -309,14 +309,32 @@ async def _s2_get(
             initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
             max_backoff=settings.ARXIV_MAX_BACKOFF,
             max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
-            operation_name=f"Semantic Scholar request to {url[:100]}",
+            operation_name="Semantic Scholar API request",
         )
     except Exception as e:
-        # Convert our ArxivRateLimitError to SemanticScholarRateLimitError for this tool
-        from ..arxiv_api import ArxivRateLimitError
-
+        # Convert arXiv-prefixed errors to Semantic Scholar equivalents for this tool
+        from ..arxiv_api import ArxivRateLimitError, ArxivTimeoutError, ArxivConnectionError
+        
         if isinstance(e, ArxivRateLimitError):
-            raise SemanticScholarRateLimitError(_rate_limit_message()) from e
+            # Provide accurate message based on status code
+            if e.status_code == 503:
+                # 503 is service unavailable, not quota
+                message = (
+                    "Semantic Scholar API is temporarily unavailable (HTTP 503). "
+                    "Please retry shortly."
+                )
+            else:
+                # 429 is quota, 406 is IP throttling
+                message = _rate_limit_message()
+            raise SemanticScholarRateLimitError(message) from e
+        elif isinstance(e, ArxivTimeoutError):
+            raise RuntimeError(
+                "Semantic Scholar API request timed out. The API may be slow or overloaded. Please retry shortly."
+            ) from e
+        elif isinstance(e, ArxivConnectionError):
+            raise RuntimeError(
+                "Could not connect to Semantic Scholar. Please check your network connection and retry shortly."
+            ) from e
         raise
 
 
