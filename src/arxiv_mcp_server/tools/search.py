@@ -85,22 +85,27 @@ async def _rate_limited_get(client: httpx.AsyncClient, url: str) -> httpx.Respon
 
     Retries HTTP 429/503/406 and timeouts/connection errors with exponential backoff.
     Uses the unified retry_with_backoff infrastructure from arxiv_api.
+    Rate limiter lock is acquired per attempt, not held through sleeps.
     """
 
-    async def request() -> httpx.Response:
-        response = await client.get(url, headers=ARXIV_HEADERS)
-        response.raise_for_status()
-        return response
+    async def single_request() -> httpx.Response:
+        """Single request wrapped with rate limiting."""
+        async def request() -> httpx.Response:
+            response = await client.get(url, headers=ARXIV_HEADERS)
+            response.raise_for_status()
+            return response
+        
+        # Rate limiter only holds lock for the actual request
+        return await ARXIV_RATE_LIMITER.run_async(request)
 
-    return await ARXIV_RATE_LIMITER.run_async(
-        lambda: retry_with_backoff(
-            request,
-            max_retries=settings.ARXIV_MAX_RETRIES,
-            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
-            max_backoff=settings.ARXIV_MAX_BACKOFF,
-            max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
-            operation_name="arXiv API request",
-        )
+    # Retry logic outside rate limiter so lock is released during sleeps
+    return await retry_with_backoff(
+        single_request,
+        max_retries=settings.ARXIV_MAX_RETRIES,
+        initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+        max_backoff=settings.ARXIV_MAX_BACKOFF,
+        max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
+        operation_name="arXiv API request",
     )
 
 
