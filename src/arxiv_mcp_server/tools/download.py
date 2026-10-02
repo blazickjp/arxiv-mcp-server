@@ -768,8 +768,7 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
     Returns the extracted text on success, or None if the HTML endpoint
     is not available (404).
 
-    Raises RuntimeError on 406 (not retryable, likely IP block).
-    Raises ArxivRateLimitError on 429/503 after retries.
+    Raises ArxivRateLimitError on 406/429/503 after retries (406 uses minimal retry).
     Raises RuntimeError on timeout/connection errors after retries.
     """
     url = f"https://arxiv.org/html/{paper_id}"
@@ -791,20 +790,19 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
             elif response.status_code == 404:
                 logger.info(f"HTML not available for {paper_id}, will try PDF")
                 return None
-            elif response.status_code == 406:
-                # 406 is NOT retryable (not throttling, likely IP block)
-                raise RuntimeError(
-                    f"arXiv HTML endpoint returned HTTP 406 for {paper_id}. "
-                    f"This may indicate an IP-level block."
-                )
-            elif response.status_code in (429, 503):
-                # Only retry 429/503 (rate limiting)
+            elif response.status_code in (406, 429, 503):
+                # 406 is IP-level burst throttling, retry minimally (#277)
                 last_exception = httpx.HTTPStatusError(
                     f"HTTP {response.status_code}",
                     request=response.request,
                     response=response,
                 )
-                if attempt < settings.ARXIV_MAX_RETRIES:
+                max_retries_for_status = (
+                    settings.ARXIV_HTTP_406_MAX_RETRIES
+                    if response.status_code == 406
+                    else settings.ARXIV_MAX_RETRIES
+                )
+                if attempt < max_retries_for_status:
                     retry_after = response.headers.get("Retry-After")
                     wait = min(
                         settings.ARXIV_INITIAL_BACKOFF
@@ -825,13 +823,17 @@ def _fetch_html_content_sync(paper_id: str) -> str | None:
                         response.status_code,
                         wait,
                         attempt + 1,
-                        settings.ARXIV_MAX_RETRIES + 1,
+                        max_retries_for_status + 1,
                     )
                     time.sleep(wait)
                 else:
                     retry_after_seconds = float(
                         response.headers.get("Retry-After", "60.0")
                     )
+                    if response.status_code == 406:
+                        retry_after_seconds = float(
+                            response.headers.get("Retry-After", "600.0")
+                        )
                     try:
                         retry_after_seconds = float(
                             response.headers.get("Retry-After", retry_after_seconds)
@@ -954,7 +956,7 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
     Raises PaperNotFoundError if the paper does not exist, or other exceptions
     on network/conversion failures.
     Raises ImportError (with a helpful message) if the [pdf] extra is not installed.
-    Raises ArxivRateLimitError on 429/503 (429/503 are rate limiting, not 406).
+    Raises ArxivRateLimitError on 406/429/503 (406 uses minimal retry per #277).
     Raises httpx.HTTPStatusError on other HTTP errors (cleaned by caller).
     """
     if not _load_pdf_dependencies():
@@ -964,8 +966,7 @@ def _fetch_pdf_content_unlocked(paper_id: str) -> tuple[str, arxiv.Result]:
         )
 
     # Use a client with minimal retries for the metadata lookup to avoid
-    # making many requests on 429/503. Note: 406 is no longer considered
-    # retryable/throttling (issue #277 clarification).
+    # making many requests on 406/429/503 (issue #277: 406 is IP-level throttling).
     # Note: Retry-After headers cannot be honored on this path because the
     # arxiv package's HTTPError does not preserve response headers.
     client = get_arxiv_client(num_retries=0)

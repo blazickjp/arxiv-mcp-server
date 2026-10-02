@@ -175,26 +175,26 @@ class TestRetryWithBackoff:
         assert result == response_200
         assert mock_op.call_count == 2
 
-    async def test_http_406_not_retried(self):
-        """HTTP 406 is NOT retried (not throttling per #277 clarification)."""
+    async def test_retries_on_http_406(self):
+        """HTTP 406 status triggers retry (minimal, to avoid prolonging block)."""
         request = httpx.Request("GET", "https://example.com")
         response_406 = httpx.Response(406, request=request, headers={})
+        response_200 = httpx.Response(200, request=request)
         mock_op = AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "406", request=request, response=response_406
-            )
+            side_effect=[
+                httpx.HTTPStatusError("406", request=request, response=response_406),
+                response_200,
+            ]
         )
-        # Should raise immediately without retry
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            await retry_with_backoff(
-                mock_op,
-                max_retries=3,
-                initial_backoff=0.01,
-                max_backoff=0.1,
-            )
-        assert exc_info.value.response.status_code == 406
-        # Should NOT retry - only 1 call
-        assert mock_op.call_count == 1
+        result = await retry_with_backoff(
+            mock_op,
+            max_retries=3,
+            initial_backoff=0.01,
+            max_backoff=0.1,
+        )
+        assert result == response_200
+        # 406 uses minimal retry (ARXIV_HTTP_406_MAX_RETRIES = 1), so 2 total attempts
+        assert mock_op.call_count == 2
 
     async def test_raises_arxiv_rate_limit_error_after_max_retries_429(self):
         """ArxivRateLimitError raised after exhausting retries on HTTP 429."""
@@ -217,8 +217,8 @@ class TestRetryWithBackoff:
         assert "rate limiting" in str(exc_info.value).lower()
         assert mock_op.call_count == 3
 
-    async def test_http_406_not_treated_as_rate_limit(self):
-        """HTTP 406 is NOT treated as rate limiting."""
+    async def test_raises_arxiv_rate_limit_error_406_with_long_retry(self):
+        """ArxivRateLimitError for HTTP 406 uses 600s default retry."""
         request = httpx.Request("GET", "https://example.com")
         response_406 = httpx.Response(406, request=request, headers={})
         mock_op = AsyncMock(
@@ -226,17 +226,18 @@ class TestRetryWithBackoff:
                 "406", request=request, response=response_406
             )
         )
-        # Should raise HTTPStatusError, NOT ArxivRateLimitError
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(ArxivRateLimitError) as exc_info:
             await retry_with_backoff(
                 mock_op,
-                max_retries=1,
+                max_retries=3,  # But 406 uses ARXIV_HTTP_406_MAX_RETRIES = 1
                 initial_backoff=0.01,
                 max_backoff=0.1,
             )
-        assert exc_info.value.response.status_code == 406
-        # Should NOT retry
-        assert mock_op.call_count == 1
+        assert exc_info.value.status_code == 406
+        assert exc_info.value.retry_after_seconds == 600.0
+        assert "600 seconds" in str(exc_info.value)
+        # 406 uses minimal retry: 1 + 1 = 2 attempts
+        assert mock_op.call_count == 2
 
     async def test_honors_retry_after_header(self):
         """Retry-After header value is captured in ArxivRateLimitError."""
@@ -294,6 +295,39 @@ class TestRetryWithBackoff:
         elapsed = asyncio.get_event_loop().time() - start
         assert elapsed < 1.0  # should stop well before exhausting 100 retries
         assert "exceeded maximum total time" in str(exc_info.value)
+
+    async def test_budget_prevents_starting_attempt_that_cannot_finish(self):
+        """Budget enforcement: attempts are cut short if they would exceed max_total_time."""
+        # Simulate: first attempt returns quickly, but second would take too long
+        call_count = 0
+
+        async def operation_with_varying_duration():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(0.3)  # First attempt: 0.3s
+                raise httpx.TimeoutException("timeout")
+            else:
+                # Second attempt would take 1s, but budget only allows ~0.2s
+                await asyncio.sleep(1.0)
+                return "success"
+
+        start = asyncio.get_event_loop().time()
+        # Total budget 0.5s, first attempt uses 0.3s, leaving ~0.2s for retry+backoff+attempt
+        # The second attempt should be wrapped with wait_for(0.2s) and timeout
+        with pytest.raises((ArxivTimeoutError, asyncio.TimeoutError)):
+            await retry_with_backoff(
+                operation_with_varying_duration,
+                max_retries=10,
+                initial_backoff=0.01,
+                max_backoff=0.1,
+                max_total_time=0.5,
+                operation_name="test_op",
+            )
+        elapsed = asyncio.get_event_loop().time() - start
+        # Should complete around 0.5s (first 0.3s + backoff + second attempt cut short)
+        assert 0.4 < elapsed < 0.7
+        assert call_count == 2  # Should attempt twice but second is cut short
 
     async def test_concurrent_retries_with_jitter(self):
         """Multiple concurrent retries don't happen in lockstep due to jitter."""

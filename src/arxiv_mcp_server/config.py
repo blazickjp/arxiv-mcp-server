@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     ARXIV_REQUEST_TIMEOUT: int = 30
     ARXIV_CONNECT_TIMEOUT: int = 10
     ARXIV_MAX_RETRIES: int = 2
+    ARXIV_HTTP_406_MAX_RETRIES: int = 1
     ARXIV_INITIAL_BACKOFF: float = 2.0
     ARXIV_MAX_BACKOFF: float = 30.0
     ARXIV_MAX_TOTAL_TIME: int = 50

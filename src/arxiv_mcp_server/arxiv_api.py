@@ -149,14 +149,15 @@ async def retry_with_backoff(
     Retries on:
     - httpx.TimeoutException
     - httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError
-    - httpx.HTTPStatusError with status 429, 503 (NOT 406 - see note)
+    - httpx.HTTPStatusError with status 429, 503, 406
 
-    Note: HTTP 406 is NOT retried. arXiv's 406 responses are not throttling
-    and retrying them does not help (may prolong IP-level blocks).
+    Note: HTTP 406 uses minimal retries (ARXIV_HTTP_406_MAX_RETRIES = 1)
+    because arXiv's 406 is IP-level burst throttling and retrying inside
+    the window extends the block (#277).
 
     Args:
         operation: Async callable to execute.
-        max_retries: Maximum number of retry attempts.
+        max_retries: Maximum number of retry attempts (for 429/503).
         initial_backoff: Initial backoff delay in seconds.
         max_backoff: Maximum backoff delay in seconds.
         max_total_time: Optional maximum total time in seconds (raises on exceed).
@@ -195,6 +196,19 @@ async def retry_with_backoff(
                 )
 
         try:
+            # If budget is constrained, wrap operation with asyncio.wait_for
+            # to enforce remaining budget as timeout
+            if max_total_time is not None:
+                remaining = max_total_time - (time.monotonic() - start_time)
+                if remaining < settings.ARXIV_REQUEST_TIMEOUT:
+                    logger.debug(
+                        "%s using remaining budget %.1fs as timeout for attempt %d",
+                        operation_name,
+                        remaining,
+                        attempt + 1,
+                    )
+                    return await asyncio.wait_for(operation(), timeout=remaining)
+
             return await operation()
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
             last_exception = e
@@ -243,12 +257,17 @@ async def retry_with_backoff(
                     f"The arXiv API may be slow or overloaded. Please retry shortly."
                 ) from e
         except httpx.HTTPStatusError as e:
-            if e.response is not None and e.response.status_code in (429, 503):
-                # Only retry 429 and 503 (rate limiting/service unavailable)
-                # HTTP 406 is NOT throttling and should not be retried
+            if e.response is not None and e.response.status_code in (429, 503, 406):
+                # 406 is IP-level burst throttling, retry minimally (#277)
                 last_exception = e
+                # Use minimal retry count for 406 to avoid prolonging the block
+                max_retries_for_status = (
+                    settings.ARXIV_HTTP_406_MAX_RETRIES
+                    if e.response.status_code == 406
+                    else max_retries
+                )
                 retry_after = e.response.headers.get("Retry-After")
-                if attempt < max_retries:
+                if attempt < max_retries_for_status:
                     wait = _compute_backoff_seconds(
                         attempt, retry_after, initial_backoff, max_backoff
                     )
@@ -258,18 +277,21 @@ async def retry_with_backoff(
                         e.response.status_code,
                         wait,
                         attempt + 1,
-                        max_retries + 1,
+                        max_retries_for_status + 1,
                     )
                     await asyncio.sleep(wait)
                 else:
                     parsed_retry_after = _parse_retry_after_seconds(retry_after)
                     if parsed_retry_after is None:
-                        parsed_retry_after = 60.0
+                        # 406 gets 10-minute hint, others get 1 minute
+                        parsed_retry_after = (
+                            600.0 if e.response.status_code == 406 else 60.0
+                        )
                     logger.error(
                         "%s HTTP %d after %d attempts",
                         operation_name,
                         e.response.status_code,
-                        max_retries + 1,
+                        max_retries_for_status + 1,
                     )
                     raise ArxivRateLimitError(
                         f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
@@ -278,7 +300,7 @@ async def retry_with_backoff(
                         retry_after_seconds=parsed_retry_after,
                     ) from e
             else:
-                # Non-retryable HTTP errors (including 406)
+                # Non-retryable HTTP errors
                 raise
         except (ArxivTimeoutError, ArxivConnectionError, ArxivRateLimitError):
             raise
@@ -315,8 +337,8 @@ def stream_pdf_to_path(
 ) -> None:
     """Stream an arXiv PDF to disk with bounded memory usage.
 
-    Handles arXiv HTTP 429/503 (rate limiting) with retries and exponential backoff.
-    HTTP 406 is NOT retried (not throttling, may indicate IP-level block).
+    Handles arXiv HTTP 406/429/503 (throttling) with retries and exponential backoff.
+    HTTP 406 uses minimal retries to avoid prolonging IP-level block (#277).
     """
     from .config import Settings
 
@@ -406,10 +428,15 @@ def stream_pdf_to_path(
                         f"Could not connect to arXiv for PDF download after {settings.ARXIV_MAX_RETRIES + 1} attempts"
                     ) from e
             except httpx.HTTPStatusError as e:
-                if e.response is not None and e.response.status_code in (429, 503):
-                    # Only retry 429/503 (rate limiting). 406 is NOT retried.
+                if e.response is not None and e.response.status_code in (406, 429, 503):
+                    # 406 is IP-level burst throttling, retry minimally (#277)
                     last_exception = e
-                    if attempt < settings.ARXIV_MAX_RETRIES:
+                    max_retries_for_status = (
+                        settings.ARXIV_HTTP_406_MAX_RETRIES
+                        if e.response.status_code == 406
+                        else settings.ARXIV_MAX_RETRIES
+                    )
+                    if attempt < max_retries_for_status:
                         retry_after = e.response.headers.get("Retry-After")
                         wait = min(
                             settings.ARXIV_INITIAL_BACKOFF
@@ -430,7 +457,7 @@ def stream_pdf_to_path(
                             e.response.status_code,
                             wait,
                             attempt + 1,
-                            settings.ARXIV_MAX_RETRIES + 1,
+                            max_retries_for_status + 1,
                         )
                         time.sleep(wait)
                     else:
@@ -440,7 +467,7 @@ def stream_pdf_to_path(
                             e.response.headers.get("Retry-After")
                         )
                         if retry_after_seconds is None:
-                            retry_after_seconds = 60.0
+                            retry_after_seconds = 600.0 if status_code == 406 else 60.0
                         message = (
                             f"arXiv is rate limiting this IP (HTTP {status_code}). "
                             f"Please wait {int(retry_after_seconds)} seconds before retrying."
@@ -451,7 +478,7 @@ def stream_pdf_to_path(
                             retry_after_seconds=retry_after_seconds,
                         ) from e
                 else:
-                    # Non-retryable HTTP error (including 406)
+                    # Non-retryable HTTP error
                     staging.unlink(missing_ok=True)
                     status = (
                         e.response.status_code if e.response is not None else "unknown"

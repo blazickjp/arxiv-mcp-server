@@ -284,18 +284,12 @@ def test_backoff_seconds_longer_with_jitter():
             )
             == 16.0
         )
-        assert (
-            _compute_backoff_seconds(
-                4, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
-            )
-            == min(32.0, settings.ARXIV_MAX_BACKOFF)
-        )
-        assert (
-            _compute_backoff_seconds(
-                5, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
-            )
-            == min(64.0, settings.ARXIV_MAX_BACKOFF)
-        )
+        assert _compute_backoff_seconds(
+            4, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+        ) == min(32.0, settings.ARXIV_MAX_BACKOFF)
+        assert _compute_backoff_seconds(
+            5, None, settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
+        ) == min(64.0, settings.ARXIV_MAX_BACKOFF)
 
     with patch("random.random", return_value=0.0):
         # Minimum jitter is 50% of the exponential delay.
