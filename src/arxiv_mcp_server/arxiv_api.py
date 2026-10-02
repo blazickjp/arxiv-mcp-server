@@ -142,7 +142,7 @@ def _compute_backoff_seconds(
 
     Returns:
         Computed backoff delay in seconds with jitter applied.
-        Retry-After (if provided) is used as a floor BEFORE jitter.
+        Retry-After (if provided) is used as a floor and NOT capped to max_backoff.
     """
     delay = min(initial_backoff * (2**attempt), max_backoff)
 
@@ -156,6 +156,9 @@ def _compute_backoff_seconds(
     if parsed_retry_after is not None:
         jittered = max(jittered, parsed_retry_after)
 
+    # Don't cap to max_backoff if Retry-After was higher
+    if parsed_retry_after is not None and parsed_retry_after > max_backoff:
+        return jittered
     return min(jittered, max_backoff)
 
 
@@ -353,6 +356,31 @@ async def retry_with_backoff(
                 )
                 retry_after = e.response.headers.get("Retry-After")
                 if attempt < max_retries_for_status:
+                    # Check if Retry-After exceeds max_backoff (would ignore backoff policy)
+                    parsed_retry_after = _parse_retry_after_seconds(retry_after)
+                    if (
+                        parsed_retry_after is not None
+                        and parsed_retry_after > max_backoff
+                    ):
+                        # Retry-After exceeds max_backoff - return rate_limited immediately
+                        if parsed_retry_after is None:
+                            parsed_retry_after = (
+                                600.0 if e.response.status_code == 406 else 60.0
+                            )
+                        logger.warning(
+                            "%s HTTP %d: Retry-After (%.1fs) exceeds max_backoff (%.1fs), returning immediately",
+                            operation_name,
+                            e.response.status_code,
+                            parsed_retry_after,
+                            max_backoff,
+                        )
+                        raise ArxivRateLimitError(
+                            f"arXiv is rate limiting this IP (HTTP {e.response.status_code}). "
+                            f"Please wait {int(parsed_retry_after)} seconds before retrying.",
+                            status_code=e.response.status_code,
+                            retry_after_seconds=parsed_retry_after,
+                        ) from e
+
                     wait = _compute_backoff_seconds(
                         attempt, retry_after, initial_backoff, max_backoff
                     )
@@ -361,13 +389,16 @@ async def retry_with_backoff(
                         remaining = max_total_time - (time.monotonic() - start_time)
                         if wait >= remaining:
                             # Retry-After or backoff exceeds budget - return rate_limited immediately
-                            parsed_retry_after = _parse_retry_after_seconds(retry_after)
+                            if parsed_retry_after is None:
+                                parsed_retry_after = _parse_retry_after_seconds(
+                                    retry_after
+                                )
                             if parsed_retry_after is None:
                                 parsed_retry_after = (
                                     600.0 if e.response.status_code == 406 else 60.0
                                 )
                             logger.warning(
-                                "%s HTTP %d: Retry-After (%.1fs) exceeds budget (%.1fs), returning immediately",
+                                "%s HTTP %d: wait time (%.1fs) exceeds budget (%.1fs), returning immediately",
                                 operation_name,
                                 e.response.status_code,
                                 wait,

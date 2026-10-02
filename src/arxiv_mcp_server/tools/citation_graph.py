@@ -146,12 +146,13 @@ def _rate_limited_payload(
     *,
     arxiv_id: str | None = None,
     max_citations: int | None = None,
+    message: str | None = None,
 ) -> Dict[str, Any]:
     """Soft rate-limit result so callers can continue without a hard tool error."""
     payload: Dict[str, Any] = {
         "status": "rate_limited",
         "error": "RATE_LIMITED",
-        "message": _rate_limit_message(),
+        "message": message if message is not None else _rate_limit_message(),
         "warning": "This is NOT an empty citation graph. The API request was blocked by rate limiting.",
         "citation_count": 0,
         "reference_count": 0,
@@ -381,13 +382,16 @@ def _rate_limited_response(
     *,
     arxiv_id: str | None = None,
     max_citations: int | None = None,
+    message: str | None = None,
 ) -> List[types.TextContent]:
     """Build the soft rate-limited tool response."""
     return [
         types.TextContent(
             type="text",
             text=json.dumps(
-                _rate_limited_payload(arxiv_id=arxiv_id, max_citations=max_citations),
+                _rate_limited_payload(
+                    arxiv_id=arxiv_id, max_citations=max_citations, message=message
+                ),
                 indent=2,
             ),
         )
@@ -503,11 +507,15 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
     except SemanticScholarRateLimitError as exc:
         logger.error("Semantic Scholar rate limited: %s", exc)
-        rate_limited = _rate_limited_payload(arxiv_id=bare_id, max_citations=limit)
+        rate_limited = _rate_limited_payload(
+            arxiv_id=bare_id, max_citations=limit, message=str(exc)
+        )
         # Cache rate-limited results with a short TTL so we don't hammer S2
         if bare_id is not None and limit is not None:
             _save_cached_graph(bare_id, limit, rate_limited)
-        return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
+        return _rate_limited_response(
+            arxiv_id=bare_id, max_citations=limit, message=str(exc)
+        )
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             logger.error("Semantic Scholar rate limited: %s", exc)

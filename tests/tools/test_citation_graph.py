@@ -252,6 +252,38 @@ async def test_citation_graph_429_exhausted_with_api_key_guidance():
     assert "hint" not in payload
 
 
+@pytest.mark.asyncio
+async def test_citation_graph_503_shows_service_unavailable_message():
+    """HTTP 503 should show 'temporarily unavailable' not 'quota exhausted'."""
+    from arxiv_mcp_server.config import Settings
+
+    settings = Settings()
+    attempts = settings.ARXIV_MAX_RETRIES + 1
+    service_unavailable = _json_response({}, status_code=503)
+    mock_client = _mock_async_client([service_unavailable] * attempts)
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module.asyncio, "sleep", new_callable=AsyncMock),
+        patch("random.random", return_value=0.5),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        mock_cache_dir.return_value = Path("/tmp/nonexistent_cache")
+        response = await handle_citation_graph(
+            {"paper_id": "2608.18261", "max_citations": 10}
+        )
+
+    payload = json.loads(response[0].text)
+    assert payload["status"] == "rate_limited"
+    assert payload["error"] == "RATE_LIMITED"
+    # Should show "temporarily unavailable (HTTP 503)", not quota message
+    assert "temporarily unavailable" in payload["message"]
+    assert "HTTP 503" in payload["message"]
+    # Should NOT mention API key or quota
+    assert "SEMANTIC_SCHOLAR_API_KEY" not in payload["message"]
+    assert "quota" not in payload["message"].lower()
+
+
 def test_backoff_seconds_longer_with_jitter():
     """Backoff should start higher than the old 1s ladder and include jitter."""
     from arxiv_mcp_server.arxiv_api import _compute_backoff_seconds
@@ -307,12 +339,12 @@ def test_backoff_seconds_longer_with_jitter():
         )
 
     with patch("random.random", return_value=1.0):
-        # Retry-After can raise the floor before jitter, still capped at max_backoff.
+        # Retry-After can raise the floor before jitter and is NOT capped at max_backoff.
         assert (
             _compute_backoff_seconds(
                 0, "45", settings.ARXIV_INITIAL_BACKOFF, settings.ARXIV_MAX_BACKOFF
             )
-            == settings.ARXIV_MAX_BACKOFF
+            == 67.5  # 45 * 1.5 (jitter multiplier)
         )
 
 

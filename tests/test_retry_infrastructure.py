@@ -50,10 +50,10 @@ class TestComputeBackoffSeconds:
         # Should be at least 30 (from Retry-After)
         assert backoff >= 15.0  # jitter may reduce it slightly
 
-    def test_caps_retry_after_at_max(self):
+    def test_retry_after_not_capped_when_exceeds_max(self):
         backoff = _compute_backoff_seconds(0, "100.0", 2.0, 60.0)
-        # Should not exceed max_backoff
-        assert backoff <= 60.0
+        # Should NOT cap to max_backoff when Retry-After exceeds it
+        assert backoff >= 100.0  # Should respect Retry-After even though > max_backoff
 
 
 @pytest.mark.asyncio
@@ -358,3 +358,32 @@ class TestRetryWithBackoff:
         # With jitter, the retry times should be spread out
         # At least 6 attempts total (each op tries at least twice)
         assert len(call_times) >= 6
+
+    async def test_retry_after_exceeds_max_backoff_immediate_return(self):
+        """When Retry-After > max_backoff, return rate_limited immediately without sleeping."""
+        request = httpx.Request("GET", "https://example.com")
+        response_429 = httpx.Response(
+            429, request=request, headers={"Retry-After": "120"}
+        )
+        mock_op = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "429", request=request, response=response_429
+            )
+        )
+
+        start = asyncio.get_event_loop().time()
+        with pytest.raises(ArxivRateLimitError) as exc_info:
+            await retry_with_backoff(
+                mock_op,
+                max_retries=10,
+                initial_backoff=1.0,
+                max_backoff=30.0,  # max_backoff=30, but Retry-After=120
+                operation_name="test_op",
+            )
+        elapsed = asyncio.get_event_loop().time() - start
+
+        # Should return immediately (< 1s), not wait 120s or even 30s
+        assert elapsed < 1.0
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.retry_after_seconds == 120.0
+        assert mock_op.call_count == 1  # Should not retry

@@ -290,13 +290,14 @@ class TestLatexRateLimiting:
     @pytest.mark.asyncio
     async def test_latex_406_rate_limited_one_call(self):
         """LaTeX 406 should give rate_limited after 1 call with 600s retry_after."""
-        from arxiv_mcp_server.tools.latex_archive import _download_source_archive
+        from arxiv_mcp_server.tools.latex import handle_get_paper_latex
+        import itertools
 
         request = httpx.Request("GET", "https://arxiv.org/e-print/2103.14030")
         response_406 = httpx.Response(406, request=request)
 
         with (
-            patch("time.monotonic", side_effect=[0.0, 0.1]),
+            patch("time.monotonic", side_effect=(x * 0.1 for x in itertools.count())),
             patch("time.sleep") as mock_sleep,
         ):
             with patch("httpx.Client") as mock_client_cls:
@@ -314,18 +315,22 @@ class TestLatexRateLimiting:
                 mock_client.__exit__ = MagicMock(return_value=False)
                 mock_client_cls.return_value = mock_client
 
-                # Should raise immediately, not retry
-                with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                    _download_source_archive("2103.14030")
+                # Should return rate_limited response immediately, not retry
+                result = await handle_get_paper_latex({"paper_id": "2103.14030"})
+                payload = json.loads(result[0].text)
 
-                assert exc_info.value.response.status_code == 406
+                assert payload["status"] == "rate_limited"
+                assert payload["http_status"] == 406
+                assert payload["retry_after_seconds"] == 600.0
+                assert "rate limiting" in payload["message"].lower()
                 # Should not have retried or slept
                 mock_sleep.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_latex_429_rate_limited_one_call(self):
         """LaTeX 429 should give rate_limited after 1 call, honoring Retry-After."""
-        from arxiv_mcp_server.tools.latex_archive import _download_source_archive
+        from arxiv_mcp_server.tools.latex import handle_get_paper_latex
+        import itertools
 
         request = httpx.Request("GET", "https://arxiv.org/e-print/2103.14030")
         response_429 = httpx.Response(
@@ -333,7 +338,7 @@ class TestLatexRateLimiting:
         )
 
         with (
-            patch("time.monotonic", side_effect=[0.0, 0.1]),
+            patch("time.monotonic", side_effect=(x * 0.1 for x in itertools.count())),
             patch("time.sleep") as mock_sleep,
         ):
             with patch("httpx.Client") as mock_client_cls:
@@ -351,24 +356,29 @@ class TestLatexRateLimiting:
                 mock_client.__exit__ = MagicMock(return_value=False)
                 mock_client_cls.return_value = mock_client
 
-                # Should raise immediately, not retry
-                with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                    _download_source_archive("2103.14030")
+                # Should return rate_limited response immediately, not retry
+                result = await handle_get_paper_latex({"paper_id": "2103.14030"})
+                payload = json.loads(result[0].text)
 
-                assert exc_info.value.response.status_code == 429
+                assert payload["status"] == "rate_limited"
+                assert payload["http_status"] == 429
+                assert payload["retry_after_seconds"] == 120.0
+                assert "rate limiting" in payload["message"].lower()
+                assert "120 seconds" in payload["message"]
                 # Should not have retried or slept
                 mock_sleep.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_latex_503_rate_limited_one_call(self):
         """LaTeX 503 should give rate_limited after 1 call with 60s retry_after."""
-        from arxiv_mcp_server.tools.latex_archive import _download_source_archive
+        from arxiv_mcp_server.tools.latex import handle_get_paper_latex
+        import itertools
 
         request = httpx.Request("GET", "https://arxiv.org/e-print/2103.14030")
         response_503 = httpx.Response(503, request=request)
 
         with (
-            patch("time.monotonic", side_effect=[0.0, 0.1]),
+            patch("time.monotonic", side_effect=(x * 0.1 for x in itertools.count())),
             patch("time.sleep") as mock_sleep,
         ):
             with patch("httpx.Client") as mock_client_cls:
@@ -386,11 +396,14 @@ class TestLatexRateLimiting:
                 mock_client.__exit__ = MagicMock(return_value=False)
                 mock_client_cls.return_value = mock_client
 
-                # Should raise immediately, not retry
-                with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                    _download_source_archive("2103.14030")
+                # Should return rate_limited response immediately, not retry
+                result = await handle_get_paper_latex({"paper_id": "2103.14030"})
+                payload = json.loads(result[0].text)
 
-                assert exc_info.value.response.status_code == 503
+                assert payload["status"] == "rate_limited"
+                assert payload["http_status"] == 503
+                assert payload["retry_after_seconds"] == 60.0
+                assert "rate limiting" in payload["message"].lower()
                 # Should not have retried or slept
                 mock_sleep.assert_not_called()
 
@@ -404,34 +417,26 @@ class TestNewBlockerFixes:
         from arxiv_mcp_server.tools.latex_archive import _download_source_archive
         from arxiv_mcp_server.tools.latex_archive import LatexSourceError
 
-        # Mock a trickling stream that yields 1 byte every 0.15s
-        # With 1s budget, should timeout after ~6-7 chunks
+        # Mock a trickling stream that yields 1 byte at a time indefinitely
         class TricklingStream:
-            def __init__(self):
-                self.count = 0
-                self.start = time.monotonic()
-
             def __iter__(self):
                 return self
 
             def __next__(self):
-                self.count += 1
-                if self.count > 100:  # Safety limit
-                    raise StopIteration
-                # Simulate slow drip - each byte takes 0.15s
-                time.sleep(0.15)
-                return b"x"  # 1 byte at a time
+                # Yield forever until deadline cuts us off
+                return b"x"
 
         with (
             patch("time.monotonic") as mock_monotonic,
             patch("time.sleep") as mock_sleep,
         ):
             # Mock time to progress on each check
-            call_count = [0]
+            call_count = [-1]  # Start at -1 so first call returns 0.0
 
             def mock_time():
                 call_count[0] += 1
-                # Start at 0, increment by 0.2s each call to simulate slow progress
+                # Progress 0.2s per call to simulate slow trickle
+                # With 1.0s budget, should timeout after ~5 checks
                 return call_count[0] * 0.2
 
             mock_monotonic.side_effect = mock_time
@@ -469,19 +474,13 @@ class TestNewBlockerFixes:
         mock_paper = MagicMock()
         mock_paper.get_short_id.return_value = "2103.14030"
 
-        # Mock a trickling stream
+        # Mock a trickling stream that yields 1 byte at a time indefinitely
         class TricklingStream:
-            def __init__(self):
-                self.count = 0
-
             def __iter__(self):
                 return self
 
             def __next__(self):
-                self.count += 1
-                if self.count > 100:
-                    raise StopIteration
-                time.sleep(0.15)
+                # Yield forever until deadline cuts us off
                 return b"x"
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -491,11 +490,13 @@ class TestNewBlockerFixes:
                 patch("time.monotonic") as mock_monotonic,
                 patch("time.sleep") as mock_sleep,
             ):
-                call_count = [0]
+                call_count = [-1]  # Start at -1 so first call returns 0.0
 
                 def mock_time():
                     call_count[0] += 1
-                    return call_count[0] * 0.2
+                    # Progress 0.15s per call to simulate slow trickle
+                    # With 2.0s deadline, will timeout after several iterations
+                    return call_count[0] * 0.15
 
                 mock_monotonic.side_effect = mock_time
 
@@ -512,14 +513,14 @@ class TestNewBlockerFixes:
                     mock_client.__exit__ = MagicMock(return_value=False)
                     mock_client_cls.return_value = mock_client
 
-                    # Provide explicit deadline 1.0s from start
+                    # Provide explicit deadline 2.0s from start (0.0)
                     with pytest.raises(ArxivTimeoutError) as exc_info:
                         stream_pdf_to_path(
                             mock_paper,
                             pdf_path,
                             request_timeout=30.0,
                             user_agent="test",
-                            deadline=1.0,
+                            deadline=2.0,
                         )
 
                     # Should be caught by deadline check in iter_raw loop

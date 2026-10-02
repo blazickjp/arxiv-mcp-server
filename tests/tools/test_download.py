@@ -48,7 +48,7 @@ def test_download_arxiv_pdf_streams_via_httpx(temp_storage_path, mocker):
 
     stream_response = MagicMock()
     stream_response.raise_for_status = MagicMock()
-    stream_response.iter_bytes.return_value = [b"chunk-one", b"chunk-two"]
+    stream_response.iter_raw.return_value = [b"chunk-one", b"chunk-two"]
 
     stream_cm = MagicMock()
     stream_cm.__enter__.return_value = stream_response
@@ -81,7 +81,7 @@ def test_download_arxiv_pdf_supports_legacy_ids(temp_storage_path, mocker):
 
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.iter_bytes.return_value = [b"pdf"]
+    response.iter_raw.return_value = [b"pdf"]
     response_context = MagicMock()
     response_context.__enter__.return_value = response
     response_context.__exit__.return_value = False
@@ -116,7 +116,7 @@ def test_download_arxiv_pdf_removes_partial_file_on_stream_failure(
 
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.iter_bytes.return_value = chunks()
+    response.iter_raw.return_value = chunks()
     response_context = MagicMock()
     response_context.__enter__.return_value = response
     response_context.__exit__.return_value = False
