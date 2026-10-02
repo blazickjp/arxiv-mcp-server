@@ -762,196 +762,6 @@ download_tool = types.Tool(
 # ---------------------------------------------------------------------------
 
 
-def _fetch_html_content_sync(paper_id: str) -> str | None:
-    """Synchronous HTML fetch with retry (called from thread pool).
-
-    Returns the extracted text on success, or None if the HTML endpoint
-    is not available (404).
-
-    Raises ArxivRateLimitError on 406/429/503 after retries (406 uses minimal retry).
-    Raises RuntimeError on timeout/connection errors after retries.
-    """
-    url = f"https://arxiv.org/html/{paper_id}"
-    timeout = httpx.Timeout(
-        connect=float(settings.ARXIV_CONNECT_TIMEOUT),
-        read=float(settings.ARXIV_REQUEST_TIMEOUT),
-        write=30.0,
-        pool=30.0,
-    )
-
-    last_exception: Exception | None = None
-    start_time = time.monotonic()
-    max_total_time = float(settings.ARXIV_MAX_TOTAL_TIME)
-
-    for attempt in range(settings.ARXIV_MAX_RETRIES + 1):
-        # Check budget before attempt
-        elapsed = time.monotonic() - start_time
-        if elapsed >= max_total_time:
-            logger.info(
-                f"HTML fetch budget exhausted ({elapsed:.1f}s >= {max_total_time}s), will try PDF"
-            )
-            return None
-
-        try:
-            response = httpx.get(url, timeout=timeout, follow_redirects=True)
-            if response.status_code == 200:
-                logger.info(f"HTML fetch succeeded for {paper_id}")
-                return _html_to_text(response.text)
-            elif response.status_code == 404:
-                logger.info(f"HTML not available for {paper_id}, will try PDF")
-                return None
-            elif response.status_code in (406, 429, 503):
-                # 406 is IP-level burst throttling, retry minimally (#277)
-                last_exception = httpx.HTTPStatusError(
-                    f"HTTP {response.status_code}",
-                    request=response.request,
-                    response=response,
-                )
-                max_retries_for_status = (
-                    settings.ARXIV_HTTP_406_MAX_RETRIES
-                    if response.status_code == 406
-                    else settings.ARXIV_MAX_RETRIES
-                )
-                if attempt < max_retries_for_status:
-                    retry_after = response.headers.get("Retry-After")
-                    wait = min(
-                        settings.ARXIV_INITIAL_BACKOFF
-                        * (2**attempt)
-                        * (0.5 + random.random()),
-                        settings.ARXIV_MAX_BACKOFF,
-                    )
-                    if retry_after:
-                        try:
-                            wait = min(
-                                max(wait, float(retry_after)),
-                                settings.ARXIV_MAX_BACKOFF,
-                            )
-                        except ValueError:
-                            pass
-
-                    # Cap wait to remaining budget
-                    remaining = max_total_time - (time.monotonic() - start_time)
-                    if wait >= remaining:
-                        logger.info(
-                            f"HTML fetch: insufficient budget for retry (wait {wait:.1f}s >= remaining {remaining:.1f}s), will try PDF"
-                        )
-                        raise ArxivRateLimitError(
-                            f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-                            f"Please wait {int(retry_after_seconds if retry_after else 60)} seconds before retrying.",
-                            status_code=response.status_code,
-                            retry_after_seconds=float(
-                                retry_after if retry_after else 60
-                            ),
-                        )
-                    wait = min(wait, remaining * 0.9)
-
-                    logger.warning(
-                        "HTML fetch HTTP %d; retrying in %.1fs (attempt %d/%d)",
-                        response.status_code,
-                        wait,
-                        attempt + 1,
-                        max_retries_for_status + 1,
-                    )
-                    time.sleep(wait)
-                else:
-                    retry_after_seconds = float(
-                        response.headers.get("Retry-After", "60.0")
-                    )
-                    if response.status_code == 406:
-                        retry_after_seconds = float(
-                            response.headers.get("Retry-After", "600.0")
-                        )
-                    try:
-                        retry_after_seconds = float(
-                            response.headers.get("Retry-After", retry_after_seconds)
-                        )
-                    except ValueError:
-                        pass
-                    raise ArxivRateLimitError(
-                        f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
-                        f"Please wait {int(retry_after_seconds)} seconds before retrying.",
-                        status_code=response.status_code,
-                        retry_after_seconds=retry_after_seconds,
-                    )
-            else:
-                # Other status codes are not retryable
-                logger.info(
-                    f"HTML fetch returned {response.status_code} for {paper_id}, will try PDF"
-                )
-                return None
-        except httpx.TimeoutException as e:
-            last_exception = e
-            if attempt < settings.ARXIV_MAX_RETRIES:
-                wait = min(
-                    settings.ARXIV_INITIAL_BACKOFF
-                    * (2**attempt)
-                    * (0.5 + random.random()),
-                    settings.ARXIV_MAX_BACKOFF,
-                )
-                # Cap wait to remaining budget
-                remaining = max_total_time - (time.monotonic() - start_time)
-                if wait >= remaining:
-                    logger.info(
-                        f"HTML fetch timeout: insufficient budget for retry, will try PDF"
-                    )
-                    return None
-                wait = min(wait, remaining * 0.9)
-
-                logger.warning(
-                    "HTML fetch timed out; retrying in %.1fs (attempt %d/%d)",
-                    wait,
-                    attempt + 1,
-                    settings.ARXIV_MAX_RETRIES + 1,
-                )
-                time.sleep(wait)
-            else:
-                # After retries exhausted, return None to allow PDF fallback
-                logger.info(
-                    f"HTML fetch timed out after {settings.ARXIV_MAX_RETRIES + 1} attempts, will try PDF"
-                )
-                return None
-        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-            last_exception = e
-            if attempt < settings.ARXIV_MAX_RETRIES:
-                wait = min(
-                    settings.ARXIV_INITIAL_BACKOFF
-                    * (2**attempt)
-                    * (0.5 + random.random()),
-                    settings.ARXIV_MAX_BACKOFF,
-                )
-                # Cap wait to remaining budget
-                remaining = max_total_time - (time.monotonic() - start_time)
-                if wait >= remaining:
-                    logger.info(
-                        f"HTML fetch connection error: insufficient budget for retry, will try PDF"
-                    )
-                    return None
-                wait = min(wait, remaining * 0.9)
-
-                logger.warning(
-                    "HTML fetch connection error; retrying in %.1fs (attempt %d/%d)",
-                    wait,
-                    attempt + 1,
-                    settings.ARXIV_MAX_RETRIES + 1,
-                )
-                time.sleep(wait)
-            else:
-                # After retries exhausted, return None to allow PDF fallback
-                logger.info(
-                    f"HTML connection failed after {settings.ARXIV_MAX_RETRIES + 1} attempts, will try PDF"
-                )
-                return None
-        except httpx.RequestError as e:
-            # Other request errors (not timeout/connection) - don't retry
-            logger.warning(f"HTML fetch request error for {paper_id}: {e}")
-            return None
-
-    # Should not reach here, but just in case
-    if last_exception:
-        raise last_exception
-    return None
-
-
 def _fetch_html_content(paper_id: str) -> str | None:
     """Try to get paper content from the arXiv HTML endpoint (sync wrapper).
 
@@ -1082,15 +892,16 @@ def _fetch_html_content_single_attempt(
         return None
     elif response.status_code in (406, 429, 503):
         # 406 is IP-level burst throttling - caller will retry minimally
+        from ..arxiv_api import _parse_retry_after_seconds
+
         retry_after_seconds = 60.0
         if response.status_code == 406:
             retry_after_seconds = 600.0
         retry_after_header = response.headers.get("Retry-After")
         if retry_after_header:
-            try:
-                retry_after_seconds = float(retry_after_header)
-            except ValueError:
-                pass
+            parsed = _parse_retry_after_seconds(retry_after_header)
+            if parsed is not None:
+                retry_after_seconds = parsed
         raise ArxivRateLimitError(
             f"arXiv is rate limiting this IP (HTTP {response.status_code}). "
             f"Please wait {int(retry_after_seconds)} seconds before retrying.",

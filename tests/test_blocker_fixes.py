@@ -93,7 +93,7 @@ class TestBlockerFixes:
 
             # Single attempt should raise TimeoutException
             with pytest.raises(httpx.TimeoutException):
-                _fetch_html_content_single_attempt("2103.14030")
+                _fetch_html_content_single_attempt("2103.14030", 30.0)
 
     @pytest.mark.asyncio
     async def test_pdf_timeout_honest_error(self):
@@ -197,7 +197,7 @@ class TestBlockerFixes:
         with patch.object(httpx, "get", return_value=mock_response):
             # Should parse HTTP-date without crashing
             with pytest.raises(ArxivRateLimitError) as exc_info:
-                _fetch_html_content_single_attempt("2103.14030")
+                _fetch_html_content_single_attempt("2103.14030", 30.0)
 
             assert exc_info.value.status_code == 429
             # Should have parsed the date successfully (not use default)
