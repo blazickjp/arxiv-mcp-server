@@ -118,7 +118,8 @@ def _download_source_archive(paper_id: str) -> bytes:
             min_attempt_time = 1.0
             if remaining_before_limiter < pending_wait + min_attempt_time:
                 raise LatexSourceError(
-                    f"LaTeX source download: insufficient budget (need {pending_wait + min_attempt_time:.1f}s, have {remaining_before_limiter:.1f}s)"
+                    f"LaTeX source download skipped: time budget (ARXIV_MAX_TOTAL_TIME) too small for another attempt "
+                    f"(need {pending_wait + min_attempt_time:.1f}s, have {remaining_before_limiter:.1f}s)"
                 )
             # Rate limiter only holds lock for this attempt
             return ARXIV_RATE_LIMITER.run_sync(

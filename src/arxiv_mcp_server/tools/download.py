@@ -806,7 +806,8 @@ def _fetch_html_content(paper_id: str, deadline: float) -> str | None:
             min_attempt_time = 1.0  # Minimum time needed for the actual request
             if remaining_before_limiter < pending_wait + min_attempt_time:
                 logger.info(
-                    f"HTML fetch insufficient budget (need {pending_wait + min_attempt_time:.1f}s, have {remaining_before_limiter:.1f}s), will try PDF"
+                    f"HTML fetch skipped: time budget (ARXIV_MAX_TOTAL_TIME) too small for another attempt "
+                    f"(need {pending_wait + min_attempt_time:.1f}s, have {remaining_before_limiter:.1f}s), will try PDF"
                 )
                 return None
             return ARXIV_RATE_LIMITER.run_sync(
@@ -1051,8 +1052,8 @@ def _fetch_pdf_content_unlocked(
     min_attempt_time = 1.0  # Minimum time needed for metadata lookup
     if remaining < pending_wait + min_attempt_time:
         raise ArxivTimeoutError(
-            f"PDF metadata lookup skipped (need {pending_wait + min_attempt_time:.1f}s, have {remaining:.1f}s). "
-            f"Please retry shortly."
+            f"Paper metadata lookup skipped: time budget (ARXIV_MAX_TOTAL_TIME) too small for another attempt "
+            f"(need {pending_wait + min_attempt_time:.1f}s, have {remaining:.1f}s)"
         )
 
     client = get_arxiv_client(num_retries=0)

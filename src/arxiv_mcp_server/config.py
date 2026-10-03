@@ -128,6 +128,24 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         """Validate timeout settings after initialization."""
+        # Only log validation warnings once per process
+        if not hasattr(Settings, "_validation_logged"):
+            Settings._validation_logged = False
+
+        if Settings._validation_logged:
+            # Still validate but don't log again
+            if self.ARXIV_REQUEST_TIMEOUT <= 0:
+                self.ARXIV_REQUEST_TIMEOUT = 30
+            if self.ARXIV_CONNECT_TIMEOUT <= 0:
+                self.ARXIV_CONNECT_TIMEOUT = 10
+            if self.ARXIV_MAX_TOTAL_TIME <= 0:
+                self.ARXIV_MAX_TOTAL_TIME = 50
+            if self.ARXIV_MAX_BACKOFF <= 0:
+                self.ARXIV_MAX_BACKOFF = 30.0
+            return
+
+        Settings._validation_logged = True
+
         # Validate positive timeouts
         if self.ARXIV_REQUEST_TIMEOUT <= 0:
             logger.warning(
@@ -155,7 +173,7 @@ class Settings(BaseSettings):
 
         Returns ARXIV_REQUEST_TIMEOUT if explicitly set (case-insensitive),
         otherwise falls back to REQUEST_TIMEOUT (case-insensitive) for
-        backward compatibility.
+        backward compatibility. Non-positive values clamp to default 30.
         """
         # Check if ARXIV_REQUEST_TIMEOUT was explicitly set (case-insensitive)
         import os
@@ -166,14 +184,15 @@ class Settings(BaseSettings):
             return self.ARXIV_REQUEST_TIMEOUT
         # Fall back to REQUEST_TIMEOUT if it was explicitly set (case-insensitive)
         if "REQUEST_TIMEOUT" in env_keys:
+            # Validate legacy value the same way as ARXIV_REQUEST_TIMEOUT
+            if self.REQUEST_TIMEOUT <= 0:
+                logger.warning(
+                    f"REQUEST_TIMEOUT must be positive (got {self.REQUEST_TIMEOUT}), using default 30"
+                )
+                return 30
             return self.REQUEST_TIMEOUT
         # Use ARXIV_REQUEST_TIMEOUT default
         return self.ARXIV_REQUEST_TIMEOUT
-
-    ALLOWED_HOSTS: str = ""
-    ALLOWED_ORIGINS: str = ""
-    SEMANTIC_SCHOLAR_API_KEY: str = ""
-    model_config = SettingsConfigDict(extra="allow")
 
     @property
     def STORAGE_PATH(self) -> Path:
