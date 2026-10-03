@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/arxiv-mcp-server.svg)](https://pypi.org/project/arxiv-mcp-server/)
 [![Downloads](https://static.pepy.tech/badge/arxiv-mcp-server)](https://pypi.org/project/arxiv-mcp-server/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed,_latest_0.7.3-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed,_latest_0.8.0-5C5CFF?style=flat-square)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest)
 [![Tests](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml/badge.svg)](https://github.com/blazickjp/arxiv-mcp-server/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/blazickjp/arxiv-mcp-server)](https://github.com/blazickjp/arxiv-mcp-server/stargazers)
 
@@ -42,9 +42,9 @@ Add this stdio configuration to clients that accept the `mcpServers` JSON shape,
 
 The default paper directory is `~/.arxiv-mcp-server/papers`. To choose another directory, append `"--storage-path", "/absolute/path/to/papers"` to `args`.
 
-The supported package is published on PyPI as `arxiv-mcp-server==0.7.3`. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
+The supported package is published on PyPI as `arxiv-mcp-server==0.8.0`. An unrelated npm package uses the same name, so do not install this server with npm, pnpm, or `npx arxiv-mcp-server`.
 
-Listed on the [official MCP registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest), latest 0.7.3.
+Listed on the [official MCP registry](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.blazickjp%2Farxiv-mcp-server/versions/latest), latest 0.8.0.
 
 ## Why this is not a search wrapper
 
@@ -116,10 +116,10 @@ The Power installs the MCP connection from `mcp.json` and adds focused arXiv res
 
 ### Claude Desktop bundle
 
-macOS users can install a bundled `.mcpb` extension from the [v0.7.2 release](https://github.com/blazickjp/arxiv-mcp-server/releases/tag/v0.7.2) or the [latest GitHub release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
+macOS users can install a bundled `.mcpb` extension from the [v0.8.0 release](https://github.com/blazickjp/arxiv-mcp-server/releases/tag/v0.8.0) or the [latest GitHub release](https://github.com/blazickjp/arxiv-mcp-server/releases/latest):
 
-- Apple Silicon: [`arxiv-mcp-server-darwin-arm64-0.7.2.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.7.2/arxiv-mcp-server-darwin-arm64-0.7.2.mcpb)
-- Intel: [`arxiv-mcp-server-darwin-x86_64-0.7.2.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.7.2/arxiv-mcp-server-darwin-x86_64-0.7.2.mcpb)
+- Apple Silicon: [`arxiv-mcp-server-darwin-arm64-0.8.0.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.8.0/arxiv-mcp-server-darwin-arm64-0.8.0.mcpb)
+- Intel: [`arxiv-mcp-server-darwin-x86_64-0.8.0.mcpb`](https://github.com/blazickjp/arxiv-mcp-server/releases/download/v0.8.0/arxiv-mcp-server-darwin-x86_64-0.8.0.mcpb)
 
 Double-click the bundle, drag it into Claude Desktop, or open **Settings → Extensions → Advanced settings → Install Extension…**. The bundle includes the server dependencies and requires CPython 3.11.x.
 
