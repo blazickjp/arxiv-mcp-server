@@ -240,3 +240,67 @@ def test_get_arxiv_client_skips_wrapping_without_real_session(monkeypatch):
     assert client is fake_client
     # untouched: still a MagicMock, not the _get_with_timeout wrapper
     assert client._session.get.__class__.__name__ == "MagicMock"
+
+
+def test_request_timeout_fallback():
+    """ARXIV_REQUEST_TIMEOUT falls back to legacy REQUEST_TIMEOUT when not explicitly set."""
+    # Test 1: ARXIV_REQUEST_TIMEOUT explicitly set (takes precedence)
+    with patch.dict(
+        os.environ,
+        {"ARXIV_REQUEST_TIMEOUT": "15", "REQUEST_TIMEOUT": "45"},
+        clear=False,
+    ):
+        settings = Settings()
+        assert settings.get_request_timeout() == 15
+
+    # Test 2: Only REQUEST_TIMEOUT set (fallback)
+    with patch.dict(os.environ, {"REQUEST_TIMEOUT": "25"}, clear=False):
+        # Clear ARXIV_REQUEST_TIMEOUT from env if present
+        env = os.environ.copy()
+        if "ARXIV_REQUEST_TIMEOUT" in env:
+            del env["ARXIV_REQUEST_TIMEOUT"]
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.get_request_timeout() == 25
+
+    # Test 3: Neither set (use ARXIV_REQUEST_TIMEOUT default of 30)
+    env = os.environ.copy()
+    if "ARXIV_REQUEST_TIMEOUT" in env:
+        del env["ARXIV_REQUEST_TIMEOUT"]
+    if "REQUEST_TIMEOUT" in env:
+        del env["REQUEST_TIMEOUT"]
+    with patch.dict(os.environ, env, clear=True):
+        settings = Settings()
+        assert settings.get_request_timeout() == 30
+
+
+def test_request_timeout_case_insensitive():
+    """REQUEST_TIMEOUT and ARXIV_REQUEST_TIMEOUT are case-insensitive like other settings."""
+    # Test lowercase arxiv_request_timeout takes precedence
+    with patch.dict(
+        os.environ,
+        {"arxiv_request_timeout": "12", "request_timeout": "33"},
+        clear=False,
+    ):
+        settings = Settings()
+        assert settings.get_request_timeout() == 12
+
+    # Test lowercase request_timeout fallback
+    env = os.environ.copy()
+    for key in list(env.keys()):
+        if key.upper() in ("ARXIV_REQUEST_TIMEOUT", "REQUEST_TIMEOUT"):
+            del env[key]
+    env["request_timeout"] = "18"
+    with patch.dict(os.environ, env, clear=True):
+        settings = Settings()
+        assert settings.get_request_timeout() == 18
+
+    # Test mixed case
+    env = os.environ.copy()
+    for key in list(env.keys()):
+        if key.upper() in ("ARXIV_REQUEST_TIMEOUT", "REQUEST_TIMEOUT"):
+            del env[key]
+    env["ArXiV_ReQuEsT_tImEoUt"] = "7"
+    with patch.dict(os.environ, env, clear=True):
+        settings = Settings()
+        assert settings.get_request_timeout() == 7

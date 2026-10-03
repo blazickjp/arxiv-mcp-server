@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -16,6 +15,7 @@ import mcp.types as types
 from mcp.types import ToolAnnotations
 
 from ..config import Settings
+from ..arxiv_api import retry_with_backoff
 from .arxiv_ids import (
     arxiv_version_suffix,
     bare_arxiv_id,
@@ -48,9 +48,6 @@ RATE_LIMIT_MESSAGE_WITH_KEY = (
     "This is NOT an empty graph—the API blocked the request. "
     "Wait and retry, or reduce max_citations."
 )
-_MAX_RETRIES = 5
-_INITIAL_BACKOFF_SECONDS = 2.0
-_MAX_BACKOFF_SECONDS = 60.0
 # Cache citation graphs on disk to reduce repeated S2 calls. Rate-limited results
 # expire quickly; successful graphs persist longer.
 CACHE_TTL_SUCCESS_SECONDS = 7 * 24 * 3600  # 7 days
@@ -149,26 +146,32 @@ def _rate_limited_payload(
     *,
     arxiv_id: str | None = None,
     max_citations: int | None = None,
+    message: str | None = None,
+    status_code: int | None = None,
 ) -> Dict[str, Any]:
     """Soft rate-limit result so callers can continue without a hard tool error."""
     payload: Dict[str, Any] = {
         "status": "rate_limited",
         "error": "RATE_LIMITED",
-        "message": _rate_limit_message(),
-        "warning": "This is NOT an empty citation graph. The API request was blocked by rate limiting.",
+        "message": message if message is not None else _rate_limit_message(),
         "citation_count": 0,
         "reference_count": 0,
         "citations": [],
         "references": [],
     }
+    # Only include warning and hint for non-503 errors (quota/throttling, not service unavailable)
+    if status_code != 503:
+        payload["warning"] = (
+            "This is NOT an empty citation graph. The API request was blocked by rate limiting."
+        )
+        if not _has_api_key():
+            payload["hint"] = (
+                "Get a free API key at https://www.semanticscholar.org/product/api#api-key and set SEMANTIC_SCHOLAR_API_KEY"
+            )
     if arxiv_id is not None:
         payload["arxiv_id"] = arxiv_id
     if max_citations is not None:
         payload["max_citations"] = max_citations
-    if not _has_api_key():
-        payload["hint"] = (
-            "Get a free API key at https://www.semanticscholar.org/product/api#api-key and set SEMANTIC_SCHOLAR_API_KEY"
-        )
     return payload
 
 
@@ -292,34 +295,57 @@ def _save_cached_graph(
         logger.warning("Failed to cache citation graph to %s: %s", cache_file.name, exc)
 
 
-def _backoff_seconds(attempt: int, retry_after: str | None) -> float:
-    """Exponential backoff with jitter, honoring numeric Retry-After when present."""
-    delay = min(_INITIAL_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
-    if retry_after:
-        try:
-            delay = min(max(delay, float(retry_after)), _MAX_BACKOFF_SECONDS)
-        except ValueError:
-            pass
-    # Full-ish jitter keeps concurrent clients from retrying in lockstep.
-    jittered = delay * (0.5 + random.random())
-    return min(jittered, _MAX_BACKOFF_SECONDS)
-
-
 async def _s2_get(
     client: httpx.AsyncClient, url: str, params: Dict[str, Any] | None = None
 ) -> httpx.Response:
-    """GET a Semantic Scholar URL, retrying with backoff on HTTP 429."""
-    for attempt in range(_MAX_RETRIES + 1):
+    """GET a Semantic Scholar URL with retry on HTTP 429 and timeout/connection errors.
+
+    Uses the unified retry_with_backoff infrastructure for consistency.
+    """
+
+    async def request() -> httpx.Response:
         response = await client.get(url, params=params, headers=_s2_headers())
-        if response.status_code != 429:
-            response.raise_for_status()
-            return response
-        if attempt == _MAX_RETRIES:
-            break
-        wait = _backoff_seconds(attempt, response.headers.get("Retry-After"))
-        logger.warning("Semantic Scholar 429 on %s; retrying in %.1fs", url, wait)
-        await asyncio.sleep(wait)
-    raise SemanticScholarRateLimitError(_rate_limit_message())
+        response.raise_for_status()
+        return response
+
+    try:
+        return await retry_with_backoff(
+            request,
+            max_retries=settings.ARXIV_MAX_RETRIES,
+            initial_backoff=settings.ARXIV_INITIAL_BACKOFF,
+            max_backoff=settings.ARXIV_MAX_BACKOFF,
+            max_total_time=float(settings.ARXIV_MAX_TOTAL_TIME),
+            operation_name="Semantic Scholar API request",
+        )
+    except Exception as e:
+        # Convert arXiv-prefixed errors to Semantic Scholar equivalents for this tool
+        from ..arxiv_api import (
+            ArxivRateLimitError,
+            ArxivTimeoutError,
+            ArxivConnectionError,
+        )
+
+        if isinstance(e, ArxivRateLimitError):
+            # Provide accurate message based on status code
+            if e.status_code == 503:
+                # 503 is service unavailable, not quota
+                message = (
+                    "Semantic Scholar API is temporarily unavailable (HTTP 503). "
+                    "Please retry shortly."
+                )
+            else:
+                # 429 is quota, 406 is IP throttling
+                message = _rate_limit_message()
+            raise SemanticScholarRateLimitError(message) from e
+        elif isinstance(e, ArxivTimeoutError):
+            raise RuntimeError(
+                "Semantic Scholar API request timed out. The API may be slow or overloaded. Please retry shortly."
+            ) from e
+        elif isinstance(e, ArxivConnectionError):
+            raise RuntimeError(
+                "Could not connect to Semantic Scholar. Please check your network connection and retry shortly."
+            ) from e
+        raise
 
 
 def _extract_citations(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -361,13 +387,20 @@ def _rate_limited_response(
     *,
     arxiv_id: str | None = None,
     max_citations: int | None = None,
+    message: str | None = None,
+    status_code: int | None = None,
 ) -> List[types.TextContent]:
     """Build the soft rate-limited tool response."""
     return [
         types.TextContent(
             type="text",
             text=json.dumps(
-                _rate_limited_payload(arxiv_id=arxiv_id, max_citations=max_citations),
+                _rate_limited_payload(
+                    arxiv_id=arxiv_id,
+                    max_citations=max_citations,
+                    message=message,
+                    status_code=status_code,
+                ),
                 indent=2,
             ),
         )
@@ -430,7 +463,13 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             # /citations and /references calls, but that defeats the quota goal.
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        timeout = httpx.Timeout(
+            connect=float(settings.ARXIV_CONNECT_TIMEOUT),
+            read=float(settings.get_request_timeout()),
+            write=30.0,
+            pool=30.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             paper_response = await _s2_get(client, paper_url, params)
 
         payload = paper_response.json()
@@ -477,18 +516,36 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
 
     except SemanticScholarRateLimitError as exc:
         logger.error("Semantic Scholar rate limited: %s", exc)
-        rate_limited = _rate_limited_payload(arxiv_id=bare_id, max_citations=limit)
+        # Extract status code from the exception if available
+        status_code = getattr(exc, "status_code", None) or (
+            exc.__cause__.status_code if hasattr(exc.__cause__, "status_code") else None
+        )
+        rate_limited = _rate_limited_payload(
+            arxiv_id=bare_id,
+            max_citations=limit,
+            message=str(exc),
+            status_code=status_code,
+        )
         # Cache rate-limited results with a short TTL so we don't hammer S2
         if bare_id is not None and limit is not None:
             _save_cached_graph(bare_id, limit, rate_limited)
-        return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
+        return _rate_limited_response(
+            arxiv_id=bare_id,
+            max_citations=limit,
+            message=str(exc),
+            status_code=status_code,
+        )
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             logger.error("Semantic Scholar rate limited: %s", exc)
-            rate_limited = _rate_limited_payload(arxiv_id=bare_id, max_citations=limit)
+            rate_limited = _rate_limited_payload(
+                arxiv_id=bare_id, max_citations=limit, status_code=429
+            )
             if bare_id is not None and limit is not None:
                 _save_cached_graph(bare_id, limit, rate_limited)
-            return _rate_limited_response(arxiv_id=bare_id, max_citations=limit)
+            return _rate_limited_response(
+                arxiv_id=bare_id, max_citations=limit, status_code=429
+            )
         status = exc.response.status_code if exc.response is not None else None
         # Never leak upstream status lines / URLs (issue #166 class).
         logger.error("Semantic Scholar HTTP error: status=%s", status)

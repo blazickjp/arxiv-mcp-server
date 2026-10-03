@@ -18,6 +18,7 @@ import httpx
 import mcp.types as types
 from mcp.types import ToolAnnotations
 
+from ..config import Settings
 from .arxiv_ids import (
     arxiv_version_number,
     bare_arxiv_id,
@@ -33,6 +34,7 @@ from .search import (
 )
 
 logger = logging.getLogger("arxiv-mcp-server")
+settings = Settings()
 
 # Bound the response so a single call cannot fan out without limit.
 MAX_IDS = 50
@@ -161,7 +163,9 @@ async def _fetch_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     requests still resolve to latest.
     """
     url = f"{ARXIV_API_URL}?id_list={','.join(ids)}&max_results={len(ids)}"
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(
+        timeout=float(settings.get_request_timeout())
+    ) as client:
         response = await _rate_limited_get(client, url)
     papers = _parse_arxiv_atom_response(response.text)
 

@@ -32,23 +32,36 @@ jobs:
           version: "0.11.30"
           enable-cache: true
 
+      - name: Install Python version for uv
+        run: uv python install ${{ matrix.python-version }}
+
       - name: Install locked test environment
         run: uv sync --locked --extra test
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
       - name: Resolve optional extras from binary wheels
         run: >-
           uv pip compile pyproject.toml --extra pdf --extra pro
           --only-binary :all:
           --output-file "${{ runner.temp }}/arxiv-extras.txt"
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
       - name: Run tests
         run: uv run pytest --cov-report=xml
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
       - name: Build candidate wheel
         run: uv build --wheel --out-dir dist
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
       - name: Smoke-test installed wheel over MCP
         run: uv run python scripts/smoke_installed_wheel.py
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
   docker-smoke:
     runs-on: ubuntu-latest

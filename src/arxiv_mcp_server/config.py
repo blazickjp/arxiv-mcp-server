@@ -110,7 +110,14 @@ class Settings(BaseSettings):
     APP_VERSION: str = _PACKAGE_VERSION
     MAX_RESULTS: int = 50
     BATCH_SIZE: int = 20
-    REQUEST_TIMEOUT: int = 60
+    REQUEST_TIMEOUT: int = 60  # Deprecated: use ARXIV_REQUEST_TIMEOUT
+    ARXIV_REQUEST_TIMEOUT: int = 30
+    ARXIV_CONNECT_TIMEOUT: int = 10
+    ARXIV_MAX_RETRIES: int = 2
+    ARXIV_HTTP_406_MAX_RETRIES: int = 1
+    ARXIV_INITIAL_BACKOFF: float = 2.0
+    ARXIV_MAX_BACKOFF: float = 30.0
+    ARXIV_MAX_TOTAL_TIME: int = 50
     TRANSPORT: str = "stdio"
     HOST: str = "127.0.0.1"
     PORT: int = 8000
@@ -118,6 +125,74 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = ""
     SEMANTIC_SCHOLAR_API_KEY: str = ""
     model_config = SettingsConfigDict(extra="allow")
+
+    def model_post_init(self, __context) -> None:
+        """Validate timeout settings after initialization."""
+        # Only log validation warnings once per process
+        if not hasattr(Settings, "_validation_logged"):
+            Settings._validation_logged = False
+
+        if Settings._validation_logged:
+            # Still validate but don't log again
+            if self.ARXIV_REQUEST_TIMEOUT <= 0:
+                self.ARXIV_REQUEST_TIMEOUT = 30
+            if self.ARXIV_CONNECT_TIMEOUT <= 0:
+                self.ARXIV_CONNECT_TIMEOUT = 10
+            if self.ARXIV_MAX_TOTAL_TIME <= 0:
+                self.ARXIV_MAX_TOTAL_TIME = 50
+            if self.ARXIV_MAX_BACKOFF <= 0:
+                self.ARXIV_MAX_BACKOFF = 30.0
+            return
+
+        Settings._validation_logged = True
+
+        # Validate positive timeouts
+        if self.ARXIV_REQUEST_TIMEOUT <= 0:
+            logger.warning(
+                f"ARXIV_REQUEST_TIMEOUT must be positive (got {self.ARXIV_REQUEST_TIMEOUT}), using default 30"
+            )
+            self.ARXIV_REQUEST_TIMEOUT = 30
+        if self.ARXIV_CONNECT_TIMEOUT <= 0:
+            logger.warning(
+                f"ARXIV_CONNECT_TIMEOUT must be positive (got {self.ARXIV_CONNECT_TIMEOUT}), using default 10"
+            )
+            self.ARXIV_CONNECT_TIMEOUT = 10
+        if self.ARXIV_MAX_TOTAL_TIME <= 0:
+            logger.warning(
+                f"ARXIV_MAX_TOTAL_TIME must be positive (got {self.ARXIV_MAX_TOTAL_TIME}), using default 50"
+            )
+            self.ARXIV_MAX_TOTAL_TIME = 50
+        if self.ARXIV_MAX_BACKOFF <= 0:
+            logger.warning(
+                f"ARXIV_MAX_BACKOFF must be positive (got {self.ARXIV_MAX_BACKOFF}), using default 30"
+            )
+            self.ARXIV_MAX_BACKOFF = 30.0
+
+    def get_request_timeout(self) -> int:
+        """Get request timeout with fallback to legacy REQUEST_TIMEOUT.
+
+        Returns ARXIV_REQUEST_TIMEOUT if explicitly set (case-insensitive),
+        otherwise falls back to REQUEST_TIMEOUT (case-insensitive) for
+        backward compatibility. Non-positive values clamp to default 30.
+        """
+        # Check if ARXIV_REQUEST_TIMEOUT was explicitly set (case-insensitive)
+        import os
+
+        env_keys = {k.upper(): k for k in os.environ.keys()}
+
+        if "ARXIV_REQUEST_TIMEOUT" in env_keys:
+            return self.ARXIV_REQUEST_TIMEOUT
+        # Fall back to REQUEST_TIMEOUT if it was explicitly set (case-insensitive)
+        if "REQUEST_TIMEOUT" in env_keys:
+            # Validate legacy value the same way as ARXIV_REQUEST_TIMEOUT
+            if self.REQUEST_TIMEOUT <= 0:
+                logger.warning(
+                    f"REQUEST_TIMEOUT must be positive (got {self.REQUEST_TIMEOUT}), using default 30"
+                )
+                return 30
+            return self.REQUEST_TIMEOUT
+        # Use ARXIV_REQUEST_TIMEOUT default
+        return self.ARXIV_REQUEST_TIMEOUT
 
     @property
     def STORAGE_PATH(self) -> Path:

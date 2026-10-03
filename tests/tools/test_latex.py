@@ -412,7 +412,7 @@ def test_download_archive_aborts_when_stream_exceeds_limit(monkeypatch):
     response = MagicMock()
     response.headers = {}
     response.raise_for_status = MagicMock()
-    response.iter_bytes.return_value = [b"123", b"456"]
+    response.iter_raw.return_value = [b"123", b"456"]
     response_cm = MagicMock()
     response_cm.__enter__.return_value = response
     response_cm.__exit__.return_value = False
