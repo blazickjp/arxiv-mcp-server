@@ -1,106 +1,70 @@
 #!/usr/bin/env python3
 """Compare paper outline parsing between main and current branch.
 
-Downloads the 13 test papers from arXiv, parses them with both main's parser
-and the current branch's parser, and reports differences per paper.
+Uses the cached papers from cache_papers_13.tgz, parses them with both
+main's parser and the current branch's parser, and reports differences.
 """
 
-import asyncio
-import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-# Test papers (arxiv_id, version, short_name, expected_main_sections)
+# Test papers available in cache (10 total)
 TEST_PAPERS = [
-    ("1706.03762", "v7", "Attention", 7),
-    ("2101.03961", "v1", "Switch", 7),
-    ("2106.09685", "v2", "LoRA", 9),
-    ("2201.11903", "v6", "CoT", 11),
-    ("2203.02155", "v1", "InstructGPT", None),
-    ("2307.09288", "v2", "Llama2", None),
-    ("2310.06825", "v2", "Mistral", None),
-    ("2312.00752", "v2", "Mamba", None),
-    ("2404.06422", "v1", "ACM", 24),
-    ("2404.19756", "v5", "KAN", None),
-    ("2410.17954", "v1", "ExpertFlow", 34),
-    ("2501.10375", "v2", "DAOP", 21),
-    ("2501.12948", "v1", "DeepSeek-R1", None),
+    ("1706.03762", "Attention", 7),
+    ("2101.03961", "Switch", 7),
+    ("2106.09685", "LoRA", 9),
+    ("2307.09288", "Llama2", None),
+    ("2310.06825", "Mistral", None),
+    ("2312.00752", "Mamba", None),
+    ("2404.06422", "ACM", 24),
+    ("2404.19756", "KAN", None),
+    ("2410.17954", "ExpertFlow", 34),
+    ("2501.10375", "DAOP", 21),
 ]
 
 
-async def download_paper(arxiv_id: str, version: str, storage_path: Path) -> Path | None:
-    """Download a paper using the arxiv-mcp-server's download tool."""
-    paper_file = storage_path / f"{arxiv_id}{version}.md"
-    if paper_file.exists():
-        print(f"  Already cached: {paper_file.name}")
-        return paper_file
-
-    print(f"  Downloading {arxiv_id}{version}...")
+def parse_with_git_version(content: str, git_ref: str) -> list[dict[str, Any]]:
+    """Parse sections by checking out a git version temporarily."""
+    workspace = Path(__file__).parent.parent
+    
+    # Save current file
+    current_file = workspace / "src" / "arxiv_mcp_server" / "tools" / "paper_outline.py"
+    backup_content = current_file.read_text()
+    
     try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-        from arxiv_mcp_server.tools.download import handle_download
-        from arxiv_mcp_server.config import Settings
-
-        settings = Settings()
-        original_storage = settings.STORAGE_PATH
-        settings.STORAGE_PATH = str(storage_path)
-
-        result = await handle_download({
-            "paper_id": f"{arxiv_id}{version}",
-            "include_markdown": True,
-        })
-
-        settings.STORAGE_PATH = original_storage
-
-        if paper_file.exists():
-            print(f"  Downloaded: {paper_file.name} ({paper_file.stat().st_size} bytes)")
-            return paper_file
-        else:
-            print(f"  Failed to download {arxiv_id}{version}")
-            return None
-    except Exception as e:
-        print(f"  Error downloading {arxiv_id}{version}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-
-def parse_with_main(content: str) -> list[dict[str, Any]]:
-    """Parse sections using main's parser."""
-    # Extract main's paper_outline.py from git
-    try:
-        result = subprocess.run(
-            ["git", "show", "main:src/arxiv_mcp_server/tools/paper_outline.py"],
-            capture_output=True,
-            text=True,
+        # Checkout the file from git ref
+        subprocess.run(
+            ["git", "checkout", git_ref, "--", "src/arxiv_mcp_server/tools/paper_outline.py"],
+            cwd=workspace,
             check=True,
+            capture_output=True,
         )
-        main_code = result.stdout
-
-        # Create a temporary module with main's code
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(main_code)
-            temp_path = f.name
-
-        # Import and use it
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("paper_outline_main", temp_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        sections = module.parse_markdown_sections(content)
-        Path(temp_path).unlink()
-
+        
+        # Import and parse
+        sys.path.insert(0, str(workspace / "src"))
+        
+        # Force reload
+        if "arxiv_mcp_server.tools.paper_outline" in sys.modules:
+            del sys.modules["arxiv_mcp_server.tools.paper_outline"]
+        if "arxiv_mcp_server.tools" in sys.modules:
+            del sys.modules["arxiv_mcp_server.tools"]
+        
+        from arxiv_mcp_server.tools.paper_outline import parse_markdown_sections
+        sections = parse_markdown_sections(content)
+        
         return [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections]
-    except subprocess.CalledProcessError as e:
-        print(f"Warning: Could not get main's parser: {e}")
-        return []
-    except Exception as e:
-        print(f"Warning: Error parsing with main: {e}")
-        return []
+        
+    finally:
+        # Restore current file
+        current_file.write_text(backup_content)
+        
+        # Reload current version
+        if "arxiv_mcp_server.tools.paper_outline" in sys.modules:
+            del sys.modules["arxiv_mcp_server.tools.paper_outline"]
+        if "arxiv_mcp_server.tools" in sys.modules:
+            del sys.modules["arxiv_mcp_server.tools"]
 
 
 def parse_with_branch(content: str) -> list[dict[str, Any]]:
@@ -112,88 +76,82 @@ def parse_with_branch(content: str) -> list[dict[str, Any]]:
     return [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections]
 
 
-def compare_outlines(
-    main_sections: list[dict], branch_sections: list[dict]
-) -> dict[str, Any]:
-    """Compare two outlines and return differences."""
-    main_titles = set(s["title"] for s in main_sections)
-    branch_titles = set(s["title"] for s in branch_sections)
-
-    return {
-        "main_count": len(main_sections),
-        "branch_count": len(branch_sections),
-        "fakes_added": sorted(branch_titles - main_titles),
-        "real_lost": sorted(main_titles - branch_titles),
-        "main_titles": [s["title"] for s in main_sections],
-        "branch_titles": [s["title"] for s in branch_sections],
-    }
-
-
-async def main():
-    """Download papers and compare outlines."""
+def main():
+    """Compare outlines for all cached papers."""
     workspace = Path(__file__).parent.parent
-    storage_path = workspace / "test_paper_cache"
-    storage_path.mkdir(exist_ok=True)
+    cache_dir = workspace / "test_paper_cache" / "cache_papers"
+
+    if not cache_dir.exists():
+        print(f"ERROR: Cache directory not found: {cache_dir}")
+        print("Please extract cache_papers_13.tgz to test_paper_cache/")
+        return 1
 
     print("=" * 80)
-    print("DOWNLOADING PAPERS")
-    print("=" * 80)
-
-    papers_data = []
-    for arxiv_id, version, name, expected_main in TEST_PAPERS:
-        print(f"\n{name} ({arxiv_id}{version}):")
-        paper_file = await download_paper(arxiv_id, version, storage_path)
-        if paper_file:
-            content = paper_file.read_text(encoding="utf-8")
-            papers_data.append({
-                "arxiv_id": arxiv_id,
-                "version": version,
-                "name": name,
-                "content": content,
-                "expected_main": expected_main,
-            })
-
-    print("\n" + "=" * 80)
     print("COMPARING OUTLINES (MAIN VS BRANCH)")
     print("=" * 80)
 
     results = []
-    for paper in papers_data:
-        print(f"\n{paper['name']} ({paper['arxiv_id']}{paper['version']}):")
+    for arxiv_id, name, expected_main in TEST_PAPERS:
+        paper_file = cache_dir / f"{arxiv_id}.md"
+        if not paper_file.exists():
+            print(f"\n{name} ({arxiv_id}): FILE NOT FOUND")
+            continue
 
-        # Parse with both versions
-        main_sections = parse_with_main(paper['content'])
-        branch_sections = parse_with_branch(paper['content'])
+        print(f"\n{name} ({arxiv_id}):")
+        content = paper_file.read_text(encoding="utf-8")
+
+        # Parse with main
+        try:
+            main_sections = parse_with_git_version(content, "main")
+        except Exception as e:
+            print(f"  ERROR parsing with main: {e}")
+            main_sections = []
+
+        # Parse with branch
+        try:
+            branch_sections = parse_with_branch(content)
+        except Exception as e:
+            print(f"  ERROR parsing with branch: {e}")
+            continue
 
         if not main_sections:
-            print("  WARNING: Could not parse with main (using branch only)")
+            print(f"  WARNING: Could not parse with main (showing branch only)")
             print(f"  Branch: {len(branch_sections)} sections")
             results.append({
-                "name": paper["name"],
-                "arxiv_id": paper["arxiv_id"],
-                "version": paper["version"],
+                "name": name,
+                "arxiv_id": arxiv_id,
                 "main_count": "?",
                 "branch_count": len(branch_sections),
-                "fakes_added": "?",
-                "real_lost": "?",
+                "fakes_added": [],
+                "real_lost": [],
+                "main_titles": [],
                 "branch_titles": [s["title"] for s in branch_sections],
             })
             continue
 
-        comparison = compare_outlines(main_sections, branch_sections)
-        print(f"  Main: {comparison['main_count']} sections")
-        print(f"  Branch: {comparison['branch_count']} sections")
+        main_titles = {s["title"] for s in main_sections}
+        branch_titles = {s["title"] for s in branch_sections}
 
-        if comparison['fakes_added']:
-            print(f"  Fakes added: {comparison['fakes_added']}")
-        if comparison['real_lost']:
-            print(f"  Real lost: {comparison['real_lost']}")
+        fakes_added = sorted(branch_titles - main_titles)
+        real_lost = sorted(main_titles - branch_titles)
+
+        print(f"  Main: {len(main_sections)} sections")
+        print(f"  Branch: {len(branch_sections)} sections")
+
+        if fakes_added:
+            print(f"  Fakes added: {fakes_added}")
+        if real_lost:
+            print(f"  Real lost: {real_lost}")
 
         results.append({
-            "name": paper["name"],
-            "arxiv_id": paper["arxiv_id"],
-            "version": paper["version"],
-            **comparison,
+            "name": name,
+            "arxiv_id": arxiv_id,
+            "main_count": len(main_sections),
+            "branch_count": len(branch_sections),
+            "fakes_added": fakes_added,
+            "real_lost": real_lost,
+            "main_titles": [s["title"] for s in main_sections],
+            "branch_titles": [s["title"] for s in branch_sections],
         })
 
     # Print summary table
@@ -204,18 +162,12 @@ async def main():
     print("-" * 80)
     for r in results:
         main_str = str(r["main_count"]) if r["main_count"] != "?" else "?"
-        fakes_str = str(len(r["fakes_added"])) if r["fakes_added"] != "?" else "?"
-        lost_str = str(len(r["real_lost"])) if r["real_lost"] != "?" else "?"
+        fakes = len(r["fakes_added"])
+        lost = len(r["real_lost"])
         print(
             f"{r['name']:<15} {r['arxiv_id']:<16} {main_str:<6} "
-            f"{r['branch_count']:<6} {fakes_str:<8} {lost_str:<6}"
+            f"{r['branch_count']:<6} {fakes:<8} {lost:<6}"
         )
-
-    # Save detailed results
-    output_file = workspace / "outline_diff_results.json"
-    with open(output_file, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nDetailed results saved to: {output_file}")
 
     # Check key requirements
     print("\n" + "=" * 80)
@@ -224,19 +176,57 @@ async def main():
 
     for r in results:
         if r["name"] == "KAN":
-            titles = set(r.get("branch_titles", []))
+            titles = set(r["branch_titles"])
+            has_2 = any("Kolmogorov-Arnold" in t for t in titles)
+            has_22 = "KAN architecture" in titles
+            has_3 = "KANs are accurate" in titles
+            has_4 = "KANs are interpretable" in titles
+            
             print(f"\nKAN sections check:")
-            print(f"  Has 'Kolmogorov-Arnold Networks': {'Kolmogorov-Arnold Networks' in titles}")
-            print(f"  Has 'KAN architecture': {'KAN architecture' in titles}")
-            print(f"  Has 'KANs are accurate': {'KANs are accurate' in titles}")
-            print(f"  Has 'KANs are interpretable': {'KANs are interpretable' in titles}")
+            print(f"  Has section 2 (Kolmogorov-Arnold...): {has_2}")
+            print(f"  Has section 2.2 (KAN architecture): {has_22}")
+            print(f"  Has section 3 (KANs are accurate): {has_3}")
+            print(f"  Has section 4 (KANs are interpretable): {has_4}")
+            
+            # Check Introduction ending
+            try:
+                intro_idx = r["branch_titles"].index("Introduction")
+                next_title = r["branch_titles"][intro_idx+1] if intro_idx+1 < len(r["branch_titles"]) else None
+                print(f"  Introduction followed by: {next_title}")
+                print(f"  (Should be Kolmogorov-Arnold Networks, not part of Introduction)")
+            except ValueError:
+                print(f"  Introduction not found")
 
         if r["name"] in ["DAOP", "ExpertFlow", "ACM"]:
-            expected = r.get("expected_main")
-            actual = r["branch_count"]
-            status = "✓" if expected == actual else "✗"
-            print(f"\n{r['name']}: Expected {expected}, got {actual} {status}")
+            main_c = r["main_count"]
+            branch_c = r["branch_count"]
+            status = "✓" if main_c == branch_c else "✗"
+            print(f"\n{r['name']}: Main={main_c}, Branch={branch_c} {status}")
+            if r["fakes_added"]:
+                print(f"  Fakes: {r['fakes_added']}")
+
+    # Check for recovered headings from round 2
+    print("\n" + "=" * 80)
+    print("RECOVERED HEADINGS (vs round 2)")
+    print("=" * 80)
+    print("Expected recoveries from round 2:")
+    print("  - Attention: '3 Model Architecture'")
+    print("  - Switch: '2 Switch Transformer'")
+    print("  - Mistral: '2 Architectural details'")
+    
+    for r in results:
+        if r["name"] == "Attention":
+            has_model_arch = any("Model Architecture" in t for t in r["branch_titles"])
+            print(f"  Attention has 'Model Architecture': {has_model_arch}")
+        elif r["name"] == "Switch":
+            has_switch_trans = any("Switch Transformer" in t for t in r["branch_titles"])
+            print(f"  Switch has 'Switch Transformer': {has_switch_trans}")
+        elif r["name"] == "Mistral":
+            has_arch_details = any("Architectural details" in t for t in r["branch_titles"])
+            print(f"  Mistral has 'Architectural details': {has_arch_details}")
+
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(main())
