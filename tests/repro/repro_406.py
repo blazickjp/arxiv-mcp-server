@@ -59,6 +59,7 @@ ATOM = b"""<?xml version="1.0"?>
  </entry>
 </feed>"""
 EVENTS = []
+MODE = os.environ.get("REPRO_MODE", "406")  # "406" or "trickle"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -68,10 +69,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         EVENTS.append((self.path, time.monotonic()))
         if self.path.startswith("/metadata"):
-            self.send_response(406)
-            self.send_header("Retry-After", "600")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+            if MODE == "406":
+                # HTTP 406 response
+                self.send_response(406)
+                self.send_header("Retry-After", "600")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                # Trickle response: send ATOM in small chunks slowly
+                self.send_response(200)
+                self.send_header("Content-Type", "application/atom+xml")
+                self.send_header("Content-Length", str(len(ATOM)))
+                self.end_headers()
+                # Send 10-byte chunks every 0.75s
+                chunk_size = 10
+                for i in range(0, len(ATOM), chunk_size):
+                    chunk = ATOM[i : i + chunk_size]
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                        if i + chunk_size < len(ATOM):
+                            time.sleep(0.75)
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
             return
         else:
             body = (
@@ -129,24 +149,32 @@ async def run_client(http_server, directory):
             )
             elapsed = time.monotonic() - started
             payload = json.loads(result.content[0].text)
-            print(
-                json.dumps(
+            result_json = {
+                "mode": MODE,
+                "elapsed_seconds": round(elapsed, 3),
+                "budget_seconds": 7,
+                "configured_read_timeout_seconds": 1,
+                "status": payload.get("status"),
+                "metadata_requests": len(
+                    [e for e in EVENTS if e[0].startswith("/metadata")]
+                ),
+                "events": [
                     {
-                        "elapsed_seconds": round(elapsed, 3),
-                        "budget_seconds": 7,
-                        "configured_read_timeout_seconds": 1,
-                        "status": payload.get("status"),
-                        "events": [
-                            {
-                                "path": path,
-                                "start_after_seconds": round(at - started, 3),
-                            }
-                            for path, at in EVENTS
-                        ],
-                    },
-                    indent=2,
-                )
-            )
+                        "path": path,
+                        "start_after_seconds": round(at - started, 3),
+                    }
+                    for path, at in EVENTS
+                ],
+            }
+            print(json.dumps(result_json, indent=2))
+
+            # Assertions
+            assert elapsed <= 7.5, f"{MODE}: elapsed {elapsed:.3f}s exceeds 7.5s target"
+            assert (
+                result_json["metadata_requests"] == 1
+            ), f"{MODE}: expected 1 metadata request, got {result_json['metadata_requests']}"
+            print(f"\n✓ {MODE} case: elapsed {elapsed:.3f}s ≤ 7.5s, requests = 1")
+
             alive = await session.call_tool("list_papers", {"compact": True})
             print("Server responsive afterward:", not alive.isError)
 
