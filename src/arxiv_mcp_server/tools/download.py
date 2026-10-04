@@ -1145,17 +1145,25 @@ def _fetch_arxiv_metadata(
 ) -> dict[str, Any] | None:
     """Best-effort arXiv metadata lookup used after an HTML download.
 
+    Makes a direct GET to the arXiv API with streaming and per-chunk deadline
+    checks to handle slow trickle. Metadata is optional: on deadline or error,
+    returns None without failing the download.
+
     Args:
         paper_id: arXiv paper ID.
         deadline: Optional wall-clock deadline (time.monotonic()). When provided,
-                  enforces the remaining budget across gate acquisition, spacing,
-                  and the request itself (including slow-trickle responses). Metadata
-                  is optional: on deadline, returns None without failing the download.
+                  enforces the remaining budget across gate acquisition, request
+                  connect, and streaming read with per-chunk deadline checks.
     """
     import requests
+    import feedparser
 
     try:
-        # Check if we have enough time budget remaining before attempting gate acquisition
+        # Check if we have enough time budget remaining before attempting gate acquisition.
+        # The pre-gate check uses seconds_until_next_slot() which is advisory (unlocked),
+        # so the actual gate wait could be longer if another request starts. Worst case:
+        # another request acquires the gate just after our check, so we wait up to
+        # min_interval (3s). The post-gate recheck below skips if that causes overrun.
         if deadline is not None:
             pending_wait = ARXIV_RATE_LIMITER.seconds_until_next_slot()
             remaining = deadline - time.monotonic()
@@ -1167,63 +1175,104 @@ def _fetch_arxiv_metadata(
                 )
                 return None
 
-        # Use minimal retries (0) to respect ARXIV_MAX_RETRIES and ARXIV_HTTP_406_MAX_RETRIES.
-        # The arxiv package's num_retries is retry count, not attempt count, so 0 means exactly
-        # 1 request (issue #277: HTTP 406 is IP-level throttling, never add extra 406 retries).
-        client = get_arxiv_client(num_retries=0)
+        # Make direct GET to arXiv API inside the rate limiter gate.
+        # No retries: exactly 1 request. On 406, return None (issue #277: IP throttling).
+        def fetch_with_streaming_deadline_check():
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining < 1.0:
+                    logger.info(
+                        f"Metadata lookup skipped: deadline exceeded after gate wait "
+                        f"(remaining: {remaining:.1f}s)"
+                    )
+                    return None
 
-        # Patch session.get to clamp timeouts to remaining deadline for this request only
-        session = getattr(client, "_session", None)
-        original_get = None
-        if deadline is not None and isinstance(session, requests.Session):
-            original_get = session.get
-
-            def _get_with_clamped_timeout(url, **kwargs):
-                """Clamp connect and read timeouts to remaining deadline."""
+            # Direct GET to export API with streaming and clamped timeouts
+            url = f"https://export.arxiv.org/api/query?id_list={paper_id}"
+            timeout_tuple = None
+            if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining < 0.5:
-                    # Deadline already exceeded; raise to avoid starting the request
-                    raise requests.exceptions.Timeout(
-                        "Metadata deadline exceeded before request"
-                    )
-                # Clamp both connect and read timeouts to remaining time.
-                # Read timeout applies between chunks, so slow trickle will timeout.
-                kwargs["timeout"] = (
+                    logger.info("Metadata lookup skipped: deadline before request")
+                    return None
+                # Clamp connect and read timeouts to remaining budget
+                timeout_tuple = (
                     min(float(settings.ARXIV_CONNECT_TIMEOUT), remaining),
                     min(float(settings.get_request_timeout()), remaining),
                 )
-                return original_get(url, **kwargs)
+            else:
+                timeout_tuple = (
+                    float(settings.ARXIV_CONNECT_TIMEOUT),
+                    float(settings.get_request_timeout()),
+                )
 
-            session.get = _get_with_clamped_timeout
+            try:
+                response = requests.get(url, stream=True, timeout=timeout_tuple)
 
-        try:
-            # Recheck deadline after gate acquisition and spacing sleep, before the request
-            def fetch_with_deadline_check():
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining < 1.0:
-                        logger.info(
-                            f"Metadata lookup skipped: deadline exceeded after gate wait "
-                            f"(remaining: {remaining:.1f}s)"
-                        )
-                        return None
-                return next(client.results(arxiv.Search(id_list=[paper_id])))
+                # On 406, return None immediately (issue #277: IP throttling, no retry)
+                if response.status_code == 406:
+                    logger.info(f"Metadata lookup rate limited (406) for {paper_id}")
+                    response.close()
+                    return None
 
-            paper = ARXIV_RATE_LIMITER.run_sync(fetch_with_deadline_check)
-            if paper is None:
+                response.raise_for_status()
+
+                # Stream response body with per-chunk deadline checks
+                # (requests read timeout is max gap between chunks, not total time)
+                chunks = []
+                try:
+                    for chunk in response.iter_content(
+                        chunk_size=8192, decode_unicode=False
+                    ):
+                        if deadline is not None and time.monotonic() >= deadline:
+                            logger.info(
+                                f"Metadata lookup timed out (slow trickle) for {paper_id}"
+                            )
+                            response.close()
+                            return None
+                        if chunk:
+                            chunks.append(chunk)
+                finally:
+                    response.close()
+
+                # Parse feed with feedparser (already a dependency of arxiv package)
+                feed_text = b"".join(chunks).decode("utf-8", errors="replace")
+                feed = feedparser.parse(feed_text)
+
+                if not feed.entries:
+                    logger.info(f"No metadata entries found for {paper_id}")
+                    return None
+
+                # Build metadata dict matching _metadata_from_arxiv_result format
+                entry = feed.entries[0]
+                return {
+                    "title": entry.get("title", "").strip(),
+                    "authors": [
+                        author.get("name", "").strip()
+                        for author in entry.get("authors", [])
+                    ],
+                    "summary": entry.get("summary", "").strip(),
+                    "published": entry.get("published", ""),
+                    "updated": entry.get("updated", ""),
+                    "primary_category": (
+                        entry.get("arxiv_primary_category", {}).get("term", "")
+                    ),
+                    "categories": [
+                        tag.get("term", "")
+                        for tag in entry.get("tags", [])
+                        if tag.get("term")
+                    ],
+                    "arxiv_url": entry.get("id", ""),
+                }
+            except requests.exceptions.Timeout:
+                logger.info(f"Metadata lookup timed out for {paper_id}")
                 return None
-            return _metadata_from_arxiv_result(paper_id, paper)
-        finally:
-            # Restore original session.get
-            if original_get is not None and session is not None:
-                session.get = original_get
-    except (
-        requests.exceptions.Timeout,
-        requests.exceptions.ReadTimeout,
-        requests.exceptions.ConnectTimeout,
-    ) as exc:
-        logger.info("Metadata lookup timed out for %s: %s", paper_id, exc)
-        return None
+            except requests.exceptions.RequestException as exc:
+                logger.info(f"Metadata request failed for {paper_id}: {exc}")
+                return None
+
+        metadata = ARXIV_RATE_LIMITER.run_sync(fetch_with_streaming_deadline_check)
+        return metadata
     except Exception as exc:
         logger.info("Could not fetch metadata for %s: %s", paper_id, exc)
         return None

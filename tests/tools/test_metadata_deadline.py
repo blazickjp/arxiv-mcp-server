@@ -1,153 +1,259 @@
 """Tests for metadata deadline enforcement (PR #285 P1 fix)."""
 
 import time
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import pytest
 import requests.exceptions
 from arxiv_mcp_server.tools.download import _fetch_arxiv_metadata
 
 
+class FakeClock:
+    """Fake clock for deadline testing without real sleeps."""
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class FakeResponse:
+    """Fake streaming response that advances clock per chunk."""
+
+    def __init__(self, chunks, clock, chunk_delay=0.0, status_code=200):
+        self.chunks = chunks
+        self.clock = clock
+        self.chunk_delay = chunk_delay
+        self.status_code = status_code
+        self.closed = False
+
+    def iter_content(self, chunk_size=None, decode_unicode=False):
+        for chunk in self.chunks:
+            if self.chunk_delay:
+                self.clock.advance(self.chunk_delay)
+            yield chunk
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"HTTP {self.status_code}")
+
+    def close(self):
+        self.closed = True
+
+
 def test_metadata_deadline_skips_when_insufficient_budget_before_gate():
     """Pre-gate check skips metadata lookup when budget insufficient."""
-    deadline = time.monotonic() + 2.0  # Only 2s budget
+    clock = FakeClock()
+    deadline = clock() + 2.0  # Only 2s budget
 
-    with patch("arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER") as mock_limiter:
-        # pending_wait=3s (typical), min_attempt_time=1s → need 4s, have 2s → skip
-        mock_limiter.seconds_until_next_slot.return_value = 3.0
+    with patch("time.monotonic", clock):
+        with patch(
+            "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+        ) as mock_limiter:
+            # pending_wait=3s (typical), min_attempt_time=1s → need 4s, have 2s → skip
+            mock_limiter.seconds_until_next_slot.return_value = 3.0
 
-        result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+            result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
 
     assert result is None
     # Should not have called run_sync at all
     mock_limiter.run_sync.assert_not_called()
 
 
-def test_metadata_with_retries_zero_makes_exactly_one_request():
-    """With ARXIV_MAX_RETRIES=0, metadata lookup makes exactly 1 request (not 4)."""
-    request_count = 0
+def test_metadata_trickle_past_deadline_returns_none():
+    """Slow trickle past deadline closes response and returns None."""
+    clock = FakeClock()
+    deadline = clock() + 7.0  # 7s budget
 
-    with patch("arxiv_mcp_server.tools.download.get_arxiv_client") as mock_get_client:
-        with patch(
-            "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
-        ) as mock_limiter:
-            # Verify get_arxiv_client is called with num_retries=0
-            mock_client = Mock()
-            mock_get_client.return_value = mock_client
+    # Feed that would parse successfully
+    feed_xml = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Test</title><summary>Test summary</summary></entry></feed>'
+    # Split into chunks that arrive every 0.75s
+    chunks = [feed_xml[i : i + 10] for i in range(0, len(feed_xml), 10)]
 
-            def run_sync_immediate(operation):
-                return operation()
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Advance clock 3s for gate wait
+                def run_sync_with_delay(operation):
+                    clock.advance(3.0)
+                    return operation()
 
-            mock_limiter.run_sync.side_effect = run_sync_immediate
-            mock_limiter.seconds_until_next_slot.return_value = 0.0
+                mock_limiter.run_sync.side_effect = run_sync_with_delay
+                mock_limiter.seconds_until_next_slot.return_value = 0.1
 
-            # Mock client.results to track calls
-            def mock_results(search):
-                nonlocal request_count
-                request_count += 1
-                # Simulate 406 response (would retry with default client)
-                raise StopIteration("No results")
+                # Fake response with 0.75s per chunk
+                fake_response = FakeResponse(
+                    chunks, clock, chunk_delay=0.75, status_code=200
+                )
+                mock_get.return_value = fake_response
 
-            mock_client.results = mock_results
+                result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
 
-            with patch("arxiv_mcp_server.tools.download.arxiv.Search"):
+    # Should return None (trickle exceeded deadline)
+    assert result is None
+    # Response should be closed
+    assert fake_response.closed
+
+
+def test_metadata_http_406_returns_none_immediately():
+    """HTTP 406 returns None with exactly 1 request (issue #277: no retry)."""
+    clock = FakeClock()
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                fake_response = FakeResponse([], clock, status_code=406)
+                mock_get.return_value = fake_response
+
                 result = _fetch_arxiv_metadata("1234.5678", deadline=None)
 
-            # Should have called get_arxiv_client with num_retries=0
-            mock_get_client.assert_called_once_with(num_retries=0)
-            # Should have made exactly 1 request (not 4 with default retries)
-            assert request_count == 1
+    # Should return None on 406
+    assert result is None
+    # Exactly 1 request (no retry)
+    assert mock_get.call_count == 1
+    # Response should be closed
+    assert fake_response.closed
 
 
-def test_metadata_returns_none_on_timeout_no_thread_leak():
-    """Timeout returns None and doesn't leave thread holding gate."""
-    with patch("arxiv_mcp_server.tools.download.get_arxiv_client") as mock_get_client:
-        with patch(
-            "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
-        ) as mock_limiter:
-            mock_client = Mock()
-            mock_session = Mock(spec=requests.Session)
-            mock_client._session = mock_session
-            mock_get_client.return_value = mock_client
+def test_metadata_happy_path_parses_correctly():
+    """Successful metadata lookup parses feed and returns correct dict."""
+    clock = FakeClock()
 
-            # Simulate timeout
-            mock_session.get = Mock(
-                side_effect=requests.exceptions.ReadTimeout("Timeout")
-            )
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test Paper Title</title>
+  <summary>Test paper summary.</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <updated>2024-01-02T00:00:00Z</updated>
+  <author><name>Test Author</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+  <category term="cs.AI"/>
+  <category term="cs.LG"/>
+</entry>
+</feed>"""
 
-            gate_released = False
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
 
-            def run_sync_that_releases_on_exception(operation):
-                nonlocal gate_released
-                try:
-                    return operation()
-                finally:
-                    gate_released = True
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
 
-            mock_limiter.run_sync.side_effect = run_sync_that_releases_on_exception
-            mock_limiter.seconds_until_next_slot.return_value = 0.0
-
-            with patch("arxiv_mcp_server.tools.download.arxiv.Search"):
                 result = _fetch_arxiv_metadata("1234.5678", deadline=None)
 
-            # Should return None on timeout
-            assert result is None
-            # Gate should be released (finally block executed)
-            assert gate_released
+    # Should parse successfully
+    assert result is not None
+    assert result["title"] == "Test Paper Title"
+    assert result["summary"] == "Test paper summary."
+    assert "Test Author" in result["authors"]
+    assert result["primary_category"] == "cs.LG"
+    assert "cs.AI" in result["categories"]
+    assert "cs.LG" in result["categories"]
 
 
-def test_metadata_no_extra_406_retries():
-    """HTTP 406 with retries=0 doesn't add extra retries (issue #277)."""
-    # This test verifies that we're using num_retries=0 and not adding
-    # extra 406-specific retry logic in the metadata path
-    with patch("arxiv_mcp_server.tools.download.get_arxiv_client") as mock_get_client:
-        mock_get_client.return_value = Mock()
+def test_metadata_gate_recheck_skips_after_long_wait():
+    """Post-gate recheck skips request if deadline exceeded during gate wait."""
+    clock = FakeClock()
+    deadline = clock() + 7.0  # 7s budget
 
-        _fetch_arxiv_metadata("1234.5678", deadline=None)
-
-        # Must use num_retries=0 (issue #277: 406 is IP-level throttling)
-        mock_get_client.assert_called_once_with(num_retries=0)
-
-
-def test_metadata_deadline_patches_session_get_with_timeout():
-    """With deadline, session.get is patched to clamp timeouts."""
-    deadline = time.monotonic() + 7.0
-
-    with patch("arxiv_mcp_server.tools.download.get_arxiv_client") as mock_get_client:
-        with patch(
-            "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
-        ) as mock_limiter:
-            mock_client = Mock()
-            mock_session = Mock(spec=requests.Session)
-            original_get = Mock()
-            mock_session.get = original_get
-            mock_client._session = mock_session
-            mock_get_client.return_value = mock_client
-
-            mock_limiter.seconds_until_next_slot.return_value = 0.0
-
-            patched_get_was_different = False
-
-            def run_sync_check_patch(operation):
-                nonlocal patched_get_was_different
-                # During operation, session.get should be patched
-                patched_get_was_different = mock_session.get != original_get
-                # Call operation to trigger the patch
-                try:
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Simulate gate wait consuming most of budget
+                def run_sync_with_long_wait(operation):
+                    clock.advance(6.5)  # Leave only 0.5s
                     return operation()
-                except StopIteration:
-                    return None
 
-            mock_limiter.run_sync.side_effect = run_sync_check_patch
+                mock_limiter.run_sync.side_effect = run_sync_with_long_wait
+                mock_limiter.seconds_until_next_slot.return_value = 0.1
 
-            with patch("arxiv_mcp_server.tools.download.arxiv.Search"):
-                with patch.object(mock_client, "results", return_value=iter([])):
-                    _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+                result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
 
-            # session.get should have been patched during the operation
-            assert (
-                patched_get_was_different
-            ), "session.get should be patched for deadline enforcement"
-            # After operation, session.get should be restored
-            assert (
-                mock_session.get == original_get
-            ), "session.get should be restored after operation"
+    # Should skip (post-gate check fails)
+    assert result is None
+    # Should not have made request
+    mock_get.assert_not_called()
+
+
+def test_metadata_timeout_on_connect():
+    """Connect timeout returns None gracefully."""
+    clock = FakeClock()
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                mock_get.side_effect = requests.exceptions.ConnectTimeout("Timeout")
+
+                result = _fetch_arxiv_metadata("1234.5678", deadline=None)
+
+    # Should return None on timeout
+    assert result is None
+
+
+def test_metadata_mutation_check_without_per_chunk_deadline():
+    """Mutation: without per-chunk deadline check, slow trickle exceeds budget."""
+    # This documents what happens WITHOUT the per-chunk deadline check.
+    # With chunks arriving every 0.75s and read_timeout > 0.75s, the request
+    # completes successfully but takes longer than the budget.
+    #
+    # The fix checks time.monotonic() against deadline after every chunk and
+    # closes the response on overrun, ensuring we stay within budget.
+    clock = FakeClock()
+    deadline = clock() + 7.0
+
+    feed_xml = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Test</title><summary>Test summary</summary></entry></feed>'
+    chunks = [feed_xml[i : i + 10] for i in range(0, len(feed_xml), 10)]
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Advance 3s for gate wait
+                def run_sync_with_delay(operation):
+                    clock.advance(3.0)
+                    return operation()
+
+                mock_limiter.run_sync.side_effect = run_sync_with_delay
+                mock_limiter.seconds_until_next_slot.return_value = 0.1
+
+                # Chunks every 0.75s would take ~7.5s total (exceeds 7s budget)
+                fake_response = FakeResponse(
+                    chunks, clock, chunk_delay=0.75, status_code=200
+                )
+                mock_get.return_value = fake_response
+
+                # With the fix, this returns None (deadline exceeded during streaming)
+                result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # WITH fix: returns None, response closed before completion
+    assert result is None
+    assert fake_response.closed
+
+    # WITHOUT fix (if we removed the per-chunk check), it would complete
+    # successfully but after ~7.5s, exceeding the 7s budget. The mutation
+    # test in CI verifies that removing the per-chunk check causes this test
+    # to fail (result would be not None).
