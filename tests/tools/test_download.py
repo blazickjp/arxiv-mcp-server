@@ -225,6 +225,146 @@ async def test_shutdown_waits_for_running_index_worker(mocker):
     assert download_module._index_semaphore is None
 
 
+@pytest.mark.asyncio
+async def test_metadata_honors_remaining_deadline_after_html(mocker, temp_storage_path):
+    """Regression #284 bug 2: metadata fetch after HTML respects remaining time budget.
+
+    Total budget 7s, HTML immediate, metadata would take 6s. Metadata must be skipped
+    gracefully when insufficient budget remains, returning success with content.
+    """
+    import time
+    from arxiv_mcp_server.tools import download as download_module
+    from arxiv_mcp_server import config as config_module
+
+    mocker.patch.object(
+        download_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+
+    # Mock configuration: 7s total budget, 1s read timeout, 0 retries
+    test_settings = MagicMock()
+    test_settings.STORAGE_PATH = temp_storage_path
+    test_settings.ARXIV_MAX_TOTAL_TIME = 7
+    test_settings.ARXIV_REQUEST_TIMEOUT = 1
+    test_settings.ARXIV_CONNECT_TIMEOUT = 10
+    test_settings.ARXIV_MAX_RETRIES = 0
+    test_settings.get_request_timeout = lambda: 1
+    mocker.patch.object(download_module, "settings", test_settings)
+    mocker.patch.object(config_module, "Settings", return_value=test_settings)
+
+    # Mock rate limiter: no delay
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "seconds_until_next_slot",
+        return_value=0.0,
+    )
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda op: op(),
+    )
+
+    # Mock HTML fetch: immediate success with paper content
+    def mock_html_fetch(paper_id, deadline):
+        return "# KAN Architecture\n\nKolmogorov-Arnold Networks paper body."
+
+    mocker.patch.object(
+        download_module, "_fetch_html_content", side_effect=mock_html_fetch
+    )
+
+    # Mock metadata fetch: would take 6s (simulated), should be skipped
+    metadata_called = {"count": 0}
+
+    def mock_metadata_fetch(paper_id, deadline=None):
+        metadata_called["count"] += 1
+        if deadline is None:
+            time.sleep(6)
+        else:
+            # With deadline, should be skipped
+            remaining = deadline - time.monotonic()
+            assert remaining < 6, "Insufficient budget should skip metadata"
+        return None
+
+    mocker.patch.object(
+        download_module, "_fetch_arxiv_metadata", side_effect=mock_metadata_fetch
+    )
+
+    # Mock cleanup and indexing
+    mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
+    mocker.patch.object(download_module, "_track_index_task", lambda _: None)
+
+    start = time.monotonic()
+    response = await handle_download({"paper_id": "2404.19756"})
+    elapsed = time.monotonic() - start
+
+    # Must complete within budget plus small overhead (8s = 7s budget + 1s overhead)
+    assert elapsed < 8.0, f"Download took {elapsed:.2f}s, exceeded 7s budget + overhead"
+
+    result = json.loads(response[0].text)
+    assert result["status"] == "success"
+    assert result["source"] == "html"
+    assert "KAN Architecture" in result["content"]
+
+    # Metadata fetch should be called but skipped due to budget
+    assert metadata_called["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_metadata_skipped_gracefully_when_budget_exhausted(
+    mocker, temp_storage_path
+):
+    """Regression #284 bug 2: exhausted budget skips metadata, still returns success."""
+    import time
+    from arxiv_mcp_server.tools import download as download_module
+
+    mocker.patch.object(
+        download_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+
+    test_settings = MagicMock()
+    test_settings.STORAGE_PATH = temp_storage_path
+    test_settings.ARXIV_MAX_TOTAL_TIME = 3
+    test_settings.ARXIV_REQUEST_TIMEOUT = 1
+    test_settings.ARXIV_CONNECT_TIMEOUT = 10
+    test_settings.get_request_timeout = lambda: 1
+    mocker.patch.object(download_module, "settings", test_settings)
+
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "seconds_until_next_slot",
+        return_value=2.5,  # Almost all budget consumed waiting
+    )
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda op: op(),
+    )
+
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        return_value="# Paper\n\nContent here.",
+    )
+
+    # Mock the actual arxiv client to avoid real API calls
+    mock_client = MagicMock()
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
+    mocker.patch.object(download_module, "_track_index_task", lambda _: None)
+
+    response = await handle_download({"paper_id": "2404.19756"})
+    result = json.loads(response[0].text)
+
+    # Should succeed with HTML content even though metadata was skipped due to budget
+    assert result["status"] == "success"
+    assert result["source"] == "html"
+    assert "Content here" in result["content"]
+
+
 def test_same_paper_pdf_conversions_are_serialized(mocker):
     """Concurrent requests for one paper cannot share/delete the same PDF."""
     import threading

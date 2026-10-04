@@ -44,8 +44,8 @@ MAX_SECTION_COUNT = 2000
 # Heading styles seen in arXiv markdown (ATX, numbered, bare HTML titles).
 _ATX_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
 _NUMBERED_HEADING_RE = re.compile(r"^(\d+(?:\.\d+){0,5})[ \t]+(.+?)[ \t]*$")
-# HTML→text often emits the section number alone ("3." / "3.1.") then the title.
-_NUMBER_ONLY_RE = re.compile(r"^(\d+(?:\.\d+){0,5})\.[ \t]*$")
+# HTML→text often emits the section number alone ("3." / "3.1." / "2.2") then the title.
+_NUMBER_ONLY_RE = re.compile(r"^(\d+(?:\.\d+){0,5})\.?[ \t]*$")
 # IEEE/latexml HTML often splits roman section tags onto their own line:
 # ``I`` / ``Introduction``, ``II-A`` / ``Related Work``. Longer numerals first.
 _ROMAN_NUMERAL = (

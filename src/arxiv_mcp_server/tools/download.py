@@ -1140,9 +1140,29 @@ def _metadata_from_arxiv_result(paper_id: str, paper) -> dict[str, Any]:
     }
 
 
-def _fetch_arxiv_metadata(paper_id: str) -> dict[str, Any] | None:
-    """Best-effort arXiv metadata lookup used after an HTML download."""
+def _fetch_arxiv_metadata(
+    paper_id: str, deadline: float | None = None
+) -> dict[str, Any] | None:
+    """Best-effort arXiv metadata lookup used after an HTML download.
+
+    Args:
+        paper_id: arXiv paper ID.
+        deadline: Optional wall-clock deadline (time.monotonic()). When provided,
+                  skips the lookup if insufficient budget remains.
+    """
     try:
+        # Check if we have enough time budget remaining
+        if deadline is not None:
+            pending_wait = ARXIV_RATE_LIMITER.seconds_until_next_slot()
+            remaining = deadline - time.monotonic()
+            min_attempt_time = 1.0
+            if remaining < pending_wait + min_attempt_time:
+                logger.info(
+                    "Metadata lookup skipped: insufficient time budget "
+                    f"(need {pending_wait + min_attempt_time:.1f}s, have {remaining:.1f}s)"
+                )
+                return None
+
         client = get_arxiv_client()
         paper = ARXIV_RATE_LIMITER.run_sync(
             lambda: next(client.results(arxiv.Search(id_list=[paper_id])))
@@ -1158,14 +1178,23 @@ def _persist_paper_metadata(
     arxiv_result=None,
     title_hint: str | None = None,
     arxiv_version: str | None = None,
+    deadline: float | None = None,
 ) -> None:
-    """Write a sidecar from arXiv API metadata. Never fail the download."""
+    """Write a sidecar from arXiv API metadata. Never fail the download.
+
+    Args:
+        paper_id: arXiv paper ID.
+        arxiv_result: Optional arXiv result object with metadata.
+        title_hint: Optional title hint (unused).
+        arxiv_version: Optional version string.
+        deadline: Optional wall-clock deadline (time.monotonic()) for metadata lookup.
+    """
     try:
         metadata = None
         if arxiv_result is not None:
             metadata = _metadata_from_arxiv_result(paper_id, arxiv_result)
         if metadata is None:
-            metadata = _fetch_arxiv_metadata(paper_id)
+            metadata = _fetch_arxiv_metadata(paper_id, deadline)
         if metadata is None:
             # Prefer null fields over HTML-scraped / truncated titles.
             metadata = {
@@ -1311,6 +1340,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
                 None,
                 None,
                 requested_version,
+                deadline,
             )
             _cleanup_versioned_aliases(storage_id)
             # Best-effort index; the tracked task is drained at shutdown.
@@ -1374,6 +1404,7 @@ async def handle_download(arguments: Dict[str, Any]) -> List[types.TextContent]:
             arxiv_result,
             None,
             requested_version,
+            deadline,
         )
         _cleanup_versioned_aliases(storage_id)
 
