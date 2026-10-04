@@ -1033,7 +1033,12 @@ async def test_kan_sections_addressable_via_read_section(patch_storage):
 def test_kan_outline_preserves_numbered_list_protection():
     """Regression #284 bug 1: split-number fix must not promote numbered body lists."""
     # Must still reject trailing-period body-list markers (sentence case is now OK for split numbers)
-    md = """2
+    md = """1
+Introduction
+
+Intro body.
+
+2
 Kolmogorov-Arnold Networks
 
 KAN body.
@@ -1047,8 +1052,11 @@ KANs are interpretable
 Done.
 """
     titles = [s.title for s in parse_markdown_sections(md)]
-    assert titles == ["Kolmogorov-Arnold Networks", "KANs are interpretable"]
+    assert "Introduction" in titles
+    assert "Kolmogorov-Arnold Networks" in titles
+    assert "KANs are interpretable" in titles
     assert "Our approach always used identical homogeneous experts" not in titles
+    assert len(titles) == 3
 
 
 def test_split_body_list_without_trailing_period_rejected():
@@ -1489,7 +1497,7 @@ def test_daop_no_table_fakes():
 
 
 def test_skipped_section_numbers_allowed():
-    """Allow papers to skip section numbers (e.g. 2 → 2.2 → 4)."""
+    """Allow nested sections to skip numbers (e.g. 2 → 2.2 without 2.1)."""
     md = """1
 Introduction
 
@@ -1505,27 +1513,34 @@ Implementation
 
 Subsection 2.2, no 2.1.
 
-4
+2.5
+Evaluation
+
+Subsection 2.5, skipping 2.3 and 2.4.
+
+3
 Results
 
-Skipped section 3 entirely.
+Third section.
 """
     sections = parse_markdown_sections(md)
     titles = [s.title for s in sections]
 
-    # All sections kept despite skips
+    # All sections kept despite nested skips (top-level is sequential)
     assert "Introduction" in titles
     assert "Methods" in titles
     assert "Implementation" in titles
+    assert "Evaluation" in titles
     assert "Results" in titles
 
     by_title = {s.title: s for s in sections}
     assert by_title["Introduction"].section_id == "1"
     assert by_title["Methods"].section_id == "2"
     assert by_title["Implementation"].section_id == "2.1"
+    assert by_title["Evaluation"].section_id == "2.2"
     assert by_title["Results"].section_id == "3"
 
-    assert len(sections) == 4
+    assert len(sections) == 5
 
 
 def test_inline_headings_with_special_content_kept():
@@ -1577,8 +1592,44 @@ Real section.
     sections = parse_markdown_sections(md)
     titles = [s.title for s in sections]
 
-    # With sequence validation, 12 is rejected (jump of 11 > 10)
+    # With sequence validation, 12 is rejected (top-level must be last + 1)
     assert "Introduction" in titles
     assert "Methods" in titles
     assert "T5-Large" not in titles
     assert len(sections) == 2
+
+
+def test_top_level_strictly_sequential():
+    """Top-level sections must be strictly sequential (no skipping allowed)."""
+    # Table numbers after section 2 should be rejected
+    md = """1
+Introduction
+
+First section.
+
+2
+Background
+
+Second section.
+
+12
+T5-XL
+
+16
+Switch-Base
+
+3
+Methods
+
+Real section 3.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # 1, 2, 3 accepted; 12 and 16 rejected (top-level must be sequential)
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Methods" in titles
+    assert "T5-XL" not in titles
+    assert "Switch-Base" not in titles
+    assert len(sections) == 3

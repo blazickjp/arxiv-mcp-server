@@ -407,13 +407,14 @@ def _section_continues_sequence(
 
     Valid continuations:
     - First numbered section: 1 (when last_section is None)
-    - Next sibling: 2.1 → 2.2+ (same level, last part increases by reasonable amount)
+    - Next sibling: 2.1 → 2.2+ (same level, last part increases; top-level capped at +1)
     - Descendant: 2 → 2.x (go deeper, any positive child, allowing skips like 2→2.2)
-    - Next ancestor: 2.3.1 → 3+ (go up, that level increases by reasonable amount)
+    - Next ancestor: 2.3.1 → 3+ (go up, that level increases; top-level capped at +1)
 
-    Rejects table numbers (12, 16, 64) by capping jumps to at most 10 at top level,
-    5 at deeper levels. Prevents table-row labels like "RoBERTa base/large" under
-    a split "1" from becoming fake sections (regression #284 round 2).
+    Rejects table numbers (12, 16, 64) by capping top-level to last_top + 1.
+    Allows up to 5 skipped numbers at nested levels (real papers occasionally skip).
+    Prevents table-row labels like "RoBERTa base/large" under split "1" from
+    becoming fake sections (regression #284 round 2).
 
     Args:
         numbering: The section number string (e.g. "2.2").
@@ -428,16 +429,21 @@ def _section_continues_sequence(
     if last_section is None:
         return parts == (1,)
 
-    # Cap the maximum jump to reject table numbers like 12, 16, 64
-    # Top-level (e.g. 1 → 11) can skip up to 10, deeper levels up to 5
-    MAX_TOP_LEVEL_JUMP = 10
+    # Cap nested jumps to 5 (allow some skipping in real papers)
+    # Top-level capped at 2 (tolerate at most one skipped number) to reject table numbers
+    MAX_TOP_LEVEL_JUMP = 2
     MAX_NESTED_JUMP = 5
 
     # Next sibling: same prefix, last part increases
     if len(parts) == len(last_section) and parts[:-1] == last_section[:-1]:
         jump = parts[-1] - last_section[-1]
-        max_jump = MAX_TOP_LEVEL_JUMP if len(parts) == 1 else MAX_NESTED_JUMP
-        return jump > 0 and jump <= max_jump
+        if len(parts) == 1:
+            # Top-level: allow up to one skipped number (jump of 2 max)
+            # This accepts 1→2, 1→3, but rejects 1→12
+            return jump > 0 and jump <= MAX_TOP_LEVEL_JUMP
+        else:
+            # Nested: allow up to 5 skipped numbers
+            return jump > 0 and jump <= MAX_NESTED_JUMP
 
     # Descendant: prefix matches, go deeper (allow any positive child, e.g. 2→2.2)
     if len(parts) > len(last_section) and parts[: len(last_section)] == last_section:
@@ -448,8 +454,12 @@ def _section_continues_sequence(
         # parts must match last_section prefix up to its length
         if parts[:-1] == last_section[: len(parts) - 1]:
             jump = parts[-1] - last_section[len(parts) - 1]
-            max_jump = MAX_TOP_LEVEL_JUMP if len(parts) == 1 else MAX_NESTED_JUMP
-            return jump > 0 and jump <= max_jump
+            if len(parts) == 1:
+                # Top-level: allow up to one skipped number
+                return jump > 0 and jump <= MAX_TOP_LEVEL_JUMP
+            else:
+                # Nested: allow up to 5 skipped numbers
+                return jump > 0 and jump <= MAX_NESTED_JUMP
 
     return False
 
