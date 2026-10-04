@@ -1507,7 +1507,9 @@ def test_mamba_subsections_kept():
     # Check structure
     by_title = {s.title: s for s in sections}
     assert by_title["Discretization"].section_id == "2.1"
-    assert by_title["Motivation: Selection as a Means of Compression"].section_id == "3.1"
+    assert (
+        by_title["Motivation: Selection as a Means of Compression"].section_id == "3.1"
+    )
 
     assert len(sections) == 5
 
