@@ -275,6 +275,23 @@ def _title_looks_like_heading(
             return False
         if re.search(r":\s*[\d.-]", title):
             return False
+        # Reject model names with common ML naming patterns.
+        # Examples: "Mixtral 8x7B", "Llama-3.1-405B", "GPT-4", "Claude 3.5", "Phi-3.5 MoE"
+        # Pattern 1: NxM (expert notation like 8x7B)
+        if re.search(r"\d+x\d+[BM]?", title, re.IGNORECASE):
+            return False
+        # Pattern 2: Ends with B or M (parameter count like 405B, 7B)
+        if re.search(r"\d+[BM]\b", title):
+            return False
+        # Pattern 3: Name-digits.digits pattern (like "Phi-3.5", "GPT-4.5", "Claude-3.5")
+        if re.search(r"[A-Z][a-z]*-\d+\.\d+", title):
+            return False
+        # Pattern 4: Bare model architecture acronyms as titles (MoE, GPT, LLM alone)
+        if re.match(r"^(?:MoE|GPT|LLM|BERT|T5)$", title):
+            return False
+        # Pattern 5: Table comparison labels (Ours, Theirs, Baseline, Previous)
+        if re.match(r"^(?:Ours|Theirs|Baseline|Previous)$", title, re.IGNORECASE):
+            return False
     # Reject very short tokens that look like table cells or model names.
     if len(title) < 3:
         return False

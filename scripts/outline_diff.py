@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Compare paper outline parsing between main and current branch.
 
-Uses the cached papers from cache_papers_13.tgz, parses them with both
-main's parser and the current branch's parser, and reports differences.
+Loads main's parser via `git show` and branch's parser from the working tree
+as separate modules to ensure they can't be the same. Classifies headings as
+REAL or FAKE based on table/figure row patterns, not just "not in main".
 """
 
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
-# Test papers available in cache (10 total)
+# Add src to path so imports work
+workspace = Path(__file__).parent.parent
+sys.path.insert(0, str(workspace / "src"))
+
+# Test papers available in cache (13 total)
 TEST_PAPERS = [
     ("1706.03762", "Attention", 7),
     ("2101.03961", "Switch", 7),
@@ -22,63 +29,166 @@ TEST_PAPERS = [
     ("2404.19756", "KAN", None),
     ("2410.17954", "ExpertFlow", 34),
     ("2501.10375", "DAOP", 21),
+    ("2201.11903", "ChainOfThought", None),
+    ("2104.09864", "DeepSeek-R1-Zero", None),
+    ("2501.12948", "DeepSeek-R1", None),
 ]
 
+# Known fake headings from rounds 2 and 3 (table/figure rows, model names)
+KNOWN_FAKES = {
+    # Round 2 fakes (table rows, model names)
+    "GPT-4o", "GPT-4o-mini", "Qwen2.5", "DeepSeek-V3", "Claude-3.5-Sonnet",
+    "Gemini-2.0-Flash", "Llama-3.3-70B", "Gemini-1.5-Pro", "Llama-3.1-405B",
+    "Mistral-Large-2", "GPT-4-Turbo", "Qwen2.5-72B", "Falcon-180B",
+    "Mixtral 8x7B", "Grok 2", "Claude 3 Opus",  # DAOP table labels
+    # Round 3 fakes (table numbers, dataset rows)
+    "12", "16", "64",  # Switch Transformer table numbers
+    "60", "80", "90",  # Chain of Thought dataset rows
+}
 
-def parse_with_git_version(content: str, git_ref: str) -> list[dict[str, Any]]:
-    """Parse sections by checking out a git version temporarily."""
-    workspace = Path(__file__).parent.parent
+
+def is_fake_heading(title: str) -> bool:
+    """Check if a heading looks like a table/figure row or data line.
     
-    # Save current file
-    current_file = workspace / "src" / "arxiv_mcp_server" / "tools" / "paper_outline.py"
-    backup_content = current_file.read_text()
+    A heading is fake if it:
+    - Contains % or = (data values)
+    - Contains : followed by digits/special chars (key-value pairs)
+    - Is in the known fakes list (model names, table numbers)
+    - Starts with Table/Figure/Algorithm/Equation prefix followed by number
+    - Is very short (<3 chars) and looks like a table cell
+    """
+    title = title.strip()
     
-    try:
-        # Checkout the file from git ref
-        subprocess.run(
-            ["git", "checkout", git_ref, "--", "src/arxiv_mcp_server/tools/paper_outline.py"],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-        )
-        
-        # Import and parse
-        sys.path.insert(0, str(workspace / "src"))
-        
-        # Force reload
-        if "arxiv_mcp_server.tools.paper_outline" in sys.modules:
-            del sys.modules["arxiv_mcp_server.tools.paper_outline"]
-        if "arxiv_mcp_server.tools" in sys.modules:
-            del sys.modules["arxiv_mcp_server.tools"]
-        
-        from arxiv_mcp_server.tools.paper_outline import parse_markdown_sections
-        sections = parse_markdown_sections(content)
-        
-        return [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections]
-        
-    finally:
-        # Restore current file
-        current_file.write_text(backup_content)
-        
-        # Reload current version
-        if "arxiv_mcp_server.tools.paper_outline" in sys.modules:
-            del sys.modules["arxiv_mcp_server.tools.paper_outline"]
-        if "arxiv_mcp_server.tools" in sys.modules:
-            del sys.modules["arxiv_mcp_server.tools"]
+    # Known fakes from previous rounds
+    if title in KNOWN_FAKES:
+        return True
+    
+    # Data line patterns
+    if re.search(r"[%=]", title):
+        return True
+    if re.search(r":\s*[\d.-]", title):
+        return True
+    
+    # Table/figure prefixes
+    if re.match(r"^(?:Table|Figure|Fig\.|Algorithm|Eq\.|Equation)\s+\d", title, re.IGNORECASE):
+        return True
+    
+    # Very short tokens (likely table cells or model abbreviations)
+    if len(title) < 3:
+        return True
+    
+    # Pure numbers (table row numbers)
+    if re.match(r"^\d+$", title):
+        return True
+    
+    return False
 
 
-def parse_with_branch(content: str) -> list[dict[str, Any]]:
-    """Parse sections using the current branch's parser."""
-    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+def parse_with_main(content: str) -> tuple[list[dict[str, Any]], str, int]:
+    """Parse sections using main's parser loaded from git.
+    
+    Returns:
+        (sections, sha, line_count)
+    """
+    # Get main's file content via git show
+    result = subprocess.run(
+        ["git", "show", "main:src/arxiv_mcp_server/tools/paper_outline.py"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    main_content = result.stdout
+    
+    # Get main's SHA and line count
+    sha_result = subprocess.run(
+        ["git", "rev-parse", "main"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    main_sha = sha_result.stdout.strip()[:7]
+    line_count = len(main_content.splitlines())
+    
+    # Write to temp file in a package structure
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        pkg_dir = tmppath / "arxiv_mcp_server_main" / "tools"
+        pkg_dir.mkdir(parents=True)
+        
+        # Create __init__.py files
+        (tmppath / "arxiv_mcp_server_main" / "__init__.py").write_text("")
+        (pkg_dir / "__init__.py").write_text("")
+        
+        # Write the paper_outline.py with relative imports converted
+        # Replace relative imports with stubs
+        modified_content = main_content
+        # Stub out the config import
+        stub = """
+class Settings:
+    def __init__(self):
+        self.MAX_RESULTS = 100
+"""
+        modified_content = f"{stub}\n{modified_content}"
+        modified_content = modified_content.replace("from ..config import Settings", "# from ..config import Settings")
+        
+        (pkg_dir / "paper_outline.py").write_text(modified_content)
+        
+        # Add to path and import
+        sys.path.insert(0, str(tmppath))
+        try:
+            from arxiv_mcp_server_main.tools.paper_outline import parse_markdown_sections
+            sections = parse_markdown_sections(content)
+            return (
+                [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections],
+                main_sha,
+                line_count,
+            )
+        finally:
+            sys.path.remove(str(tmppath))
+            # Clean up imports
+            if "arxiv_mcp_server_main.tools.paper_outline" in sys.modules:
+                del sys.modules["arxiv_mcp_server_main.tools.paper_outline"]
+            if "arxiv_mcp_server_main.tools" in sys.modules:
+                del sys.modules["arxiv_mcp_server_main.tools"]
+            if "arxiv_mcp_server_main" in sys.modules:
+                del sys.modules["arxiv_mcp_server_main"]
+
+
+def parse_with_branch(content: str) -> tuple[list[dict[str, Any]], str, int]:
+    """Parse sections using branch's parser from working tree.
+    
+    Returns:
+        (sections, sha, line_count)
+    """
+    branch_file = workspace / "src" / "arxiv_mcp_server" / "tools" / "paper_outline.py"
+    
+    # Get current commit SHA and line count
+    sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    branch_sha = sha_result.stdout.strip()[:7]
+    line_count = len(branch_file.read_text().splitlines())
+    
+    # Import directly from the package
     from arxiv_mcp_server.tools.paper_outline import parse_markdown_sections
-
+    
     sections = parse_markdown_sections(content)
-    return [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections]
+    
+    return (
+        [{"id": s.section_id, "level": s.level, "title": s.title} for s in sections],
+        branch_sha,
+        line_count,
+    )
 
 
 def main():
     """Compare outlines for all cached papers."""
-    workspace = Path(__file__).parent.parent
     cache_dir = workspace / "test_paper_cache" / "cache_papers"
 
     if not cache_dir.exists():
@@ -89,6 +199,48 @@ def main():
     print("=" * 80)
     print("COMPARING OUTLINES (MAIN VS BRANCH)")
     print("=" * 80)
+
+    # Get parser versions first
+    try:
+        main_sha_result = subprocess.run(
+            ["git", "rev-parse", "main"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        main_sha = main_sha_result.stdout.strip()[:7]
+        
+        branch_sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch_sha = branch_sha_result.stdout.strip()[:7]
+        
+        # Get line counts
+        main_result = subprocess.run(
+            ["git", "show", "main:src/arxiv_mcp_server/tools/paper_outline.py"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        main_lines = len(main_result.stdout.splitlines())
+        
+        branch_file = workspace / "src" / "arxiv_mcp_server" / "tools" / "paper_outline.py"
+        branch_lines = len(branch_file.read_text().splitlines())
+        
+        print(f"\nParser versions:")
+        print(f"  Main:   {main_sha} ({main_lines} lines)")
+        print(f"  Branch: {branch_sha} ({branch_lines} lines)")
+        print()
+    except Exception as e:
+        print(f"Warning: Could not get parser versions: {e}")
+        main_sha = "unknown"
+        branch_sha = "unknown"
 
     results = []
     for arxiv_id, name, expected_main in TEST_PAPERS:
@@ -102,14 +254,14 @@ def main():
 
         # Parse with main
         try:
-            main_sections = parse_with_git_version(content, "main")
+            main_sections, _, _ = parse_with_main(content)
         except Exception as e:
             print(f"  ERROR parsing with main: {e}")
             main_sections = []
 
         # Parse with branch
         try:
-            branch_sections = parse_with_branch(content)
+            branch_sections, _, _ = parse_with_branch(content)
         except Exception as e:
             print(f"  ERROR parsing with branch: {e}")
             continue
@@ -123,6 +275,7 @@ def main():
                 "main_count": "?",
                 "branch_count": len(branch_sections),
                 "fakes_added": [],
+                "real_gained": [],
                 "real_lost": [],
                 "main_titles": [],
                 "branch_titles": [s["title"] for s in branch_sections],
@@ -132,7 +285,12 @@ def main():
         main_titles = {s["title"] for s in main_sections}
         branch_titles = {s["title"] for s in branch_sections}
 
-        fakes_added = sorted(branch_titles - main_titles)
+        # Classify new headings as REAL or FAKE
+        new_in_branch = sorted(branch_titles - main_titles)
+        fakes_added = [t for t in new_in_branch if is_fake_heading(t)]
+        real_gained = [t for t in new_in_branch if not is_fake_heading(t)]
+        
+        # Headings lost from main (should be rare - usually means regression)
         real_lost = sorted(main_titles - branch_titles)
 
         print(f"  Main: {len(main_sections)} sections")
@@ -140,6 +298,8 @@ def main():
 
         if fakes_added:
             print(f"  Fakes added: {fakes_added}")
+        if real_gained:
+            print(f"  Real gained: {real_gained}")
         if real_lost:
             print(f"  Real lost: {real_lost}")
 
@@ -149,6 +309,7 @@ def main():
             "main_count": len(main_sections),
             "branch_count": len(branch_sections),
             "fakes_added": fakes_added,
+            "real_gained": real_gained,
             "real_lost": real_lost,
             "main_titles": [s["title"] for s in main_sections],
             "branch_titles": [s["title"] for s in branch_sections],
@@ -158,15 +319,16 @@ def main():
     print("\n" + "=" * 80)
     print("SUMMARY TABLE")
     print("=" * 80)
-    print(f"{'Paper':<15} {'ArXiv ID':<16} {'Main':<6} {'Branch':<6} {'Fakes':<8} {'Lost':<6}")
+    print(f"{'Paper':<15} {'ArXiv ID':<16} {'Main':<6} {'Branch':<6} {'Fakes':<8} {'Real+':<8} {'Lost':<6}")
     print("-" * 80)
     for r in results:
         main_str = str(r["main_count"]) if r["main_count"] != "?" else "?"
         fakes = len(r["fakes_added"])
+        gained = len(r["real_gained"])
         lost = len(r["real_lost"])
         print(
             f"{r['name']:<15} {r['arxiv_id']:<16} {main_str:<6} "
-            f"{r['branch_count']:<6} {fakes:<8} {lost:<6}"
+            f"{r['branch_count']:<6} {fakes:<8} {gained:<8} {lost:<6}"
         )
 
     # Check key requirements
@@ -200,10 +362,13 @@ def main():
         if r["name"] in ["DAOP", "ExpertFlow", "ACM"]:
             main_c = r["main_count"]
             branch_c = r["branch_count"]
-            status = "✓" if main_c == branch_c else "✗"
-            print(f"\n{r['name']}: Main={main_c}, Branch={branch_c} {status}")
+            expected = {"DAOP": 21, "ExpertFlow": 34, "ACM": 24}[r["name"]]
+            status = "✓" if branch_c == expected else "✗"
+            print(f"\n{r['name']}: Main={main_c}, Branch={branch_c}, Expected={expected} {status}")
             if r["fakes_added"]:
                 print(f"  Fakes: {r['fakes_added']}")
+            if branch_c != expected:
+                print(f"  ERROR: {r['name']} must be exactly {expected} sections!")
 
     # Check for recovered headings from round 2
     print("\n" + "=" * 80)
@@ -213,6 +378,7 @@ def main():
     print("  - Attention: '3 Model Architecture'")
     print("  - Switch: '2 Switch Transformer'")
     print("  - Mistral: '2 Architectural details'")
+    print("  - DeepSeek-R1-Zero: '3 Experimental setup'")
     
     for r in results:
         if r["name"] == "Attention":
@@ -224,6 +390,31 @@ def main():
         elif r["name"] == "Mistral":
             has_arch_details = any("Architectural details" in t for t in r["branch_titles"])
             print(f"  Mistral has 'Architectural details': {has_arch_details}")
+        elif r["name"] == "DeepSeek-R1-Zero":
+            has_exp_setup = any("Experimental setup" in t for t in r["branch_titles"])
+            print(f"  DeepSeek-R1-Zero has 'Experimental setup': {has_exp_setup}")
+
+    # Check for rejections (table numbers that should NOT appear)
+    print("\n" + "=" * 80)
+    print("REJECTION CHECKS (should NOT appear)")
+    print("=" * 80)
+    print("These should be rejected (top-level cap or table rows):")
+    print("  - Switch: table numbers 12, 16, 64 (after section 2)")
+    print("  - Chain of Thought: dataset rows 60, 80, 90")
+    
+    for r in results:
+        if r["name"] == "Switch":
+            bad_nums = [t for t in ["12", "16", "64"] if t in r["branch_titles"]]
+            if bad_nums:
+                print(f"  ERROR: Switch has table numbers {bad_nums} ✗")
+            else:
+                print(f"  Switch correctly rejects 12/16/64 ✓")
+        elif r["name"] == "ChainOfThought":
+            bad_nums = [t for t in ["60", "80", "90"] if t in r["branch_titles"]]
+            if bad_nums:
+                print(f"  ERROR: ChainOfThought has dataset rows {bad_nums} ✗")
+            else:
+                print(f"  ChainOfThought correctly rejects 60/80/90 ✓")
 
     return 0
 
