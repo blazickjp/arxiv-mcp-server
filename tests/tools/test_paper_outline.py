@@ -922,22 +922,22 @@ Kolmogorov-Arnold Networks
 We propose Kolmogorov-Arnold Networks (KANs).
 
 2.2
-KAN Architecture
+KAN architecture
 
 KANs have strong mathematical and computational foundations.
 
 3
-KANs Are Accurate
+KANs are accurate
 
 First KAN body.
 
 4
-KANs Are Interpretable
+KANs are interpretable
 
 Second KAN body.
 
 5
-Related Works
+Related works
 
 Prior work on representation.
 
@@ -964,13 +964,13 @@ def test_kan_split_numbered_headings_without_trailing_period():
     """
     sections = parse_markdown_sections(KAN_HTML_STYLE)
     titles = [s.title for s in sections]
-    # All real sections recognized
+    # All real sections recognized (sentence case from real paper)
     assert "Introduction" in titles
     assert "Kolmogorov-Arnold Networks" in titles
-    assert "KAN Architecture" in titles
-    assert "KANs Are Accurate" in titles
-    assert "KANs Are Interpretable" in titles
-    assert "Related Works" in titles
+    assert "KAN architecture" in titles
+    assert "KANs are accurate" in titles
+    assert "KANs are interpretable" in titles
+    assert "Related works" in titles
     assert "Discussion" in titles
     assert "References" in titles
 
@@ -978,9 +978,9 @@ def test_kan_split_numbered_headings_without_trailing_period():
     # Proper numbering: split numbers without trailing period are recognized
     assert by_title["Introduction"].section_id == "1"
     assert by_title["Kolmogorov-Arnold Networks"].section_id == "2"
-    assert by_title["KAN Architecture"].section_id == "2.1"
-    assert by_title["KANs Are Accurate"].section_id == "3"
-    assert by_title["KANs Are Interpretable"].section_id == "4"
+    assert by_title["KAN architecture"].section_id == "2.1"
+    assert by_title["KANs are accurate"].section_id == "3"
+    assert by_title["KANs are interpretable"].section_id == "4"
 
     # Introduction ends before section 2
     intro = by_title["Introduction"]
@@ -1000,7 +1000,7 @@ async def test_kan_sections_addressable_via_read_section(patch_storage):
     )
     assert outline["status"] == "success"
     titles = [s["title"] for s in outline["sections"]]
-    assert "KAN Architecture" in titles
+    assert "KAN architecture" in titles
 
     # read_paper_section by section_id
     kan_arch = json.loads(
@@ -1011,7 +1011,7 @@ async def test_kan_sections_addressable_via_read_section(patch_storage):
         )[0].text
     )
     assert kan_arch["status"] == "success"
-    assert "KAN Architecture" in kan_arch["section"]["title"]
+    assert "KAN architecture" in kan_arch["section"]["title"]
     assert "strong mathematical" in kan_arch["content"]
 
     # read_paper_section by title
@@ -1020,7 +1020,7 @@ async def test_kan_sections_addressable_via_read_section(patch_storage):
             await handle_read_paper_section(
                 {
                     "paper_id": "2404.19756v5",
-                    "section_id": "KAN Architecture",
+                    "section_id": "KAN architecture",
                     "max_chars": 500,
                 }
             )
@@ -1032,7 +1032,7 @@ async def test_kan_sections_addressable_via_read_section(patch_storage):
 
 def test_kan_outline_preserves_numbered_list_protection():
     """Regression #284 bug 1: split-number fix must not promote numbered body lists."""
-    # Must still reject sentence-case / trailing-period body-list markers
+    # Must still reject trailing-period body-list markers (sentence case is now OK for split numbers)
     md = """2
 Kolmogorov-Arnold Networks
 
@@ -1042,10 +1042,10 @@ KAN body.
 Our approach always used identical homogeneous experts.
 
 4
-KANs Are Interpretable
+KANs are interpretable
 
 Done.
 """
     titles = [s.title for s in parse_markdown_sections(md)]
-    assert titles == ["Kolmogorov-Arnold Networks", "KANs Are Interpretable"]
+    assert titles == ["Kolmogorov-Arnold Networks", "KANs are interpretable"]
     assert "Our approach always used identical homogeneous experts" not in titles

@@ -239,12 +239,19 @@ def _is_title_case_phrase(title: str) -> bool:
     return True
 
 
-def _title_looks_like_heading(title: str, *, line_len: int) -> bool:
+def _title_looks_like_heading(
+    title: str, *, line_len: int, allow_sentence_case: bool = False
+) -> bool:
     """Shared capitalization / length / venue guards for numbered headings.
 
     Rejects numbered body-list items (e.g. Future Work ``4.`` / ``5.`` prose)
     that HTML→text otherwise promotes to fake L1 sections. Does not use fuzzy
     title matching against known section names.
+
+    Args:
+        title: The heading title text to check.
+        line_len: Length of the full line including the number.
+        allow_sentence_case: If True, skip Title Case check (for split numbers).
     """
     title = title.strip()
     if not title or line_len > _MAX_BARE_TITLE_CHARS:
@@ -255,22 +262,48 @@ def _title_looks_like_heading(title: str, *, line_len: int) -> bool:
     # Citation venues often look like "USENIX ATC 23" after a year number.
     if re.search(r"\b(?:19|20)\d{2}\b", title):
         return False
+    # Reject table/figure/data lines (regression #284 blocker 2).
+    # Data lines have % or =, or : followed by digits/special chars.
+    if re.search(r"[%=]", title):
+        return False
+    if re.search(r":\s*[\d.-]", title):
+        return False
+    # Reject very short tokens that look like table cells or model names.
+    if len(title) < 3:
+        return False
+    # Reject common table/figure/algorithm prefixes.
+    if re.match(
+        r"^(?:Table|Figure|Fig\.|Algorithm|Eq\.|Equation|Appendix)\s+\d",
+        title,
+        re.IGNORECASE,
+    ):
+        return False
     normalized = _normalize_heading_title(title)
     # Full-sentence list items end with ``.``; allow only known bare titles
     # such as ``Abstract.`` / ``Introduction.``.
     if title.endswith(".") and normalized.casefold() not in _BARE_SECTION_TITLES:
         return False
     # Headings are Title Case noun phrases; body lists are sentence case.
-    if not _is_title_case_phrase(normalized):
+    # For split numbers (e.g. "2.2\nKAN architecture"), allow sentence case.
+    if not allow_sentence_case and not _is_title_case_phrase(normalized):
         return False
     return True
 
 
 def _numbered_heading(
-    numbering: str, title: str, *, line_len: int
+    numbering: str, title: str, *, line_len: int, allow_sentence_case: bool = False
 ) -> tuple[int, str] | None:
-    """Return (level, title) for a plausible numbered heading, else None."""
-    if not _title_looks_like_heading(title, line_len=line_len):
+    """Return (level, title) for a plausible numbered heading, else None.
+
+    Args:
+        numbering: The section number (e.g. "2.2").
+        title: The heading title text.
+        line_len: Length of the full line including the number.
+        allow_sentence_case: If True, skip Title Case check (for split numbers).
+    """
+    if not _title_looks_like_heading(
+        title, line_len=line_len, allow_sentence_case=allow_sentence_case
+    ):
         return None
     if not _is_plausible_section_number(numbering):
         return None
@@ -351,7 +384,11 @@ def _logical_line(line: str) -> str:
 def _match_split_numbered_heading(
     number_line: str, title_line: str
 ) -> tuple[int, str] | None:
-    """Join HTML→text ``3.`` / ``Title`` or ``II-A`` / ``Title`` pairs."""
+    """Join HTML→text ``3.`` / ``Title`` or ``II-A`` / ``Title`` pairs.
+
+    Split-number headings allow sentence case because real papers (e.g. KAN
+    2404.19756v5) have lowercase after numbers: ``2.2\\nKAN architecture``.
+    """
     stripped = number_line.strip()
     title_stripped = title_line.strip()
     if not title_stripped:
@@ -372,7 +409,13 @@ def _match_split_numbered_heading(
     line_len = len(stripped) + 1 + len(title_stripped)
     num_only = _NUMBER_ONLY_RE.match(stripped)
     if num_only is not None:
-        return _numbered_heading(num_only.group(1), title_stripped, line_len=line_len)
+        # Allow sentence case for split-number headings (regression #284 blocker 1).
+        return _numbered_heading(
+            num_only.group(1),
+            title_stripped,
+            line_len=line_len,
+            allow_sentence_case=True,
+        )
     if _ROMAN_MARKER_RE.match(stripped):
         return _roman_heading(stripped, title_stripped, line_len=line_len)
     return None
