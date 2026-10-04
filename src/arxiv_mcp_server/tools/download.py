@@ -1156,7 +1156,6 @@ def _fetch_arxiv_metadata(
                   connect, and streaming read with per-chunk deadline checks.
     """
     import requests
-    import feedparser
 
     try:
         # Check if we have enough time budget remaining before attempting gate acquisition.
@@ -1235,34 +1234,72 @@ def _fetch_arxiv_metadata(
                 finally:
                     response.close()
 
-                # Parse feed with feedparser (already a dependency of arxiv package)
-                feed_text = b"".join(chunks).decode("utf-8", errors="replace")
-                feed = feedparser.parse(feed_text)
+                # Parse feed with lxml (already a dependency of arxiv package)
+                from lxml import etree
 
-                if not feed.entries:
+                feed_bytes = b"".join(chunks)
+
+                try:
+                    parser = etree.XMLParser(
+                        resolve_entities=False, no_network=True, huge_tree=False
+                    )
+                    root = etree.fromstring(feed_bytes, parser=parser)
+                except etree.XMLSyntaxError as exc:
+                    logger.info(f"Metadata XML parse error for {paper_id}: {exc}")
+                    return None
+
+                # Atom and arXiv namespaces
+                ns = {
+                    "atom": "http://www.w3.org/2005/Atom",
+                    "arxiv": "http://arxiv.org/schemas/atom",
+                }
+
+                # Find first entry element
+                entry = root.find("atom:entry", ns)
+                if entry is None:
                     logger.info(f"No metadata entries found for {paper_id}")
                     return None
 
-                # Build metadata dict matching _metadata_from_arxiv_result format
-                entry = feed.entries[0]
+                # Extract metadata fields
+                def get_text(elem, path):
+                    found = elem.find(path, ns)
+                    return found.text.strip() if found is not None and found.text else ""
+
+                title = get_text(entry, "atom:title")
+                summary = get_text(entry, "atom:summary")
+                published = get_text(entry, "atom:published")
+                updated = get_text(entry, "atom:updated")
+                arxiv_url = get_text(entry, "atom:id")
+
+                # Extract authors
+                authors = []
+                for author_elem in entry.iterfind("atom:author", ns):
+                    name = get_text(author_elem, "atom:name")
+                    if name:
+                        authors.append(name)
+
+                # Extract primary category
+                primary_cat_elem = entry.find("arxiv:primary_category", ns)
+                primary_category = (
+                    primary_cat_elem.get("term", "") if primary_cat_elem is not None else ""
+                )
+
+                # Extract all categories
+                categories = []
+                for cat_elem in entry.iterfind("atom:category", ns):
+                    term = cat_elem.get("term")
+                    if term:
+                        categories.append(term)
+
                 return {
-                    "title": entry.get("title", "").strip(),
-                    "authors": [
-                        author.get("name", "").strip()
-                        for author in entry.get("authors", [])
-                    ],
-                    "summary": entry.get("summary", "").strip(),
-                    "published": entry.get("published", ""),
-                    "updated": entry.get("updated", ""),
-                    "primary_category": (
-                        entry.get("arxiv_primary_category", {}).get("term", "")
-                    ),
-                    "categories": [
-                        tag.get("term", "")
-                        for tag in entry.get("tags", [])
-                        if tag.get("term")
-                    ],
-                    "arxiv_url": entry.get("id", ""),
+                    "title": title,
+                    "authors": authors,
+                    "summary": summary,
+                    "published": published,
+                    "updated": updated,
+                    "primary_category": primary_category,
+                    "categories": categories,
+                    "arxiv_url": arxiv_url,
                 }
             except requests.exceptions.Timeout:
                 logger.info(f"Metadata lookup timed out for {paper_id}")
