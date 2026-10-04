@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """In-process repro for metadata deadline enforcement (no stdio MCP needed)."""
+
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +18,7 @@ import arxiv_mcp_server.tools.download as download_module
 
 download_module.ARXIV_RATE_LIMITER = ArxivRateLimiter(min_interval=0.1)
 
-ATOM = b'''<?xml version="1.0"?>
+ATOM = b"""<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
 <entry>
   <id>http://arxiv.org/abs/1234.5678v1</id>
@@ -26,7 +27,7 @@ ATOM = b'''<?xml version="1.0"?>
   <author><name>Test Author</name></author>
   <arxiv:primary_category term="cs.LG"/>
 </entry>
-</feed>'''
+</feed>"""
 
 EVENTS = []
 MODE = "406"  # Will be set by command line
@@ -98,9 +99,7 @@ def run_test(mode, budget=7.0):
                     # Use real requests but redirect the URL
                     import requests as real_requests
 
-                    mock_get.side_effect = lambda u, **kw: real_requests.get(
-                        url, **kw
-                    )
+                    mock_get.side_effect = lambda u, **kw: real_requests.get(url, **kw)
                     return dl._fetch_arxiv_metadata(paper_id, deadline)
 
             return fetch_impl()
@@ -128,9 +127,7 @@ def run_test(mode, budget=7.0):
             )
             return False
         if metadata_requests != 1:
-            print(
-                f"❌ FAILED: Expected 1 metadata request, got {metadata_requests}"
-            )
+            print(f"❌ FAILED: Expected 1 metadata request, got {metadata_requests}")
             return False
 
         print(f"✓ PASSED: elapsed {elapsed:.3f}s <= {budget+0.5}s, requests = 1")
