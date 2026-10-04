@@ -120,8 +120,7 @@ Related Works
 Prior work on parameter-efficient fine-tuning.
 """
 
-# CoT 2201.11903: 60/80/90 dataset rows must not become sections
-# (Not in cache, synthetic based on report)
+# CoT 2201.11903 (synthetic): 60/80/90 dataset rows must not become sections
 COT_EXCERPT = """1
 Introduction
 
@@ -197,8 +196,7 @@ Discussion
 DAOP provides significant improvements.
 """
 
-# Llama 2 2307.09288: Multiple subsections must be kept
-# (Not in cache, synthetic based on report)
+# Llama 2 2307.09288 (synthetic): Multiple subsections must be kept
 LLAMA2_EXCERPT = """1
 Introduction
 
@@ -235,7 +233,7 @@ Supervised Fine-Tuning (SFT)
 SFT details.
 """
 
-# Attention 1706.03762: "3 Model Architecture" must be kept
+# Attention 1706.03762 (synthetic): "3 Model Architecture" must be kept
 ATTENTION_EXCERPT = """1
 Introduction
 
@@ -257,7 +255,7 @@ Encoder and Decoder Stacks
 Architecture details.
 """
 
-# Mistral 2310.06825: "2 Architectural details" must be kept
+# Mistral 2310.06825 (synthetic): "2 Architectural details" must be kept
 MISTRAL_EXCERPT = """1
 Introduction
 
@@ -279,8 +277,7 @@ Results
 Evaluation results.
 """
 
-# DeepSeek-R1 2501.12948: "2 DeepSeek-R1-Zero" must be kept
-# (Not in cache, synthetic based on report)
+# DeepSeek-R1 2501.12948 (synthetic): "2 DeepSeek-R1-Zero" must be kept
 DEEPSEEK_R1_EXCERPT = """Abstract
 
 We introduce DeepSeek-R1.
@@ -306,7 +303,7 @@ DeepSeek-R1
 Distillation from R1-Zero.
 """
 
-# Mamba 2312.00752: Subsections must be kept
+# Mamba 2312.00752 (synthetic): Subsections must be kept
 MAMBA_EXCERPT = """1
 Introduction
 
@@ -333,7 +330,7 @@ Motivation: Selection as a Means of Compression
 Why selection matters.
 """
 
-# DAOP legacy excerpt for backwards compatibility
+# DAOP 2501.10375 (synthetic for legacy test compatibility)
 DAOP_EXCERPT = """Abstract
 
 DAOP: Dynamic Allocation of MoE Parameters.
