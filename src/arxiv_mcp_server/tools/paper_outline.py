@@ -424,9 +424,9 @@ def _section_continues_sequence(
 
     Valid continuations:
     - First numbered section: 1 (when last_section is None)
-    - Next sibling: 2.1 → 2.2+ (same level, last part increases; top-level capped at +1)
+    - Next sibling: 2.1 → 2.2+ (same level, last part increases; top-level capped at +2)
     - Descendant: 2 → 2.x (go deeper, any positive child, allowing skips like 2→2.2)
-    - Next ancestor: 2.3.1 → 3+ (go up, that level increases; top-level capped at +1)
+    - Next ancestor: 2.3.1 → 3+ (go up, that level increases; top-level capped at +2)
 
     Rejects table numbers (12, 16, 64) by capping top-level to last_top + 1.
     Allows up to 5 skipped numbers at nested levels (real papers occasionally skip).

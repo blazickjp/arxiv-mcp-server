@@ -1088,47 +1088,57 @@ Prior work.
 
 
 def test_guard_percent_sign_rejection():
-    """Guard test: reject split numbers with % in title (e.g. 'Avg. Accuracy: 84.11%')."""
+    """Guard test: reject split numbers with % in title (e.g. 'Impro. (%)')."""
+    # Sequence would accept 2, but % guard rejects it
     md = """1
 Introduction
 
 First section.
 
-1
-Avg. Accuracy: 84.11%
-
 2
+Impro. (%)
+
+Real second section follows.
+
+3
 Methods
 
-Second section.
+Third section.
 """
     titles = [s.title for s in parse_markdown_sections(md)]
     assert "Introduction" in titles
     assert "Methods" in titles
-    # Reject table row with percentage
-    assert "Avg. Accuracy: 84.11%" not in titles
+    # Reject table row with percentage (guard blocks it)
+    assert "Impro. (%)" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
 
 
 def test_guard_equals_sign_rejection():
-    """Guard test: reject split numbers with = in title (e.g. 'SwapNum = 0.5')."""
+    """Guard test: reject split numbers with = in title (e.g. pseudocode lines)."""
+    # Sequence would accept 2, but = guard rejects it
     md = """1
 Introduction
 
 First section.
 
-1
-SwapNum = 0.5
-
 2
+ExpsGPU = getActiveExperts(layer)
+
+Real second section follows.
+
+3
 Methods
 
-Second section.
+Third section.
 """
     titles = [s.title for s in parse_markdown_sections(md)]
     assert "Introduction" in titles
     assert "Methods" in titles
-    # Reject parameter assignment line
-    assert "SwapNum = 0.5" not in titles
+    # Reject pseudocode line (guard blocks it)
+    assert "ExpsGPU = getActiveExperts(layer)" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
 
 
 def test_guard_colon_digit_rejection():
@@ -1154,33 +1164,57 @@ Second section.
 
 
 def test_guard_model_name_rejection():
-    """Guard test: reject model names like 'Mixtral 8x7B', 'T5-XXL', 'RoBERTa base/large'."""
+    """Guard test: reject model names with dotted versions like 'Phi-3.5 MoE'."""
+    # Sequence would accept 2, but dotted-version guard rejects it
     md = """1
 Introduction
 
 First section.
 
-1
-Mixtral 8x7B
-
-1
-T5-XXL
-
-1
-RoBERTa base/large
-
 2
+Phi-3.5 MoE
+
+Real second section follows.
+
+3
 Methods
 
-Second section.
+Third section.
 """
     titles = [s.title for s in parse_markdown_sections(md)]
     assert "Introduction" in titles
     assert "Methods" in titles
-    # Reject model names (fail sequence check since they don't continue outline)
-    assert "Mixtral 8x7B" not in titles
-    assert "T5-XXL" not in titles
-    assert "RoBERTa base/large" not in titles
+    # Reject model name (dotted-version guard blocks it)
+    assert "Phi-3.5 MoE" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
+
+
+def test_guard_table_label_rejection():
+    """Guard test: reject table labels like 'Ours', 'Baseline'."""
+    # Sequence would accept 2, but table-label guard rejects it
+    md = """1
+Introduction
+
+First section.
+
+2
+Ours
+
+Real second section follows.
+
+3
+Methods
+
+Third section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject table label (guard blocks it)
+    assert "Ours" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
 
 
 def test_daop_style_table_cells_rejected():
@@ -1309,6 +1343,7 @@ def test_switch_table_number_rejection():
     # Real sections are kept
     assert "Introduction" in titles
     assert "Switch Transformer" in titles
+    assert "Simplifying Sparse Routing" in titles
     assert "Scaling Properties" in titles
 
     # Table numbers rejected
@@ -1317,12 +1352,12 @@ def test_switch_table_number_rejection():
     assert "Switch-C" not in titles
     assert "Model" not in titles
 
-    # Should have 3 sections (1, 2, 3), not 7
-    assert len(sections) == 3
+    # Should have 4 sections (1, 2, 2.1, 3), not 8
+    assert len(sections) == 4
 
 
 def test_lora_table_row_rejection():
-    """Regression #284 round 3: LoRA 5.2 row must not become a section."""
+    """Regression #284 round 3/4: LoRA 5.2 is a REAL heading, not a table row."""
     from tests.fixtures.paper_outlines import LORA_EXCERPT
 
     sections = parse_markdown_sections(LORA_EXCERPT)
@@ -1331,13 +1366,15 @@ def test_lora_table_row_rejection():
     # Real sections kept
     assert "Introduction" in titles
     assert "Problem Statement" in titles
-    assert "Aren't Existing Solutions Good Enough" in titles
+    assert "Aren't Existing Solutions Good Enough?" in titles
+    assert "Our Method" in titles
+    assert "Empirical Experiments" in titles
+    assert "Baselines" in titles
+    assert "RoBERTa base/large" in titles  # Real heading 5.2
+    assert "Related Works" in titles
 
-    # Table row rejected (5.2 doesn't follow sequence after 1)
-    assert "RoBERTa base/large" not in titles
-
-    # Should have 3 sections
-    assert len(sections) == 3
+    # Should have 8 sections
+    assert len(sections) == 8
 
 
 def test_cot_dataset_row_rejection():
@@ -1349,14 +1386,14 @@ def test_cot_dataset_row_rejection():
 
     # Real sections kept
     assert "Introduction" in titles
+    assert "Chain-of-Thought Prompting" in titles
     assert "Arithmetic Reasoning" in titles
-    assert "Commonsense Reasoning" in titles
 
     # Dataset rows rejected (60/80 way out of sequence)
     assert "GSM8K" not in titles
     assert "Model scale" not in titles
 
-    # Should have 3 sections
+    # Should have 3 sections (1, 2, 3)
     assert len(sections) == 3
 
 
@@ -1414,14 +1451,15 @@ def test_deepseek_r1_zero_kept():
     assert "Abstract" in titles
     assert "Introduction" in titles
     assert "DeepSeek-R1-Zero" in titles
-    assert "Training Setup" in titles
+    assert "Group Relative Policy Optimization" in titles
     assert "DeepSeek-R1" in titles
 
-    # Proper numbering - Abstract doesn't break numbered sequence
+    # Proper numbering - Abstract is treated as section 1
     by_title = {s.title: s for s in sections}
+    assert by_title["Abstract"].section_id == "1"
     assert by_title["Introduction"].section_id == "2"
     assert by_title["DeepSeek-R1-Zero"].section_id == "3"
-    assert by_title["Training Setup"].section_id == "3.1"
+    assert by_title["Group Relative Policy Optimization"].section_id == "3.1"
     assert by_title["DeepSeek-R1"].section_id == "4"
 
     assert len(sections) == 5
@@ -1439,18 +1477,17 @@ def test_llama2_subsections_kept():
     assert "Pretraining" in titles
     assert "Pretraining Data" in titles
     assert "Training Details" in titles
+    assert "Training Hardware & Carbon Footprint" in titles
     assert "Fine-tuning" in titles
-    assert "Supervised Fine-Tuning" in titles
-    assert "Reinforcement Learning with Human Feedback" in titles
-    assert "Reward Modeling" in titles
+    assert "Supervised Fine-Tuning (SFT)" in titles
 
     # Check structure
     by_title = {s.title: s for s in sections}
     assert by_title["Pretraining Data"].section_id == "2.1"
     assert by_title["Training Details"].section_id == "2.2"
-    assert by_title["Reward Modeling"].section_id == "3.2.1"
+    assert by_title["Training Hardware & Carbon Footprint"].section_id == "2.2.1"
 
-    assert len(sections) == 8
+    assert len(sections) == 7
 
 
 def test_mamba_subsections_kept():
@@ -1464,12 +1501,15 @@ def test_mamba_subsections_kept():
     assert "Introduction" in titles
     assert "State Space Models" in titles
     assert "Discretization" in titles
-    assert "Computation" in titles
     assert "Selective State Space Models" in titles
-    assert "Motivation: Selection" in titles
-    assert "Improving SSMs with Selection" in titles
+    assert "Motivation: Selection as a Means of Compression" in titles
 
-    assert len(sections) == 7
+    # Check structure
+    by_title = {s.title: s for s in sections}
+    assert by_title["Discretization"].section_id == "2.1"
+    assert by_title["Motivation: Selection as a Means of Compression"].section_id == "3.1"
+
+    assert len(sections) == 5
 
 
 def test_daop_no_table_fakes():
@@ -1633,3 +1673,68 @@ Real section 3.
     assert "T5-XL" not in titles
     assert "Switch-Base" not in titles
     assert len(sections) == 3
+
+
+def test_kan_golden_outline():
+    """Golden test: KAN fixture produces exact expected outline."""
+    from tests.fixtures.paper_outlines import KAN_EXCERPT
+
+    sections = parse_markdown_sections(KAN_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All real headings present
+    assert titles == [
+        "Abstract",
+        "Introduction",
+        "Kolmogorov–Arnold Networks (KAN)",
+        "Kolmogorov-Arnold Representation theorem",
+        "KAN architecture",
+        "KANs are accurate",
+        "KANs are interpretable",
+    ]
+
+
+def test_switch_golden_outline():
+    """Golden test: Switch fixture produces exact expected outline."""
+    from tests.fixtures.paper_outlines import SWITCH_EXCERPT
+
+    sections = parse_markdown_sections(SWITCH_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real headings present, table numbers rejected
+    assert "Introduction" in titles
+    assert "Switch Transformer" in titles
+    assert "Simplifying Sparse Routing" in titles
+    assert "Scaling Properties" in titles
+    # Table numbers rejected
+    assert "T5-Large" not in titles
+    assert "T5-XXL" not in titles
+    assert "Switch-Base" not in titles
+    assert "Model" not in titles
+    assert len(titles) == 4
+
+
+def test_daop_guards_golden_outline():
+    """Golden test: DAOP guards fixture rejects pseudocode and table labels."""
+    from tests.fixtures.paper_outlines import DAOP_EXCERPT_GUARDS
+
+    sections = parse_markdown_sections(DAOP_EXCERPT_GUARDS)
+    titles = [s.title for s in sections]
+
+    # Real headings present
+    assert "Experimental Evaluation" in titles
+    assert "Experimental Setup" in titles
+    assert "Speedup" in titles
+    assert "Energy Efficiency" in titles
+    assert "Accuracy Results" in titles
+    assert "Discussion" in titles
+    # Pseudocode and table data rejected
+    assert "SwapNum = 0.5" not in titles
+    assert "HotExps = getTopKActiveExperts(ExpsCPU, SwapNum);" not in titles
+    assert "ColdExps = getBottomKActiveExperts(ExpsGPU, SwapNum);" not in titles
+    assert "Impro. (%)" not in titles
+    assert "Mixtral 8x7B" not in titles
+    assert "Phi-3.5 MoE" not in titles
+    assert "Ours" not in titles
+    assert "14.37" not in titles
+    assert "27.07" not in titles

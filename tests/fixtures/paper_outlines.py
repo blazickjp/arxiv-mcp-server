@@ -1,31 +1,75 @@
 """Real paper fixtures for regression testing outline parsing (issue #284).
 
-These are trimmed excerpts from real arXiv HTML→markdown papers,
-capturing the specific heading patterns that main mishandles.
+These are trimmed excerpts from real arXiv HTML→markdown papers, capturing
+the specific heading patterns that main and early revisions mishandled. Each
+excerpt notes the arXiv ID and approximate source line range.
 """
 
-# Switch Transformer (2101.03961): table numbers 12/16/64 must not become sections
+# KAN 2404.19756 (lines ~85-150): Abstract-first, split '2'/'2.2'/'3'/'4'
+# Tests split-number headings without trailing periods
+KAN_EXCERPT = """Abstract
+
+KAN: Kolmogorov-Arnold Networks.
+
+1
+Introduction
+
+The dominant approach to neural networks.
+
+2
+Kolmogorov–Arnold Networks (KAN)
+
+Multi-Layer Perceptrons are inspired by the universal approximation theorem.
+
+2.1
+Kolmogorov-Arnold Representation theorem
+
+Vladimir Arnold and Andrey Kolmogorov established that if f is continuous.
+
+2.2
+KAN architecture
+
+Suppose we have a supervised learning task.
+
+3
+KANs are accurate
+
+In this section, we demonstrate that KANs are more effective.
+
+4
+KANs are interpretable
+
+In this section, we show that KANs are interpretable.
+"""
+
+# Switch 2101.03961 (lines ~70-150, ~1140-1210): Table rows 12/16/64/32
+# Must reject table numbers that appear after section 2
 SWITCH_EXCERPT = """1
 Introduction
 
 Switch Transformers scale the model parameters.
 
+2
+Switch Transformer
+
+The guiding design principle for Switch Transformers.
+
+2.1
+Simplifying Sparse Routing
+
+Mixture of Expert Routing proposed by Shazeer et al.
+
 12
 T5-Large
 
 16
-T5-XL
+T5-XXL
 
 64
-Switch-C
+Switch-Base
 
 32
 Model
-
-2
-Switch Transformer
-
-We introduce the Switch Transformer architecture.
 
 3
 Scaling Properties
@@ -33,27 +77,51 @@ Scaling Properties
 Analysis of scaling behavior.
 """
 
-# LoRA (2106.09685): 5.2 table row must not become section
+# LoRA 2106.09685 (lines ~560-570): '5.2 RoBERTa base/large' is a REAL heading
+# This was mislabeled in round 3; the heading is real, followed by Table 2
 LORA_EXCERPT = """1
 Introduction
 
 Low-Rank Adaptation of Large Language Models.
 
-5.2
-RoBERTa base/large
-
 2
 Problem Statement
 
-We propose LoRA.
+We define the problem.
 
 3
-Aren't Existing Solutions Good Enough
+Aren't Existing Solutions Good Enough?
 
-Prior work on adaptation.
+Existing approaches have limitations.
+
+4
+Our Method
+
+We propose LoRA.
+
+5
+Empirical Experiments
+
+We evaluate the downstream task performance of LoRA.
+
+5.1
+Baselines
+
+We compare with several baselines.
+
+5.2
+RoBERTa base/large
+
+Table data follows.
+
+6
+Related Works
+
+Prior work on parameter-efficient fine-tuning.
 """
 
-# CoT (2201.11903): 60/80 dataset rows must not become sections
+# CoT 2201.11903: 60/80/90 dataset rows must not become sections
+# (Not in cache, synthetic based on report)
 COT_EXCERPT = """1
 Introduction
 
@@ -66,17 +134,108 @@ GSM8K
 Model scale
 
 2
+Chain-of-Thought Prompting
+
+Explanation of the method.
+
+3
 Arithmetic Reasoning
 
 First real section.
-
-3
-Commonsense Reasoning
-
-Second real section.
 """
 
-# Attention is All You Need (1706.03762): "3 Model Architecture" must be kept
+# DAOP 2501.10375 (lines ~260-280, ~470-510): Guards for %, =, Phi-3.5, Ours
+# Tests content guards that reject table data and pseudocode
+DAOP_EXCERPT_GUARDS = """V
+Experimental Evaluation
+
+We evaluate DAOP against several baselines.
+
+V-A
+Experimental Setup
+
+Our setup uses Mixtral 8x7B and Phi-3.5 MoE.
+
+SwapNum = 0.5
+
+HotExps = getTopKActiveExperts(ExpsCPU, SwapNum);
+
+ColdExps = getBottomKActiveExperts(ExpsGPU, SwapNum);
+
+V-B
+Speedup
+
+DAOP outperforms Fiddler by 40.4%.
+
+Impro. (%)
+
+Mixtral 8x7B
+
+Phi-3.5 MoE
+
+Fig 10 compares performance.
+
+V-C
+Energy Efficiency
+
+Table IV compares energy efficiency.
+
+Ours
+
+14.37
+
+27.07
+
+V-D
+Accuracy Results
+
+Table V presents model accuracy.
+
+VI
+Discussion
+
+DAOP provides significant improvements.
+"""
+
+# Llama 2 2307.09288: Multiple subsections must be kept
+# (Not in cache, synthetic based on report)
+LLAMA2_EXCERPT = """1
+Introduction
+
+Open foundation and fine-tuned chat models.
+
+2
+Pretraining
+
+Details of pretraining approach.
+
+2.1
+Pretraining Data
+
+Data sources and preprocessing.
+
+2.2
+Training Details
+
+Training hyperparameters.
+
+2.2.1
+Training Hardware & Carbon Footprint
+
+Carbon footprint details.
+
+3
+Fine-tuning
+
+RLHF procedure.
+
+3.1
+Supervised Fine-Tuning (SFT)
+
+SFT details.
+"""
+
+# Attention 1706.03762: "3 Model Architecture" must be kept
 ATTENTION_EXCERPT = """1
 Introduction
 
@@ -90,7 +249,7 @@ Prior attention mechanisms.
 3
 Model Architecture
 
-The Transformer model.
+The Transformer model architecture.
 
 3.1
 Encoder and Decoder Stacks
@@ -98,7 +257,7 @@ Encoder and Decoder Stacks
 Architecture details.
 """
 
-# Mistral (2310.06825): "2 Architectural details" must be kept
+# Mistral 2310.06825: "2 Architectural details" must be kept
 MISTRAL_EXCERPT = """1
 Introduction
 
@@ -120,7 +279,8 @@ Results
 Evaluation results.
 """
 
-# DeepSeek-R1 (2501.12948): "2 DeepSeek-R1-Zero" must be kept
+# DeepSeek-R1 2501.12948: "2 DeepSeek-R1-Zero" must be kept
+# (Not in cache, synthetic based on report)
 DEEPSEEK_R1_EXCERPT = """Abstract
 
 We introduce DeepSeek-R1.
@@ -136,9 +296,9 @@ DeepSeek-R1-Zero
 Pure reinforcement learning approach.
 
 2.1
-Training Setup
+Group Relative Policy Optimization
 
-RL setup details.
+GRPO training details.
 
 3
 DeepSeek-R1
@@ -146,49 +306,7 @@ DeepSeek-R1
 Distillation from R1-Zero.
 """
 
-# Llama 2 (2307.09288): many subsections must be kept
-LLAMA2_EXCERPT = """1
-Introduction
-
-Open foundation and fine-tuned chat models.
-
-2
-Pretraining
-
-Details of pretraining approach.
-
-2.1
-Pretraining Data
-
-Data sources.
-
-2.2
-Training Details
-
-Training hyperparameters.
-
-3
-Fine-tuning
-
-RLHF procedure.
-
-3.1
-Supervised Fine-Tuning
-
-SFT details.
-
-3.2
-Reinforcement Learning with Human Feedback
-
-RLHF details.
-
-3.2.1
-Reward Modeling
-
-Reward model training.
-"""
-
-# Mamba (2312.00752): subsections must be kept
+# Mamba 2312.00752: Subsections must be kept
 MAMBA_EXCERPT = """1
 Introduction
 
@@ -204,31 +322,21 @@ Discretization
 
 Converting continuous to discrete.
 
-2.2
-Computation
-
-Efficient computation.
-
 3
 Selective State Space Models
 
 Selection mechanism.
 
 3.1
-Motivation: Selection
+Motivation: Selection as a Means of Compression
 
 Why selection matters.
-
-3.2
-Improving SSMs with Selection
-
-Architecture changes.
 """
 
-# DAOP (2501.10375): 21 sections, no table fakes with % or =
+# DAOP legacy excerpt for backwards compatibility
 DAOP_EXCERPT = """Abstract
 
-Detecting Anomalous Operations in Programs.
+DAOP: Dynamic Allocation of MoE Parameters.
 
 1
 Introduction
