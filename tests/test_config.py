@@ -216,7 +216,10 @@ def test_get_arxiv_client_injects_timeout_and_disables_keepalive(monkeypatch):
     real_session.get("https://export.arxiv.org/api/query")
     _args, kwargs = mock_get.call_args
     # Regression #284 bug 2: uses configured timeouts, not hard-coded (5.0, 30.0)
-    assert kwargs["timeout"] == (10.0, 30.0)  # (ARXIV_CONNECT_TIMEOUT, get_request_timeout())
+    assert kwargs["timeout"] == (
+        10.0,
+        30.0,
+    )  # (ARXIV_CONNECT_TIMEOUT, get_request_timeout())
 
     # keep-alive must be disabled so no stale pooled connection is reused
     assert real_session.headers.get("Connection") == "close"
