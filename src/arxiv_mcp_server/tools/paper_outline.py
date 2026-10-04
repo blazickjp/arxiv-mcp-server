@@ -240,7 +240,11 @@ def _is_title_case_phrase(title: str) -> bool:
 
 
 def _title_looks_like_heading(
-    title: str, *, line_len: int, allow_sentence_case: bool = False
+    title: str,
+    *,
+    line_len: int,
+    allow_sentence_case: bool = False,
+    apply_content_guards: bool = True,
 ) -> bool:
     """Shared capitalization / length / venue guards for numbered headings.
 
@@ -252,6 +256,7 @@ def _title_looks_like_heading(
         title: The heading title text to check.
         line_len: Length of the full line including the number.
         allow_sentence_case: If True, skip Title Case check (for split numbers).
+        apply_content_guards: If True, apply % / = / : guards (for split numbers only).
     """
     title = title.strip()
     if not title or line_len > _MAX_BARE_TITLE_CHARS:
@@ -264,10 +269,12 @@ def _title_looks_like_heading(
         return False
     # Reject table/figure/data lines (regression #284 blocker 2).
     # Data lines have % or =, or : followed by digits/special chars.
-    if re.search(r"[%=]", title):
-        return False
-    if re.search(r":\s*[\d.-]", title):
-        return False
+    # Only apply these guards to split numbers, not inline numbered headings.
+    if apply_content_guards:
+        if re.search(r"[%=]", title):
+            return False
+        if re.search(r":\s*[\d.-]", title):
+            return False
     # Reject very short tokens that look like table cells or model names.
     if len(title) < 3:
         return False
@@ -291,7 +298,12 @@ def _title_looks_like_heading(
 
 
 def _numbered_heading(
-    numbering: str, title: str, *, line_len: int, allow_sentence_case: bool = False
+    numbering: str,
+    title: str,
+    *,
+    line_len: int,
+    allow_sentence_case: bool = False,
+    apply_content_guards: bool = True,
 ) -> tuple[int, str] | None:
     """Return (level, title) for a plausible numbered heading, else None.
 
@@ -300,9 +312,13 @@ def _numbered_heading(
         title: The heading title text.
         line_len: Length of the full line including the number.
         allow_sentence_case: If True, skip Title Case check (for split numbers).
+        apply_content_guards: If True, apply % / = / : guards (for split numbers only).
     """
     if not _title_looks_like_heading(
-        title, line_len=line_len, allow_sentence_case=allow_sentence_case
+        title,
+        line_len=line_len,
+        allow_sentence_case=allow_sentence_case,
+        apply_content_guards=apply_content_guards,
     ):
         return None
     if not _is_plausible_section_number(numbering):
@@ -343,7 +359,10 @@ def _match_heading_line(line: str) -> tuple[int, str] | None:
     numbered = _NUMBERED_HEADING_RE.match(stripped)
     if numbered:
         matched = _numbered_heading(
-            numbered.group(1), numbered.group(2), line_len=len(stripped)
+            numbered.group(1),
+            numbered.group(2),
+            line_len=len(stripped),
+            apply_content_guards=False,
         )
         if matched is not None:
             return matched
@@ -381,65 +400,64 @@ def _logical_line(line: str) -> str:
     return logical
 
 
-def _section_continues_sequence(numbering: str, counters: list[int]) -> bool:
+def _section_continues_sequence(
+    numbering: str, last_section: tuple[int, ...] | None
+) -> bool:
     """Check if a section number continues the current outline sequence.
 
-    Valid continuations (real papers can skip numbers, e.g. 2 → 2.2):
-    - Next sibling: 2.1 → 2.2+ (same level, last part increases)
-    - Descendant: 2 → 2.x (go deeper, any positive child)
-    - Next ancestor: 2.3.1 → 3+ (go up, that level increases)
+    Valid continuations:
+    - First numbered section: 1 (when last_section is None)
+    - Next sibling: 2.1 → 2.2+ (same level, last part increases by reasonable amount)
+    - Descendant: 2 → 2.x (go deeper, any positive child, allowing skips like 2→2.2)
+    - Next ancestor: 2.3.1 → 3+ (go up, that level increases by reasonable amount)
 
-    This prevents table-row labels like "RoBERTa base/large" under a split
-    "1" from becoming fake L1 sections after section 7 (regression #284 round 2).
+    Rejects table numbers (12, 16, 64) by capping jumps to at most 10 at top level,
+    5 at deeper levels. Prevents table-row labels like "RoBERTa base/large" under
+    a split "1" from becoming fake sections (regression #284 round 2).
+
+    Args:
+        numbering: The section number string (e.g. "2.2").
+        last_section: The last accepted section number as a tuple (e.g. (2,1)),
+            or None if no numbered section has been accepted yet.
     """
-    parts = [int(p) for p in numbering.split(".")]
-    level = len(parts)
-
-    if not parts or parts[-1] < 1:
+    parts = tuple(int(p) for p in numbering.split("."))
+    if not parts or any(p < 1 for p in parts):
         return False
 
-    # No sections yet: any positive top-level is valid
-    if not any(counters):
-        return level == 1
+    # First numbered section: must be 1
+    if last_section is None:
+        return parts == (1,)
 
-    # Find deepest non-zero counter level (current depth)
-    current_depth = 0
-    for i in range(len(counters)):
-        if counters[i] > 0:
-            current_depth = i + 1
+    # Cap the maximum jump to reject table numbers like 12, 16, 64
+    # Top-level (e.g. 1 → 11) can skip up to 10, deeper levels up to 5
+    MAX_TOP_LEVEL_JUMP = 10
+    MAX_NESTED_JUMP = 5
 
-    if current_depth == 0:
-        return level == 1
+    # Next sibling: same prefix, last part increases
+    if len(parts) == len(last_section) and parts[:-1] == last_section[:-1]:
+        jump = parts[-1] - last_section[-1]
+        max_jump = MAX_TOP_LEVEL_JUMP if len(parts) == 1 else MAX_NESTED_JUMP
+        return jump > 0 and jump <= max_jump
 
-    current = counters[:current_depth]
-
-    # Descendant: prefix matches current, goes deeper
-    if level > current_depth and parts[:current_depth] == current:
+    # Descendant: prefix matches, go deeper (allow any positive child, e.g. 2→2.2)
+    if len(parts) > len(last_section) and parts[: len(last_section)] == last_section:
         return True
 
-    # Sibling: prefix matches, last part increases
-    if (
-        level == current_depth
-        and parts[:-1] == current[:-1]
-        and parts[-1] > current[-1]
-    ):
-        return True
-
-    # Ancestor: go up to a shallower level, that level increases
-    if level < current_depth:
-        # Check if this level's prefix continues the outline
-        if level == 1:
-            # Top-level: must be greater than current top counter
-            return parts[0] > counters[0]
-        elif parts[:-1] == counters[: level - 1]:
-            # Same prefix, last part increases
-            return parts[-1] > counters[level - 1]
+    # Next ancestor: pop levels, last part increases
+    if len(parts) < len(last_section):
+        # parts must match last_section prefix up to its length
+        if parts[:-1] == last_section[: len(parts) - 1]:
+            jump = parts[-1] - last_section[len(parts) - 1]
+            max_jump = MAX_TOP_LEVEL_JUMP if len(parts) == 1 else MAX_NESTED_JUMP
+            return jump > 0 and jump <= max_jump
 
     return False
 
 
 def _match_split_numbered_heading(
-    number_line: str, title_line: str, counters: list[int] | None = None
+    number_line: str,
+    title_line: str,
+    last_section: tuple[int, ...] | None = None,
 ) -> tuple[int, str] | None:
     """Join HTML→text ``3.`` / ``Title`` or ``II-A`` / ``Title`` pairs.
 
@@ -450,7 +468,7 @@ def _match_split_numbered_heading(
     Args:
         number_line: Line with just the section number.
         title_line: Line with the title text.
-        counters: Current outline counters, for sequence validation.
+        last_section: The last accepted section number tuple, for sequence validation.
     """
     stripped = number_line.strip()
     title_stripped = title_line.strip()
@@ -479,13 +497,17 @@ def _match_split_numbered_heading(
         has_trailing_period = stripped.rstrip().endswith(".")
         if (
             not has_trailing_period
-            and counters is not None
-            and not _section_continues_sequence(numbering, counters)
+            and last_section is not None
+            and not _section_continues_sequence(numbering, last_section)
         ):
             return None
         # Allow sentence case for split-number headings that continue sequence.
         return _numbered_heading(
-            numbering, title_stripped, line_len=line_len, allow_sentence_case=True
+            numbering,
+            title_stripped,
+            line_len=line_len,
+            allow_sentence_case=True,
+            apply_content_guards=True,
         )
     if _ROMAN_MARKER_RE.match(stripped):
         return _roman_heading(stripped, title_stripped, line_len=line_len)
@@ -555,6 +577,7 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
     masked = _mask_fenced_code(content)
     raw: list[tuple[int, str, str, int]] = []
     counters = [0, 0, 0, 0, 0, 0]
+    last_section: tuple[int, ...] | None = None
 
     lines_meta: list[tuple[int, str]] = []
     offset = 0
@@ -580,6 +603,7 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         logical = _logical_line(line)
         matched = _match_heading_line(logical)
         consumed = 1
+        is_split_numbered = False
 
         if matched is None:
             # Peek across blank lines for a title after a lone section number.
@@ -592,9 +616,12 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                     continue
                 if peek_logical.lstrip(" \t").startswith("```"):
                     break
-                matched = _match_split_numbered_heading(logical, peek_logical, counters)
+                matched = _match_split_numbered_heading(
+                    logical, peek_logical, last_section
+                )
                 if matched is not None:
                     consumed = peek - index + 1
+                    is_split_numbered = True
                 break
 
         if matched is not None:
@@ -614,6 +641,23 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                 counters[counter_index] = 0
             section_id = ".".join(str(value) for value in counters[:level])
             raw.append((level, section_id, title, start_offset))
+
+            # Track the paper's numbered sections (for sequence validation)
+            # Extract the actual section number from inline/split numbered headings
+            is_inline_numbered = _NUMBERED_HEADING_RE.match(logical.strip()) is not None
+            if is_split_numbered:
+                # For split headings, the number is on the logical line
+                num_match = _NUMBER_ONLY_RE.match(logical.strip())
+                if num_match:
+                    paper_numbering = num_match.group(1)
+                    last_section = tuple(int(p) for p in paper_numbering.split("."))
+            elif is_inline_numbered:
+                # For inline headings, extract the number from the line
+                inline_match = _NUMBERED_HEADING_RE.match(logical.strip())
+                if inline_match:
+                    paper_numbering = inline_match.group(1)
+                    last_section = tuple(int(p) for p in paper_numbering.split("."))
+
             if _is_outline_terminator(title):
                 break
         index += consumed
