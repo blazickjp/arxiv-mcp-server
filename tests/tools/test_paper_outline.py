@@ -1173,3 +1173,119 @@ Second section.
     assert "Mixtral 8x7B" not in titles
     assert "T5-XXL" not in titles
     assert "RoBERTa base/large" not in titles
+
+
+def test_daop_style_table_cells_rejected():
+    """Regression #284 round 2: DAOP paper should not gain fake sections from table rows.
+    
+    Real DAOP has 21 sections; round 1 produced 29 by accepting table cells like
+    'Mixtral 8x7B', 'Avg. Accuracy: 84.11%', 'SwapNum = 0.5' as fake headings.
+    """
+    md = """1
+Introduction
+
+Intro body.
+
+2
+Background
+
+Background body.
+
+1
+Mixtral 8x7B
+
+1
+Avg. Accuracy: 84.11%
+
+1
+SwapNum = 0.5
+
+3
+Speedup
+
+Real section body.
+
+4
+Energy
+
+Energy body.
+
+5
+Accuracy
+
+Accuracy body.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real sections, no table rows
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Speedup" in titles
+    assert "Energy" in titles
+    assert "Accuracy" in titles
+    # Reject table/data rows
+    assert "Mixtral 8x7B" not in titles
+    assert "Avg. Accuracy: 84.11%" not in titles
+    assert "SwapNum = 0.5" not in titles
+    # Should have 5 real sections, not 8
+    assert len(sections) == 5
+
+
+def test_switch_style_model_labels_rejected():
+    """Regression #284 round 2: Switch paper should not gain fake sections from model rows.
+    
+    Real Switch has 7 sections; round 1 produced 46 by accepting model labels like
+    'T5-Large', 'T5-XL', 'T5-XXL', 'Switch-C' as fake headings.
+    """
+    md = """1
+Introduction
+
+Intro body.
+
+1
+T5-Large
+
+1
+T5-XL
+
+1
+T5-XXL
+
+1
+Switch-Base
+
+1
+Switch-Large
+
+1
+Switch-C
+
+1
+Model
+
+2
+Methods
+
+Methods body.
+
+3
+Evaluation
+
+Eval body.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real sections, no model labels
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "Evaluation" in titles
+    # Reject model labels
+    assert "T5-Large" not in titles
+    assert "T5-XL" not in titles
+    assert "T5-XXL" not in titles
+    assert "Switch-Base" not in titles
+    assert "Switch-Large" not in titles
+    assert "Switch-C" not in titles
+    assert "Model" not in titles
+    # Should have 3 real sections, not 10
+    assert len(sections) == 3
