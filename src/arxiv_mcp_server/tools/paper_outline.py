@@ -292,9 +292,9 @@ def _title_looks_like_heading(
         # Pattern 5: Table comparison labels (Ours, Theirs, Baseline, Previous)
         if re.match(r"^(?:Ours|Theirs|Baseline|Previous)$", title, re.IGNORECASE):
             return False
-    # Reject very short tokens that look like table cells or model names.
-    if len(title) < 3:
-        return False
+        # Reject very short tokens that look like table cells or model names.
+        if len(title) < 3:
+            return False
     # Reject common table/figure/algorithm prefixes.
     if re.match(
         r"^(?:Table|Figure|Fig\.|Algorithm|Eq\.|Equation|Appendix)\s+\d",
@@ -518,23 +518,22 @@ def _match_split_numbered_heading(
     num_only = _NUMBER_ONLY_RE.match(stripped)
     if num_only is not None:
         numbering = num_only.group(1)
-        # For split numbers without trailing period, require sequence continuation
-        # to avoid promoting table-row labels to headings (regression #284 round 2).
-        # Split numbers WITH trailing period (e.g. "3.1.") are assumed real headings.
-        has_trailing_period = stripped.rstrip().endswith(".")
-        if (
-            not has_trailing_period
-            and last_section is not None
-            and not _section_continues_sequence(numbering, last_section)
+        # Check sequence for all split numbers to avoid promoting table-row labels
+        # or body-list items ("1. Load the model") to headings.
+        if last_section is not None and not _section_continues_sequence(
+            numbering, last_section
         ):
             return None
-        # Allow sentence case for split-number headings that continue sequence.
+        # Period-form headings (e.g. "2.\nBaseline") are assumed real headings and
+        # require Title Case. Period-less headings (e.g. "2\nKAN architecture") allow
+        # sentence case and apply content guards to filter table cells.
+        has_trailing_period = stripped.rstrip().endswith(".")
         return _numbered_heading(
             numbering,
             title_stripped,
             line_len=line_len,
-            allow_sentence_case=True,
-            apply_content_guards=True,
+            allow_sentence_case=not has_trailing_period,
+            apply_content_guards=not has_trailing_period,
         )
     if _ROMAN_MARKER_RE.match(stripped):
         return _roman_heading(stripped, title_stripped, line_len=line_len)
