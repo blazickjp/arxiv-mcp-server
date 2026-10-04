@@ -381,13 +381,76 @@ def _logical_line(line: str) -> str:
     return logical
 
 
+def _section_continues_sequence(numbering: str, counters: list[int]) -> bool:
+    """Check if a section number continues the current outline sequence.
+
+    Valid continuations (real papers can skip numbers, e.g. 2 → 2.2):
+    - Next sibling: 2.1 → 2.2+ (same level, last part increases)
+    - Descendant: 2 → 2.x (go deeper, any positive child)
+    - Next ancestor: 2.3.1 → 3+ (go up, that level increases)
+
+    This prevents table-row labels like "RoBERTa base/large" under a split
+    "1" from becoming fake L1 sections after section 7 (regression #284 round 2).
+    """
+    parts = [int(p) for p in numbering.split(".")]
+    level = len(parts)
+
+    if not parts or parts[-1] < 1:
+        return False
+
+    # No sections yet: any positive top-level is valid
+    if not any(counters):
+        return level == 1
+
+    # Find deepest non-zero counter level (current depth)
+    current_depth = 0
+    for i in range(len(counters)):
+        if counters[i] > 0:
+            current_depth = i + 1
+
+    if current_depth == 0:
+        return level == 1
+
+    current = counters[:current_depth]
+
+    # Descendant: prefix matches current, goes deeper
+    if level > current_depth and parts[:current_depth] == current:
+        return True
+
+    # Sibling: prefix matches, last part increases
+    if (
+        level == current_depth
+        and parts[:-1] == current[:-1]
+        and parts[-1] > current[-1]
+    ):
+        return True
+
+    # Ancestor: go up to a shallower level, that level increases
+    if level < current_depth:
+        # Check if this level's prefix continues the outline
+        if level == 1:
+            # Top-level: must be greater than current top counter
+            return parts[0] > counters[0]
+        elif parts[:-1] == counters[: level - 1]:
+            # Same prefix, last part increases
+            return parts[-1] > counters[level - 1]
+
+    return False
+
+
 def _match_split_numbered_heading(
-    number_line: str, title_line: str
+    number_line: str, title_line: str, counters: list[int] | None = None
 ) -> tuple[int, str] | None:
     """Join HTML→text ``3.`` / ``Title`` or ``II-A`` / ``Title`` pairs.
 
-    Split-number headings allow sentence case because real papers (e.g. KAN
-    2404.19756v5) have lowercase after numbers: ``2.2\\nKAN architecture``.
+    Split-number headings allow sentence case when they continue the outline
+    sequence. This prevents table-row labels from becoming fake sections
+    (regression #284 blocker 1 round 2).
+
+    Args:
+        number_line: Line with just the section number.
+        title_line: Line with the title text.
+        counters: Current outline counters, for sequence validation.
     """
     stripped = number_line.strip()
     title_stripped = title_line.strip()
@@ -409,12 +472,20 @@ def _match_split_numbered_heading(
     line_len = len(stripped) + 1 + len(title_stripped)
     num_only = _NUMBER_ONLY_RE.match(stripped)
     if num_only is not None:
-        # Allow sentence case for split-number headings (regression #284 blocker 1).
+        numbering = num_only.group(1)
+        # For split numbers without trailing period, require sequence continuation
+        # to avoid promoting table-row labels to headings (regression #284 round 2).
+        # Split numbers WITH trailing period (e.g. "3.1.") are assumed real headings.
+        has_trailing_period = stripped.rstrip().endswith(".")
+        if (
+            not has_trailing_period
+            and counters is not None
+            and not _section_continues_sequence(numbering, counters)
+        ):
+            return None
+        # Allow sentence case for split-number headings that continue sequence.
         return _numbered_heading(
-            num_only.group(1),
-            title_stripped,
-            line_len=line_len,
-            allow_sentence_case=True,
+            numbering, title_stripped, line_len=line_len, allow_sentence_case=True
         )
     if _ROMAN_MARKER_RE.match(stripped):
         return _roman_heading(stripped, title_stripped, line_len=line_len)
@@ -521,7 +592,7 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                     continue
                 if peek_logical.lstrip(" \t").startswith("```"):
                     break
-                matched = _match_split_numbered_heading(logical, peek_logical)
+                matched = _match_split_numbered_heading(logical, peek_logical, counters)
                 if matched is not None:
                     consumed = peek - index + 1
                 break

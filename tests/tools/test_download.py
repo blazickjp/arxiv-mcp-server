@@ -288,7 +288,12 @@ async def test_metadata_honors_remaining_deadline_after_html(mocker, temp_storag
 
     # Mock cleanup and indexing
     mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
-    mocker.patch.object(download_module, "_track_index_task", lambda _: None)
+
+    def close_coroutine(coro):
+        """Close coroutine to silence 'never awaited' warning."""
+        coro.close()
+
+    mocker.patch.object(download_module, "_track_index_task", close_coroutine)
 
     response = await handle_download({"paper_id": "2404.19756"})
     result = json.loads(response[0].text)
@@ -360,7 +365,12 @@ async def test_metadata_skipped_gracefully_when_budget_exhausted(
         download_module, "get_arxiv_client", side_effect=mock_get_client
     )
     mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
-    mocker.patch.object(download_module, "_track_index_task", lambda _: None)
+
+    def close_coroutine(coro):
+        """Close coroutine to silence 'never awaited' warning."""
+        coro.close()
+
+    mocker.patch.object(download_module, "_track_index_task", close_coroutine)
 
     response = await handle_download({"paper_id": "2404.19756"})
     result = json.loads(response[0].text)

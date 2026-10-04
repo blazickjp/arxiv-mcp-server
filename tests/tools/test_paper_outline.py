@@ -1049,3 +1049,127 @@ Done.
     titles = [s.title for s in parse_markdown_sections(md)]
     assert titles == ["Kolmogorov-Arnold Networks", "KANs are interpretable"]
     assert "Our approach always used identical homogeneous experts" not in titles
+
+
+def test_split_body_list_without_trailing_period_rejected():
+    """Regression #284 round 2 blocker 2: reject split-form body lists without trailing period."""
+    # A split number "1" followed by a sentence like "We propose..." is a body list, not a heading
+    md = """1
+Introduction
+
+Research overview.
+
+1
+We propose a new method for routing tokens to experts.
+
+2
+Related works
+
+Prior work.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real headings, not the body list
+    assert "Introduction" in titles
+    assert "Related works" in titles
+    assert "We propose a new method for routing tokens to experts" not in titles
+    # Body list stays in Introduction section
+    intro = sections[0]
+    intro_body = md[intro.start : intro.end]
+    assert "We propose a new method" in intro_body
+
+
+def test_guard_percent_sign_rejection():
+    """Guard test: reject split numbers with % in title (e.g. 'Avg. Accuracy: 84.11%')."""
+    md = """1
+Introduction
+
+First section.
+
+1
+Avg. Accuracy: 84.11%
+
+2
+Methods
+
+Second section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject table row with percentage
+    assert "Avg. Accuracy: 84.11%" not in titles
+
+
+def test_guard_equals_sign_rejection():
+    """Guard test: reject split numbers with = in title (e.g. 'SwapNum = 0.5')."""
+    md = """1
+Introduction
+
+First section.
+
+1
+SwapNum = 0.5
+
+2
+Methods
+
+Second section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject parameter assignment line
+    assert "SwapNum = 0.5" not in titles
+
+
+def test_guard_colon_digit_rejection():
+    """Guard test: reject split numbers with : followed by digits (e.g. 'Loss: 0.42')."""
+    md = """1
+Introduction
+
+First section.
+
+1
+Loss: 0.42
+
+2
+Methods
+
+Second section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject metric line
+    assert "Loss: 0.42" not in titles
+
+
+def test_guard_model_name_rejection():
+    """Guard test: reject model names like 'Mixtral 8x7B', 'T5-XXL', 'RoBERTa base/large'."""
+    md = """1
+Introduction
+
+First section.
+
+1
+Mixtral 8x7B
+
+1
+T5-XXL
+
+1
+RoBERTa base/large
+
+2
+Methods
+
+Second section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject model names (fail sequence check since they don't continue outline)
+    assert "Mixtral 8x7B" not in titles
+    assert "T5-XXL" not in titles
+    assert "RoBERTa base/large" not in titles
