@@ -1177,7 +1177,7 @@ Second section.
 
 def test_daop_style_table_cells_rejected():
     """Regression #284 round 2: DAOP paper should not gain fake sections from table rows.
-    
+
     Real DAOP has 21 sections; round 1 produced 29 by accepting table cells like
     'Mixtral 8x7B', 'Avg. Accuracy: 84.11%', 'SwapNum = 0.5' as fake headings.
     """
@@ -1233,7 +1233,7 @@ Accuracy body.
 
 def test_switch_style_model_labels_rejected():
     """Regression #284 round 2: Switch paper should not gain fake sections from model rows.
-    
+
     Real Switch has 7 sections; round 1 produced 46 by accepting model labels like
     'T5-Large', 'T5-XL', 'T5-XXL', 'Switch-C' as fake headings.
     """
