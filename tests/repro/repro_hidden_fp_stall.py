@@ -5,7 +5,7 @@ import http.server
 import socketserver
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from arxiv_mcp_server.tools.download import _fetch_arxiv_metadata
 
