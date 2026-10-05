@@ -441,10 +441,15 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         # Check cache first
         cached = _load_cached_graph(bare_id, limit)
         if cached is not None:
-            # Restore requested version metadata if present
-            if requested_version is not None and "paper" in cached:
-                cached["paper"]["requested_arxiv_id"] = paper_id
-                cached["paper"]["requested_version"] = requested_version
+            # Add request-specific metadata to the response (not stored in cache)
+            if "paper" in cached:
+                if requested_version is not None:
+                    cached["paper"]["requested_arxiv_id"] = paper_id
+                    cached["paper"]["requested_version"] = requested_version
+                else:
+                    # Bare ID request: ensure no stale version fields
+                    cached["paper"].pop("requested_arxiv_id", None)
+                    cached["paper"].pop("requested_version", None)
             return [types.TextContent(type="text", text=json.dumps(cached, indent=2))]
 
         # Cache miss: fetch from S2 with a single API call
@@ -483,6 +488,7 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
         citations = _normalize_paper_items(citations_raw[:limit])
         references = _normalize_paper_items(references_raw[:limit])
 
+        # Build paper metadata without request-specific fields
         paper_meta = {
             "paper_id": payload.get("paperId"),
             "arxiv_id": bare_id,
@@ -493,9 +499,6 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             ],
             "external_ids": payload.get("externalIds") or {},
         }
-        if requested_version is not None:
-            paper_meta["requested_arxiv_id"] = paper_id
-            paper_meta["requested_version"] = requested_version
 
         result = {
             "status": "success",
@@ -509,8 +512,13 @@ async def handle_citation_graph(arguments: Dict[str, Any]) -> List[types.TextCon
             "references": references,
         }
 
-        # Cache the successful result
+        # Cache the successful result (without request-specific metadata)
         _save_cached_graph(bare_id, limit, result)
+
+        # Add request-specific metadata to the response (not stored in cache)
+        if requested_version is not None:
+            result["paper"]["requested_arxiv_id"] = paper_id
+            result["paper"]["requested_version"] = requested_version
 
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 

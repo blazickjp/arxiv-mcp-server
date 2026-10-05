@@ -750,3 +750,165 @@ async def test_s2_503_response_excludes_warning_and_hint():
 
         # Clean up
         shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_versioned_then_bare_cache_hit_metadata():
+    """Issue #289: Versioned request then bare-ID cache hit must not retain stale version fields."""
+    mock_client = _mock_async_client([_success_response()])
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_issue_289_versioned_bare")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        # First: fetch versioned ID
+        response1 = await handle_citation_graph(
+            {"paper_id": "2401.12345v1", "max_citations": 50}
+        )
+        payload1 = json.loads(response1[0].text)
+        assert payload1["status"] == "success"
+        assert payload1["paper"]["requested_arxiv_id"] == "2401.12345v1"
+        assert payload1["paper"]["requested_version"] == "v1"
+        assert mock_client.get.call_count == 1
+
+        # Second: fetch bare ID (cache hit)
+        response2 = await handle_citation_graph(
+            {"paper_id": "2401.12345", "max_citations": 10}
+        )
+        payload2 = json.loads(response2[0].text)
+        assert payload2["status"] == "success"
+        # Bare ID must NOT have version fields
+        assert "requested_arxiv_id" not in payload2["paper"]
+        assert "requested_version" not in payload2["paper"]
+        # Still a cache hit (no new API call)
+        assert mock_client.get.call_count == 1
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_versioned_cache_hit_different_version():
+    """Versioned → different-version cache hit must report the current requested version."""
+    mock_client = _mock_async_client([_success_response()])
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_issue_289_different_version")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        # First: fetch v1
+        response1 = await handle_citation_graph(
+            {"paper_id": "2401.12345v1", "max_citations": 50}
+        )
+        payload1 = json.loads(response1[0].text)
+        assert payload1["status"] == "success"
+        assert payload1["paper"]["requested_arxiv_id"] == "2401.12345v1"
+        assert payload1["paper"]["requested_version"] == "v1"
+        assert mock_client.get.call_count == 1
+
+        # Second: fetch v2 (cache hit, should update metadata)
+        response2 = await handle_citation_graph(
+            {"paper_id": "2401.12345v2", "max_citations": 10}
+        )
+        payload2 = json.loads(response2[0].text)
+        assert payload2["status"] == "success"
+        # v2 request must report v2, not stale v1
+        assert payload2["paper"]["requested_arxiv_id"] == "2401.12345v2"
+        assert payload2["paper"]["requested_version"] == "v2"
+        # Still a cache hit (no new API call)
+        assert mock_client.get.call_count == 1
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_bare_then_versioned_cache_hit_metadata():
+    """Bare ID → versioned request cache hit must add version fields correctly."""
+    mock_client = _mock_async_client([_success_response()])
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_issue_289_bare_versioned")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        # First: fetch bare ID
+        response1 = await handle_citation_graph(
+            {"paper_id": "2401.12345", "max_citations": 50}
+        )
+        payload1 = json.loads(response1[0].text)
+        assert payload1["status"] == "success"
+        # Bare ID must not have version fields
+        assert "requested_arxiv_id" not in payload1["paper"]
+        assert "requested_version" not in payload1["paper"]
+        assert mock_client.get.call_count == 1
+
+        # Second: fetch versioned ID (cache hit)
+        response2 = await handle_citation_graph(
+            {"paper_id": "2401.12345v3", "max_citations": 10}
+        )
+        payload2 = json.loads(response2[0].text)
+        assert payload2["status"] == "success"
+        # Versioned request must add version fields
+        assert payload2["paper"]["requested_arxiv_id"] == "2401.12345v3"
+        assert payload2["paper"]["requested_version"] == "v3"
+        # Still a cache hit (no new API call)
+        assert mock_client.get.call_count == 1
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_cache_persistence_bare_after_restart():
+    """Issue #289: Bare-ID after simulated restart must not show stale version fields."""
+    mock_client = _mock_async_client([_success_response()])
+
+    with (
+        patch("httpx.AsyncClient", return_value=mock_client),
+        patch.object(citation_graph_module, "_cache_dir") as mock_cache_dir,
+    ):
+        cache_dir = Path("/tmp/test_issue_289_restart")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_cache_dir.return_value = cache_dir
+
+        # First: fetch versioned ID
+        response1 = await handle_citation_graph(
+            {"paper_id": "2401.12345v1", "max_citations": 50}
+        )
+        payload1 = json.loads(response1[0].text)
+        assert payload1["status"] == "success"
+        assert payload1["paper"]["requested_version"] == "v1"
+
+        # Simulate restart: new client instance
+        mock_client_restart = _mock_async_client([])
+        with patch("httpx.AsyncClient", return_value=mock_client_restart):
+            # Fetch bare ID after "restart"
+            response2 = await handle_citation_graph(
+                {"paper_id": "2401.12345", "max_citations": 10}
+            )
+            payload2 = json.loads(response2[0].text)
+            assert payload2["status"] == "success"
+            # Bare ID must not have stale version fields
+            assert "requested_arxiv_id" not in payload2["paper"]
+            assert "requested_version" not in payload2["paper"]
+            # Cache hit, no new API call
+            assert mock_client_restart.get.call_count == 0
+
+        # Clean up
+        shutil.rmtree(cache_dir, ignore_errors=True)
