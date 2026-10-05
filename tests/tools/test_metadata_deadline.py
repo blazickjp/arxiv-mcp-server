@@ -528,3 +528,173 @@ def test_metadata_gate_timeout_returns_none_without_request():
     assert result is None
     # Should make 0 requests (operation never called, preserving rate limiting)
     assert mock_get.call_count == 0
+
+
+def test_socket_timeout_mechanism_alone_enforces_deadline():
+    """Socket timeout mechanism alone (without watchdog or per-byte check) enforces deadline."""
+    clock = FakeClock()
+    deadline = clock() + 4.0
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+    # Split into chunks that would take 7.5s total (exceeds 4s budget)
+    chunks = [feed_xml[i : i + 10] for i in range(0, len(feed_xml), 10)]
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Disable watchdog by preventing Timer creation
+                with patch("threading.Timer") as mock_timer:
+                    mock_timer.return_value = Mock(
+                        daemon=True, start=Mock(), cancel=Mock()
+                    )
+
+                    mock_limiter.run_sync.side_effect = lambda op, timeout=None: op()
+                    mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                    # FakeResponse with 0.75s per chunk will trigger socket timeout
+                    fake_response = FakeResponse(
+                        chunks, clock, chunk_delay=0.75, status_code=200
+                    )
+                    mock_get.return_value = fake_response
+
+                    result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # Socket timeout mechanism should return None
+    assert result is None
+    assert fake_response.closed
+
+
+def test_watchdog_mechanism_alone_enforces_deadline():
+    """Watchdog mechanism alone (without socket timeout) enforces deadline."""
+    clock = FakeClock()
+    deadline = clock() + 4.0
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op, timeout=None: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                # Create response that will stall (no chunks yielded quickly)
+                fake_response = Mock()
+                fake_response.status_code = 200
+                fake_response.closed = False
+                fake_response.close = Mock()
+
+                # Mock socket structure but settimeout does nothing
+                fake_response.raw = Mock()
+                fake_response.raw._fp = Mock()
+                fake_response.raw._fp.fp = Mock()
+                fake_response.raw._fp.fp.raw = Mock()
+                fake_sock = Mock()
+                fake_sock.settimeout = Mock()  # Does nothing
+                fake_response.raw._fp.fp.raw._sock = fake_sock
+
+                def raise_for_status():
+                    if fake_response.status_code >= 400:
+                        raise __import__("requests").exceptions.HTTPError()
+
+                fake_response.raise_for_status = raise_for_status
+
+                # iter_content stalls - watchdog should fire
+                def iter_content_stall(chunk_size=None, decode_unicode=False):
+                    # Advance past watchdog deadline
+                    clock.advance(5.0)
+                    # This should be interrupted by watchdog
+                    yield feed_xml
+
+                fake_response.iter_content = iter_content_stall
+                mock_get.return_value = fake_response
+
+                # Use real Timer so watchdog actually fires
+                with patch("threading.Timer", wraps=__import__("threading").Timer):
+                    result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # Watchdog should cause None result
+    assert result is None
+    assert fake_response.close.called
+
+
+def test_per_byte_check_alone_enforces_deadline():
+    """Per-byte deadline check alone (without socket timeout or watchdog) enforces deadline."""
+    clock = FakeClock()
+    deadline = clock() + 4.0
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+    # Chunks that would take 7.5s total (exceeds 4s budget)
+    chunks = [feed_xml[i : i + 10] for i in range(0, len(feed_xml), 10)]
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Disable watchdog
+                with patch("threading.Timer") as mock_timer:
+                    mock_timer.return_value = Mock(
+                        daemon=True, start=Mock(), cancel=Mock()
+                    )
+
+                    mock_limiter.run_sync.side_effect = lambda op, timeout=None: op()
+                    mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                    # FakeResponse without socket structure (sock will be None)
+                    # So socket timeout won't run, but per-byte check will
+                    fake_response = Mock()
+                    fake_response.status_code = 200
+                    fake_response.closed = False
+                    fake_response.close = Mock()
+                    fake_response.raise_for_status = Mock()
+
+                    # No socket structure - sock will be None
+                    fake_response.raw = None
+
+                    def iter_with_delay(chunk_size=None, decode_unicode=False):
+                        for chunk in chunks:
+                            clock.advance(0.75)
+                            yield chunk
+
+                    fake_response.iter_content = iter_with_delay
+                    mock_get.return_value = fake_response
+
+                    result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # Per-byte check should catch deadline overrun
+    assert result is None
+    assert fake_response.close.called

@@ -866,7 +866,7 @@ async def test_download_pdf_metadata_lookup_500_no_url_leak(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_500_on_2406_id_not_406_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 500 on paper 2406.xxxxx must NOT be reported as 406 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -905,7 +905,7 @@ async def test_pdf_metadata_500_on_2406_id_not_406_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_500_on_2503_id_not_503_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 500 on paper 2503.xxxxx must NOT be reported as 503 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -944,7 +944,7 @@ async def test_pdf_metadata_500_on_2503_id_not_503_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_502_on_2406_id_not_406_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 502 on paper 2406.xxxxx must NOT be reported as 406 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -982,7 +982,7 @@ async def test_pdf_metadata_502_on_2406_id_not_406_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_502_on_2503_id_not_503_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 502 on paper 2503.xxxxx must NOT be reported as 503 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module

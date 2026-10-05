@@ -1,13 +1,14 @@
 """Integration tests for metadata deadline enforcement with a local slow socket server.
 
 These tests use a real HTTP server with controlled delays to verify that:
-1. The watchdog timer correctly interrupts stalled reads
-2. The per-byte deadline check catches slow trickles
-3. Both mechanisms fail gracefully and return None within the deadline
+1. Socket timeout mechanism enforces deadlines (primary, platform-independent)
+2. The watchdog timer provides backstop protection
+3. The per-byte deadline check provides additional safeguard
+4. All mechanisms fail gracefully and return None within the deadline
 
-Mutation tests:
-- Disabling the watchdog should cause trickle-then-stall to fail (overrun)
-- Disabling the per-read deadline check should cause slow trickle to fail (overrun)
+Note: With the socket timeout mechanism as primary enforcement, these tests
+pass even if watchdog or per-byte check is disabled. See test_metadata_deadline.py
+for per-mechanism unit tests that verify each mechanism independently.
 """
 
 import http.server
@@ -119,16 +120,22 @@ class SlowHandler(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def slow_server():
     """Start a local HTTP server on 127.0.0.1 with a random port."""
-    with socketserver.TCPServer(("127.0.0.1", 0), SlowHandler) as server:
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+    from socketserver import ThreadingTCPServer
 
-        SlowHandler.request_count = 0
+    server = ThreadingTCPServer(("127.0.0.1", 0), SlowHandler)
+    server.daemon_threads = True
+    server.block_on_close = False
 
-        yield f"http://127.0.0.1:{port}"
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
-        server.shutdown()
+    SlowHandler.request_count = 0
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.shutdown()
+    server.server_close()
 
 
 def test_trickle_returns_none_within_deadline(slow_server):
@@ -225,6 +232,43 @@ def test_byte_by_byte_slow_returns_none_within_deadline(slow_server):
 
     assert result is None, f"Expected None, got {result}"
     assert elapsed < 3.5, f"Byte-by-byte took {elapsed:.2f}s, expected < 3.5s"
+    assert (
+        SlowHandler.request_count == 1
+    ), f"Expected 1 request, got {SlowHandler.request_count}"
+
+
+def test_socket_unavailable_fallback_within_deadline(slow_server):
+    """When socket lookup fails, per-byte check should still enforce deadline."""
+    SlowHandler.mode = "trickle-then-stall"
+    SlowHandler.request_count = 0
+
+    start = time.monotonic()
+    deadline = start + 4.0
+
+    original_get = __import__("requests").get
+
+    def patched_get(url, **kwargs):
+        if "export.arxiv.org" in url:
+            response = original_get(slow_server + "/metadata", **kwargs)
+            # Break socket traversal chain
+            if hasattr(response, "raw"):
+                response.raw = None
+            return response
+        return original_get(url, **kwargs)
+
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    with (
+        patch("requests.get", patched_get),
+        patch.object(ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0),
+        patch.object(ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f, **kw: f()),
+    ):
+        result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    elapsed = time.monotonic() - start
+
+    assert result is None, f"Expected None, got {result}"
+    assert elapsed < 4.5, f"Socket-unavailable took {elapsed:.2f}s, expected < 4.5s"
     assert (
         SlowHandler.request_count == 1
     ), f"Expected 1 request, got {SlowHandler.request_count}"

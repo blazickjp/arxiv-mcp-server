@@ -1307,8 +1307,8 @@ def _fetch_arxiv_metadata(
             try:
                 read_timeout = float(settings.get_request_timeout())
                 for chunk in response.iter_content(chunk_size=1, decode_unicode=False):
-                    # Set socket timeout to remaining budget before each read
-                    if deadline is not None and sock is not None:
+                    # Per-byte deadline check (always runs, even if socket is unreachable)
+                    if deadline is not None:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             logger.info(
@@ -1316,10 +1316,12 @@ def _fetch_arxiv_metadata(
                             )
                             response.close()
                             return None
-                        try:
-                            sock.settimeout(max(0.05, min(read_timeout, remaining)))
-                        except Exception:
-                            pass
+                        # Set socket timeout to remaining budget before each read
+                        if sock is not None:
+                            try:
+                                sock.settimeout(max(0.05, min(read_timeout, remaining)))
+                            except Exception:
+                                pass
                     if chunk:
                         chunks.append(chunk)
             except (
