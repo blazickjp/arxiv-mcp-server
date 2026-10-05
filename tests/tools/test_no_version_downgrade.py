@@ -176,7 +176,7 @@ async def test_html_download_with_metadata_prevents_downgrade(
 
     mocker.patch("requests.get", side_effect=mock_get_with_feed)
     mock_limiter = mocker.patch.object(download_module, "ARXIV_RATE_LIMITER")
-    mock_limiter.run_sync.side_effect = lambda op: op()
+    mock_limiter.run_sync.side_effect = lambda op, timeout=None: op()
     mock_limiter.seconds_until_next_slot.return_value = 0.0
     mocker.patch("time.monotonic", return_value=1000.0)
 
