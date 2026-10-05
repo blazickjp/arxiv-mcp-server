@@ -613,125 +613,125 @@ Further analysis of model performance.
 """
 
 
-# Real HTML→text with author-year citations (no [n] markers)
-# Bare titles for main sections, ATX for appendices (realistic pattern)
-AUTHOR_YEAR_BIBLIOGRAPHY_STYLE = """Introduction
+# Real paper 2305.04388v2 (RLAIF) excerpt: two-line appendix + table cells after References
+# Trimmed from actual HTML→markdown conversion
+RLAIF_REAL_EXCERPT = """Introduction
 
-Large language models have revolutionized natural language processing.
-
-Background
-
-Prior work has explored various training approaches.
+RLHF has been shown to improve language model behavior.
 
 Methods
 
-We propose a novel architecture based on transformers.
-
-Experiments
-
-We evaluate on standard benchmarks.
+We evaluate RLAIF on summarization and helpful dialogue tasks.
 
 Results
 
-Our method achieves state-of-the-art performance.
+RLAIF achieves comparable or better performance than RLHF.
 
 References
 
-Vaswani
+Ouyang
 ,
-A.
+Long
 ,
-Shazeer
+Hillman
 ,
-N.
+Jeff
 ,
-Parmar
+Leike
 ,
-N.
+Jan
 ,
-Uszkoreit
+Xu
 ,
-J.
+Tao
 ,
-Jones
+Schulman
 ,
-L.
+John
 ,
-Gomez
+Ziegler
 ,
-A. N.
-,
-Kaiser
-,
-L.
-,
-and
-Polosukhin
-,
-I.
-Attention is all you need.
+Daniel
+.
+Training language models to follow instructions with human feedback.
 In
 Advances in Neural Information Processing Systems
-, pp. 5998–6008,
-2017
+, volume 35, pp. 27730–27744,
+2022
 .
 
-Brown
+Stiennon
 ,
-T. B.
+Nisan
 ,
-Mann
+Ouyang
 ,
-B.
+Long
 ,
-Ryder
+Wu
 ,
-N.
+Jeffrey
 ,
-Subbiah
+Ziegler
 ,
-M.
+Daniel
 ,
-Kaplan
+Lowe
 ,
-J.
+Ryan
 ,
-Dhariwal
+Voss
 ,
-P.
+Chelsea
 ,
-Neelakantan
+Radford
 ,
-A.
+Alec
 ,
-Shyam
+Amodei
 ,
-P.
+Dario
 ,
-Sastry
+Christiano
 ,
-G.
-,
-Askell
-,
-A.
-, et al.
-Language models are few-shot learners.
+Paul F
+.
+Learning to summarize with human feedback.
 In
 Advances in Neural Information Processing Systems
-, volume 33, pp. 1877–1901,
+, volume 33, pp. 3008–3021,
 2020
 .
 
-# Appendix
+Dataset
 
-## A Hyperparameters
+Harmless
 
-Detailed hyperparameters and training procedures.
+Helpful
 
-## B Additional Results
+Split
 
-Additional experimental results on held-out test sets.
+FS (Ans. A)
+
+Failed
+
+Base
+
+Snarks
+
+Web Of Lies
+
+Appendix A
+
+Prompting Details
+
+We use the following prompts for our experiments.
+
+Appendix B
+
+Additional Results
+
+Extended experimental results and ablations.
 """
 
 
@@ -2163,55 +2163,52 @@ More details.
     assert "Appendix content" not in biblio_body
 
 
-def test_author_year_bibliography_with_appendices():
-    """Regression #288: Real HTML→text author-year citations don't become sections.
+def test_rlaif_real_two_line_appendix_and_table_filtering():
+    """Regression #288: Real RLAIF paper with two-line appendices and table cells.
 
-    This fixture mirrors actual arXiv HTML→markdown output with author-year
-    bibliography (no [n] markers). Author names, journal titles, years, and
-    other bibliography components must not become outline sections, but
-    appendices after References must be included.
+    Real HTML→markdown renders appendices as TWO lines: 'Appendix A' then title.
+    Table cells after References ('Failed', 'Snarks', etc.) must not become sections.
     """
-    sections = parse_markdown_sections(AUTHOR_YEAR_BIBLIOGRAPHY_STYLE)
+    sections = parse_markdown_sections(RLAIF_REAL_EXCERPT)
     titles = [s.title for s in sections]
 
     # Core sections present
     assert "Introduction" in titles
-    assert "Background" in titles
     assert "Methods" in titles
-    assert "Experiments" in titles
     assert "Results" in titles
     assert "References" in titles
 
-    # Appendix and subsections after References included
-    assert "Appendix" in titles
-    assert "A Hyperparameters" in titles
-    assert "B Additional Results" in titles
+    # Two-line appendices recognized and combined
+    assert "Appendix A Prompting Details" in titles
+    assert "Appendix B Additional Results" in titles
 
-    # Author names not sections
-    assert not any("Vaswani" in t for t in titles)
-    assert not any("Brown" in t for t in titles)
-    assert not any("Shazeer" in t for t in titles)
-    assert not any("Mann" in t for t in titles)
-    assert not any("Parmar" in t for t in titles)
-    assert not any("Ryder" in t for t in titles)
+    # Table cells after References NOT sections
+    assert "Failed" not in titles
+    assert "FS (Ans. A)" not in titles
+    assert "Snarks" not in titles
+    assert "Web Of Lies" not in titles
+    assert "Dataset" not in titles
+    assert "Harmless" not in titles
+    assert "Helpful" not in titles
+    assert "Split" not in titles
+    assert "Base" not in titles
 
-    # Journal/venue names not sections
-    assert not any("Neural Information Processing Systems" in t for t in titles)
-    assert not any("Advances in Neural" in t for t in titles)
-
-    # Years not sections
-    assert not any("2017" in t for t in titles)
+    # Author names and years not sections
+    assert not any("Ouyang" in t for t in titles)
+    assert not any("Stiennon" in t for t in titles)
+    assert not any("2022" in t for t in titles)
     assert not any("2020" in t for t in titles)
 
-    # Paper titles not sections
-    assert not any("Attention is all you need" in t for t in titles)
-    assert not any("few-shot learners" in t for t in titles)
-
-    # References section ends at Appendix
+    # References section ends at first appendix (includes table cells before appendix)
     refs = next(s for s in sections if s.title == "References")
-    refs_body = AUTHOR_YEAR_BIBLIOGRAPHY_STYLE[refs.start : refs.end]
-    assert "Vaswani" in refs_body
-    assert "Brown" in refs_body
-    # Appendix not in References
-    assert "# Appendix" not in refs_body
-    assert "Hyperparameters" not in refs_body
+    refs_body = RLAIF_REAL_EXCERPT[refs.start : refs.end]
+    assert "Ouyang" in refs_body
+    assert "Stiennon" in refs_body
+    # Table cells between References and Appendix are in References section
+    assert "Failed" in refs_body
+    # But appendix content is not
+    assert "Prompting Details" not in refs_body
+
+    # First appendix comes after all the table noise
+    first_appendix = next(s for s in sections if "Appendix" in s.title)
+    assert first_appendix.start >= refs.end

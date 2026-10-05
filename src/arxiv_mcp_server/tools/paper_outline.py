@@ -57,6 +57,22 @@ _FENCE_RE = re.compile(r"^```")
 _MAX_BARE_TITLE_CHARS = 80
 # Stop collecting headings once References/Bibliography is seen (ref-line pollution).
 _OUTLINE_TERMINATORS = frozenset({"reference", "references", "bibliography"})
+# Appendix-style section markers (after References)
+_APPENDIX_MARKERS = frozenset(
+    {
+        "appendix",
+        "supplementary",
+        "supplementary material",
+        "acknowledgement",
+        "acknowledgements",
+        "acknowledgment",
+        "acknowledgments",
+    }
+)
+# Pattern for lettered appendix (A, B, C, etc.) or numbered (A.1, A.2, B.1, etc.)
+_APPENDIX_LETTER_RE = re.compile(r"^([A-H])(?:\.(\d+(?:\.\d+)*))?$")
+# Pattern for "Appendix X" where X is A-H
+_APPENDIX_PREFIX_RE = re.compile(r"^(Appendix|Supplementary)\s+([A-H])$", re.IGNORECASE)
 # Top-level section indices stay small; years like 2023 USENIX… are common FPs.
 _MAX_SECTION_INDEX = 99
 # Minor words allowed lowercase inside otherwise Title-Case headings.
@@ -558,6 +574,108 @@ def _is_bare_section_title_line(line: str) -> bool:
     return remainder.strip().casefold() == candidate.casefold()
 
 
+def _is_appendix_style_heading(line: str) -> bool:
+    """True if line looks like an appendix marker (Appendix, A, A.1, etc.)."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+
+    # Check for bare "Appendix", "Supplementary", etc.
+    normalized = _normalize_heading_title(stripped)
+    if normalized.casefold() in _APPENDIX_MARKERS:
+        return True
+
+    # Check for "Appendix A" / "Supplementary B"
+    if _APPENDIX_PREFIX_RE.match(stripped):
+        return True
+
+    # Check for lettered/numbered appendix (A, A.1, B, B.2, etc.)
+    if _APPENDIX_LETTER_RE.match(stripped):
+        return True
+
+    return False
+
+
+def _match_two_line_appendix(
+    first_line: str,
+    second_line: str,
+) -> tuple[int, str] | None:
+    """Match two-line appendix pattern: 'Appendix B' followed by title.
+
+    Returns (level, combined_title) or None.
+    Level 1 for 'Appendix B Title', level 2 for 'B.1 Title'.
+    """
+    first = first_line.strip()
+    second = second_line.strip()
+
+    if not first or not second:
+        return None
+
+    # Check if first line is an appendix marker
+    if not _is_appendix_style_heading(first):
+        return None
+
+    # Second line should not be another heading marker or look like a table cell
+    if _ATX_HEADING_RE.match(second):
+        return None
+    if _NUMBERED_HEADING_RE.match(second):
+        return None
+    if _is_appendix_style_heading(second):
+        return None
+
+    # Second line should look like a title (Title Case or known phrase)
+    if not _title_looks_like_heading(
+        second,
+        line_len=len(second),
+        allow_sentence_case=False,
+        apply_content_guards=True,
+    ):
+        return None
+
+    # Determine level based on first line pattern
+    # "Appendix B" / "Supplementary A" -> level 1
+    # "A" / "B" -> level 1
+    # "A.1" / "B.2" -> level 2
+    letter_match = _APPENDIX_LETTER_RE.match(first)
+    if letter_match:
+        letter = letter_match.group(1)
+        subsection = letter_match.group(2)
+        if subsection:
+            # A.1, B.2 -> level 2
+            level = min(6, 1 + subsection.count(".") + 1)
+        else:
+            # A, B -> level 1
+            level = 1
+        # Combine letter and title
+        title = f"{letter} {second}" if not subsection else f"{first} {second}"
+        return level, _normalize_heading_title(title)
+
+    prefix_match = _APPENDIX_PREFIX_RE.match(first)
+    if prefix_match:
+        # "Appendix B Title" -> level 1
+        prefix = prefix_match.group(1)
+        letter = prefix_match.group(2)
+        title = f"{prefix} {letter} {second}"
+        return 1, _normalize_heading_title(title)
+
+    # Bare "Appendix" / "Supplementary" + title
+    normalized = _normalize_heading_title(first)
+    if normalized.casefold() in _APPENDIX_MARKERS:
+        title = f"{first} {second}"
+        return 1, _normalize_heading_title(title)
+
+    return None
+
+
+def _is_post_references_mode(raw: list[tuple[int, str, str, int]]) -> bool:
+    """True if we've seen References/Bibliography and should be in appendix-only mode."""
+    if not raw:
+        return False
+    # Check if the last section added was References/Bibliography
+    last_title = raw[-1][2]
+    return _is_outline_terminator(last_title)
+
+
 def _bare_title_has_section_body(
     lines_meta: list[tuple[int, str]], after_index: int
 ) -> bool:
@@ -613,6 +731,8 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     in_fence = False
     index = 0
+    post_references = False  # Track if we're after References/Bibliography
+
     while index < len(lines_meta):
         if len(raw) >= MAX_SECTION_COUNT:
             break
@@ -630,6 +750,27 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         matched = _match_heading_line(logical)
         consumed = 1
         is_split_numbered = False
+        is_two_line_appendix = False
+
+        # Check for two-line appendix pattern (Appendix B / title)
+        # Look ahead, skipping blank lines
+        if matched is None:
+            peek = index + 1
+            while peek < len(lines_meta):
+                _, peek_line = lines_meta[peek]
+                peek_logical = _logical_line(peek_line)
+                if not peek_logical.strip():
+                    peek += 1
+                    continue
+                if peek_logical.lstrip(" \t").startswith("```"):
+                    break
+                # Try two-line appendix pattern
+                appendix_match = _match_two_line_appendix(logical, peek_logical)
+                if appendix_match is not None:
+                    matched = appendix_match
+                    consumed = peek - index + 1
+                    is_two_line_appendix = True
+                break
 
         if matched is None:
             # Peek across blank lines for a title after a lone section number.
@@ -652,21 +793,47 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
         if matched is not None:
             level, title = matched
+
+            # In post-References mode, only accept appendix-style headings
+            # or ATX/numbered headings at level 1 (same as main sections)
+            if post_references and not is_two_line_appendix:
+                # Check if this is an appendix-style title
+                normalized = _normalize_heading_title(title)
+                is_appendix_title = normalized.casefold() in _APPENDIX_MARKERS
+
+                # Also accept ATX headings (# markers) or numbered headings at top level
+                is_atx = _ATX_HEADING_RE.match(logical.strip()) is not None
+                is_numbered_top = (
+                    _NUMBERED_HEADING_RE.match(logical.strip()) is not None
+                    and level == 1
+                )
+
+                # Reject if not appendix-style and not a high-level heading
+                if not is_appendix_title and not is_atx and not is_numbered_top:
+                    index += consumed
+                    continue
+
             # Drop table-header false positives: bare ``Method`` between short
             # single-token cells (Model / Method / HellaS) is not a section.
             # Keep References/Bibliography even when the next line is ``[1]``.
             if (
                 _is_bare_section_title_line(logical)
                 and not _is_outline_terminator(title)
+                and not is_two_line_appendix
                 and not _bare_title_has_section_body(lines_meta, index + consumed)
             ):
                 index += 1
                 continue
+
             counters[level - 1] += 1
             for counter_index in range(level, 6):
                 counters[counter_index] = 0
             section_id = ".".join(str(value) for value in counters[:level])
             raw.append((level, section_id, title, start_offset))
+
+            # Enter post-References mode after seeing References/Bibliography
+            if _is_outline_terminator(title):
+                post_references = True
 
             # Track the paper's numbered sections (for sequence validation)
             # Extract the actual section number from inline/split numbered headings
