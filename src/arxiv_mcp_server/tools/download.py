@@ -1295,6 +1295,8 @@ def _fetch_arxiv_metadata(
                                 try:
                                     import socket
 
+                                    # Set very short timeout before shutdown to force immediate recv abort on Windows
+                                    sock.settimeout(0.05)
                                     sock.shutdown(socket.SHUT_RDWR)
                                     sock.close()
                                 except Exception:

@@ -262,9 +262,9 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Set large timeout (300s) instead of None to provide backstop without interfering
+            # Remove requests timeout to test only thread backstop mechanism
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = (300.0, 300.0)
+            kwargs_copy["timeout"] = None
             response = original_get(slow_server + "/metadata", **kwargs_copy)
             # Replace raw with a mock that makes sock lookup return None but keeps streaming working
             original_raw = response.raw
@@ -315,9 +315,9 @@ def test_socket_timeout_mechanism_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Set large timeout (300s) instead of None to provide backstop without interfering
+            # Remove requests timeout to test only socket timeout mechanism
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = (300.0, 300.0)
+            kwargs_copy["timeout"] = None
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
@@ -365,9 +365,9 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Set large timeout (300s) instead of None to provide backstop without interfering
+            # Remove requests timeout to test only watchdog mechanism
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = (300.0, 300.0)
+            kwargs_copy["timeout"] = None
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
@@ -391,19 +391,11 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
         elapsed = time.monotonic() - start
 
         # Watchdog should enforce deadline at ~3.2s (deadline - 0.8)
-        # Windows: Timer.close() from background thread doesn't immediately interrupt
-        # blocking iter_content, causing ~6.5s lag (still well under 25s stall)
-        import platform
-
+        # With sock.settimeout(0.05) before shutdown, blocking recv aborts immediately on all platforms
         assert result is None, f"Expected None, got {result}"
-        if platform.system() == "Windows":
-            assert (
-                2.5 <= elapsed < 8.0
-            ), f"Watchdog took {elapsed:.2f}s, expected 2.5-8.0s on Windows (25s stall caught)"
-        else:
-            assert (
-                2.5 <= elapsed < 4.5
-            ), f"Watchdog took {elapsed:.2f}s, expected 2.5-4.5s on Unix"
+        assert (
+            2.5 <= elapsed < 4.5
+        ), f"Watchdog took {elapsed:.2f}s, expected 2.5-4.5s"
         assert SlowHandler.request_count == 1
     finally:
         os.environ.pop("_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT", None)
@@ -424,9 +416,9 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Set large timeout (300s) instead of None to provide backstop without interfering
+            # Remove requests timeout to test only per-byte check mechanism
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = (300.0, 300.0)
+            kwargs_copy["timeout"] = None
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
