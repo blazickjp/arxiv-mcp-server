@@ -262,9 +262,9 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Remove requests timeout to test only thread backstop mechanism
+            # Set large timeout (300s) instead of None to provide backstop without interfering
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = None
+            kwargs_copy["timeout"] = (300.0, 300.0)
             response = original_get(slow_server + "/metadata", **kwargs_copy)
             # Replace raw with a mock that makes sock lookup return None but keeps streaming working
             original_raw = response.raw
@@ -315,9 +315,9 @@ def test_socket_timeout_mechanism_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Remove requests timeout to test only socket timeout mechanism
+            # Set large timeout (300s) instead of None to provide backstop without interfering
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = None
+            kwargs_copy["timeout"] = (300.0, 300.0)
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
@@ -365,9 +365,9 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Remove requests timeout to test only watchdog mechanism
+            # Set large timeout (300s) instead of None to provide backstop without interfering
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = None
+            kwargs_copy["timeout"] = (300.0, 300.0)
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
@@ -424,9 +424,9 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            # Remove requests timeout to test only per-byte check mechanism
+            # Set large timeout (300s) instead of None to provide backstop without interfering
             kwargs_copy = kwargs.copy()
-            kwargs_copy["timeout"] = None
+            kwargs_copy["timeout"] = (300.0, 300.0)
             return original_get(slow_server + "/metadata", **kwargs_copy)
         return original_get(url, **kwargs)
 
