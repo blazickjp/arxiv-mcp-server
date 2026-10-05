@@ -1218,10 +1218,11 @@ def _fetch_arxiv_metadata(
 
                 # Stream response body with per-chunk deadline checks
                 # (requests read timeout is max gap between chunks, not total time)
+                # Use small chunk_size to ensure frequent deadline checks
                 chunks = []
                 try:
                     for chunk in response.iter_content(
-                        chunk_size=8192, decode_unicode=False
+                        chunk_size=64, decode_unicode=False
                     ):
                         if deadline is not None and time.monotonic() >= deadline:
                             logger.info(
