@@ -2639,17 +2639,20 @@ Real Appendix
 
 
 def test_deepseek_r1_lowercase_reference_not_accepted():
-    """Regression blocker: DeepSeek-R1 2501.12948 has lowercase 'reference' in prompt.
+    """Regression blocker: DeepSeek-R1 2501.12948 single-token runs and lowercase 'reference'.
 
-    The real paper has a prompt template rendered one word per line, so a lone
-    line 'reference' appears inside Appendix B.3.2 at offset ~71145. Main already
-    accepted it as a level-1 heading and stopped. The PR must reject lowercase
-    'reference' and only accept capitalized 'References'.
+    The real paper has prompt templates rendered one word per line. Several problems:
+    1. Lowercase 'reference' at offset ~71145 inside Appendix B.3.2
+    2. Single-token runs containing capitalized 'Reference' and 'conclusion'
+    3. Bibliography back-references like 'Appendix F\n.' must not become headings
 
-    Additionally, the bibliography has back-references like 'Appendix F\n.' that
-    must not become headings (punctuation-only titles rejected).
+    The PR must:
+    - Reject lowercase 'reference'/'references'
+    - Detect and skip single-token-per-line runs (except References/Bibliography)
+    - Reject punctuation-only appendix titles
+    - Allow References to start new section even in post-References mode (belt and braces)
     """
-    # Simplified excerpt with the problematic patterns
+    # Comprehensive excerpt showing all problematic patterns
     md = """# Introduction
 
 Introduction body.
@@ -2686,7 +2689,40 @@ evaluation
 
 You have to carefully analyze the reference answer.
 
-# References
+# Appendix H
+
+Detailed Analysis.
+
+## H.3 Conclusion
+
+Prompt:
+You
+are
+a
+helpful
+assistant
+.
+Please
+provide
+a
+comprehensive
+answer
+.
+
+Task
+:
+Analyze
+the
+Reference
+data
+.
+
+The
+conclusion
+is
+that the model performs well.
+
+References
 
 AI@Meta
 Llama 3.1 model card
@@ -2713,8 +2749,22 @@ Appendix H
     # Lowercase 'reference' should NOT be a section
     assert "reference" not in titles, "Lowercase 'reference' should be rejected"
 
-    # Capitalized References should be accepted
+    # Single-token run words should NOT become sections
+    assert (
+        "Reference" not in titles
+    ), "Capitalized 'Reference' in token run should be rejected"
+    assert "conclusion" not in titles, "Token 'conclusion' should be rejected"
+
+    # Capitalized References should be accepted as its own section
     assert "References" in titles, "Capitalized 'References' should be accepted"
+    refs_section = next(s for s in sections if s.title == "References")
+
+    # H.3 Conclusion should end before References starts (belt and braces test)
+    h3_section = next((s for s in sections if s.title == "H.3 Conclusion"), None)
+    assert h3_section is not None, "H.3 Conclusion should exist"
+    assert (
+        h3_section.end <= refs_section.start
+    ), "H.3 should end before References starts"
 
     # Bibliography back-references 'Appendix F\n.' should NOT become headings
     appendix_f_count = sum(
@@ -2726,13 +2776,42 @@ Appendix H
     ), f"Bibliography back-references became headings: {titles}"
 
     # References should run to EOF (no appendices after it in this paper)
-    refs_section = next(s for s in sections if s.title == "References")
-    # End should be at document end
     assert refs_section.end == len(md), "References should run to EOF"
 
     # Pre-References appendices should be present
     assert "Appendix A" in titles
     assert "Appendix B" in titles
+    assert "Appendix H" in titles
+
+
+def test_punctuation_only_appendix_title_rejected():
+    """Regression guard: bibliography back-references like 'Appendix F\n.' must not become headings.
+
+    DeepSeek-R1 2501.12948 has 'Appendix F\n.' in the References section.
+    The two-line appendix pattern must reject punctuation-only titles.
+    """
+    md = """# References
+
+AI@Meta
+Llama 3.1 model card
+.
+External Links:
+Link
+Cited by:
+Appendix F
+.
+E. Akyürek et al.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Should only have References
+    assert titles == ["References"], f"Got unexpected sections: {titles}"
+
+    # 'Appendix F' with punctuation-only title '.' should NOT be a section
+    assert not any(
+        "Appendix F" in t for t in titles
+    ), "Punctuation-only appendix title should be rejected"
 
 
 @pytest.mark.asyncio

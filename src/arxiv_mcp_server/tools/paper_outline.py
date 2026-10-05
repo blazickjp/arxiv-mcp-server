@@ -56,7 +56,7 @@ _ROMAN_INLINE_RE = re.compile(rf"^({_ROMAN_NUMERAL}(?:-[A-Z])*)[ \t]+(.+?)$")
 _FENCE_RE = re.compile(r"^```")
 _MAX_BARE_TITLE_CHARS = 80
 # Stop collecting headings once References/Bibliography is seen (ref-line pollution).
-_OUTLINE_TERMINATORS = frozenset({"reference", "references", "bibliography"})
+_OUTLINE_TERMINATORS = frozenset({"references", "bibliography"})
 # Post-References whitelist: exact standalone titles allowed after References/Bibliography
 _POST_REFERENCES_ALLOWLIST = frozenset(
     {
@@ -370,6 +370,56 @@ def _roman_heading(marker: str, title: str, *, line_len: int) -> tuple[int, str]
         return None
     level = min(6, 1 + marker.strip().count("-"))
     return level, _normalize_heading_title(title.strip())
+
+
+def _is_in_single_token_run(lines_meta: list[tuple[int, str]], index: int) -> bool:
+    """Check if a line is part of a single-token-per-line run (e.g., prompt templates).
+
+    Returns True if the line at index is a single token AND at least 4 of the 6
+    surrounding lines (3 before, 3 after) are also single tokens or punctuation.
+    This filters out prompt templates like DeepSeek-R1's word-per-line rendering
+    while preserving real section headings in normal prose.
+
+    Args:
+        lines_meta: List of (offset, line) tuples.
+        index: Index of the line to check.
+
+    Returns:
+        True if the line is part of a single-token run.
+    """
+    _, line = lines_meta[index]
+    logical = _logical_line(line)
+    stripped = logical.strip()
+
+    # Check if current line is a single token
+    tokens = re.findall(r"\w+", stripped)
+    if len(tokens) != 1:
+        return False
+
+    # Check neighboring lines (3 before, 3 after)
+    neighbors = []
+    for offset in range(-3, 4):
+        if offset == 0:
+            continue
+        neighbor_idx = index + offset
+        if 0 <= neighbor_idx < len(lines_meta):
+            _, neighbor_line = lines_meta[neighbor_idx]
+            neighbor_logical = _logical_line(neighbor_line)
+            neighbor_stripped = neighbor_logical.strip()
+            # Count tokens
+            neighbor_tokens = re.findall(r"\w+", neighbor_stripped)
+            # Single token or punctuation-only line
+            if len(neighbor_tokens) <= 1:
+                neighbors.append(True)
+            else:
+                neighbors.append(False)
+
+    # At least 4 of the 6 neighbors should be single-token or punctuation
+    if len(neighbors) >= 6:
+        single_token_count = sum(neighbors)
+        return single_token_count >= 4
+
+    return False
 
 
 def _match_heading_line(line: str) -> tuple[int, str] | None:
@@ -839,8 +889,21 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         if matched is not None:
             level, title = matched
 
-            # In post-References mode, apply strict whitelist
-            if post_references and not is_two_line_appendix:
+            # Reject single-token lines in single-token-per-line runs (e.g., prompt templates)
+            # Exception: References/Bibliography headings are always accepted to start new sections
+            if not _is_outline_terminator(title):
+                if _is_in_single_token_run(lines_meta, index):
+                    matched = None
+                    index += consumed
+                    continue
+
+            # Belt and braces: even in post-References mode, a real capitalized
+            # References/Bibliography heading starts its own section
+            if post_references and _is_outline_terminator(title):
+                # Allow it through - it closes the previous appendix
+                pass
+            # In post-References mode, apply strict whitelist for other headings
+            elif post_references and not is_two_line_appendix:
                 # Use strict whitelist: only accept explicit appendix patterns
                 if not _is_post_references_accepted(title, logical, opened_appendices):
                     # Reject everything else after References
