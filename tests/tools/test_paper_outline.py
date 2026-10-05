@@ -558,6 +558,10 @@ Boston, MA
 ,
 pp. 551–564
 .
+
+Appendix
+
+Additional implementation details and proofs.
 """
 
 
@@ -609,11 +613,134 @@ Further analysis of model performance.
 """
 
 
+# Real HTML→text with author-year citations (no [n] markers)
+# Bare titles for main sections, ATX for appendices (realistic pattern)
+AUTHOR_YEAR_BIBLIOGRAPHY_STYLE = """Introduction
+
+Large language models have revolutionized natural language processing.
+
+Background
+
+Prior work has explored various training approaches.
+
+Methods
+
+We propose a novel architecture based on transformers.
+
+Experiments
+
+We evaluate on standard benchmarks.
+
+Results
+
+Our method achieves state-of-the-art performance.
+
+References
+
+Vaswani
+,
+A.
+,
+Shazeer
+,
+N.
+,
+Parmar
+,
+N.
+,
+Uszkoreit
+,
+J.
+,
+Jones
+,
+L.
+,
+Gomez
+,
+A. N.
+,
+Kaiser
+,
+L.
+,
+and
+Polosukhin
+,
+I.
+Attention is all you need.
+In
+Advances in Neural Information Processing Systems
+, pp. 5998–6008,
+2017
+.
+
+Brown
+,
+T. B.
+,
+Mann
+,
+B.
+,
+Ryder
+,
+N.
+,
+Subbiah
+,
+M.
+,
+Kaplan
+,
+J.
+,
+Dhariwal
+,
+P.
+,
+Neelakantan
+,
+A.
+,
+Shyam
+,
+P.
+,
+Sastry
+,
+G.
+,
+Askell
+,
+A.
+, et al.
+Language models are few-shot learners.
+In
+Advances in Neural Information Processing Systems
+, volume 33, pp. 1877–1901,
+2020
+.
+
+# Appendix
+
+## A Hyperparameters
+
+Detailed hyperparameters and training procedures.
+
+## B Additional Results
+
+Additional experimental results on held-out test sets.
+"""
+
+
 def test_outline_stops_at_references_and_keeps_method_subsections():
-    """Regression for #229: ExpertFlow-style HTML→text outlines.
+    """Regression for #229 and #288: ExpertFlow-style HTML→text outlines.
 
     Split ``3.`` / ``Method`` / ``3.1.`` lines must yield nested subsections,
-    and bibliography venue lines must not become outline sections.
+    bibliography venue lines must not become outline sections (#229), and
+    appendices after References must be included (#288).
     """
     sections = parse_markdown_sections(EXPERTFLOW_HTML_STYLE)
     titles = [s.title for s in sections]
@@ -621,8 +748,15 @@ def test_outline_stops_at_references_and_keeps_method_subsections():
     assert "System Design Overview" in titles
     assert "Routing Path Predictor (RPP)" in titles
     assert "References" in titles
+
+    # Appendix after References is now included (#288)
+    assert "Appendix" in titles
+    assert titles.index("References") < titles.index("Appendix")
+
     # Bibliography venue lines should not become sections (#229)
     assert not any("USENIX" in t for t in titles)
+    assert not any("Aminabadi" in t for t in titles)
+    assert not any("2022" in t for t in titles)
 
     method = next(s for s in sections if s.title == "Method")
     assert method.level == 1
@@ -2027,3 +2161,57 @@ More details.
     assert "2017 NeurIPS" in biblio_body
     # Appendix not in Bibliography section
     assert "Appendix content" not in biblio_body
+
+
+def test_author_year_bibliography_with_appendices():
+    """Regression #288: Real HTML→text author-year citations don't become sections.
+
+    This fixture mirrors actual arXiv HTML→markdown output with author-year
+    bibliography (no [n] markers). Author names, journal titles, years, and
+    other bibliography components must not become outline sections, but
+    appendices after References must be included.
+    """
+    sections = parse_markdown_sections(AUTHOR_YEAR_BIBLIOGRAPHY_STYLE)
+    titles = [s.title for s in sections]
+
+    # Core sections present
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Methods" in titles
+    assert "Experiments" in titles
+    assert "Results" in titles
+    assert "References" in titles
+
+    # Appendix and subsections after References included
+    assert "Appendix" in titles
+    assert "A Hyperparameters" in titles
+    assert "B Additional Results" in titles
+
+    # Author names not sections
+    assert not any("Vaswani" in t for t in titles)
+    assert not any("Brown" in t for t in titles)
+    assert not any("Shazeer" in t for t in titles)
+    assert not any("Mann" in t for t in titles)
+    assert not any("Parmar" in t for t in titles)
+    assert not any("Ryder" in t for t in titles)
+
+    # Journal/venue names not sections
+    assert not any("Neural Information Processing Systems" in t for t in titles)
+    assert not any("Advances in Neural" in t for t in titles)
+
+    # Years not sections
+    assert not any("2017" in t for t in titles)
+    assert not any("2020" in t for t in titles)
+
+    # Paper titles not sections
+    assert not any("Attention is all you need" in t for t in titles)
+    assert not any("few-shot learners" in t for t in titles)
+
+    # References section ends at Appendix
+    refs = next(s for s in sections if s.title == "References")
+    refs_body = AUTHOR_YEAR_BIBLIOGRAPHY_STYLE[refs.start : refs.end]
+    assert "Vaswani" in refs_body
+    assert "Brown" in refs_body
+    # Appendix not in References
+    assert "# Appendix" not in refs_body
+    assert "Hyperparameters" not in refs_body
