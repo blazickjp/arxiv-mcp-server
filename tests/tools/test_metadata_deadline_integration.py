@@ -359,9 +359,9 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            response = original_get(slow_server + "/metadata", **kwargs)
             # Keep real sock - just disable the other mechanisms
             return original_get(slow_server + "/metadata", **kwargs)
+        return original_get(url, **kwargs)
 
     from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
 
@@ -384,7 +384,7 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
 
         # Watchdog should enforce deadline at ~3.2s (deadline - 0.8)
         assert result is None, f"Expected None, got {result}"
-        assert elapsed < 4.5, f"Watchdog took {elapsed:.2f}s, expected < 4.5s"
+        assert 2.5 <= elapsed < 4.5, f"Watchdog took {elapsed:.2f}s, expected 2.5-4.5s"
         assert SlowHandler.request_count == 1
     finally:
         os.environ.pop("_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT", None)
@@ -405,9 +405,9 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
 
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
-            response = original_get(slow_server + "/metadata", **kwargs)
             # Keep real sock - just disable the other mechanisms
             return original_get(slow_server + "/metadata", **kwargs)
+        return original_get(url, **kwargs)
 
     from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
 
