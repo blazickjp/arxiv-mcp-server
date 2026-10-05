@@ -1312,14 +1312,23 @@ def _fetch_arxiv_metadata(
             # Stream response body with dynamic socket timeout and per-byte deadline checks.
             # Set socket timeout before each read to remaining budget (platform-independent).
             # Watchdog as backstop; chunk_size=1 ensures per-byte deadline checks.
-            # When socket is unreachable, run streaming in a daemon thread with hard deadline.
+            # On Windows, use thread-abandon even when sock exists (watchdog can't interrupt recv reliably).
+            # When socket is unreachable, use thread-abandon on all platforms.
             chunks = []
 
-            # If socket is unreachable, use thread-based backstop
+            # Use thread-based backstop on Windows or when socket is unreachable
             skip_thread_backstop = __import__("os").environ.get(
                 "_ARXIV_MCP_TEST_SKIP_THREAD_BACKSTOP"
             )
-            if sock is None and deadline is not None and not skip_thread_backstop:
+            import platform
+
+            use_thread_backstop = (
+                deadline is not None
+                and not skip_thread_backstop
+                and (sock is None or platform.system() == "Windows")
+            )
+
+            if use_thread_backstop:
                 # Hard backstop: run streaming read in daemon thread, abandon at deadline
                 result_container = {"chunks": None, "error": None}
 
