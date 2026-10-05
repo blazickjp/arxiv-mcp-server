@@ -1263,7 +1263,9 @@ def _fetch_arxiv_metadata(
                 # Extract metadata fields
                 def get_text(elem, path):
                     found = elem.find(path, ns)
-                    return found.text.strip() if found is not None and found.text else ""
+                    return (
+                        found.text.strip() if found is not None and found.text else ""
+                    )
 
                 title = get_text(entry, "atom:title")
                 summary = get_text(entry, "atom:summary")
@@ -1281,7 +1283,9 @@ def _fetch_arxiv_metadata(
                 # Extract primary category
                 primary_cat_elem = entry.find("arxiv:primary_category", ns)
                 primary_category = (
-                    primary_cat_elem.get("term", "") if primary_cat_elem is not None else ""
+                    primary_cat_elem.get("term", "")
+                    if primary_cat_elem is not None
+                    else ""
                 )
 
                 # Extract all categories
