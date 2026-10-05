@@ -263,9 +263,17 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
             response = original_get(slow_server + "/metadata", **kwargs)
-            # Hide _fp to break socket traversal (not None, just missing)
-            if hasattr(response.raw, "_fp"):
-                delattr(response.raw, "_fp")
+            # Replace raw with a mock that makes sock lookup return None but keeps streaming working
+            original_raw = response.raw
+            mock_raw = Mock()
+            mock_raw._fp = Mock()
+            mock_raw._fp.fp = Mock()
+            mock_raw._fp.fp.raw = Mock()
+            mock_raw._fp.fp.raw._sock = None  # Make sock lookup return None
+            # Delegate everything else to original
+            mock_raw.read = original_raw.read
+            mock_raw.stream = original_raw.stream
+            response.raw = mock_raw
             return response
         return original_get(url, **kwargs)
 
@@ -283,11 +291,168 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
     # Thread backstop should enforce deadline
     assert result is None, f"Expected None, got {result}"
     assert (
-        elapsed < 4.5
-    ), f"Socket-unavailable stall took {elapsed:.2f}s, expected < 4.5s"
+        3.5 <= elapsed < 4.5
+    ), f"Socket-unavailable stall took {elapsed:.2f}s, expected 3.5-4.5s"
     assert (
         SlowHandler.request_count == 1
     ), f"Expected 1 request, got {SlowHandler.request_count}"
+
+
+def test_socket_timeout_mechanism_alone_enforces_deadline(slow_server):
+    """Socket timeout alone (watchdog and per-byte check disabled) enforces deadline."""
+    import os
+
+    SlowHandler.mode = "headers-then-stall"  # Send headers, then stall
+    SlowHandler.request_count = 0
+
+    start = time.monotonic()
+    deadline = start + 3.0
+
+    original_get = __import__("requests").get
+
+    def patched_get(url, **kwargs):
+        if "export.arxiv.org" in url:
+            return original_get(slow_server + "/metadata", **kwargs)
+        return original_get(url, **kwargs)
+
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    # Disable watchdog and per-byte check via injectable flags
+    os.environ["_ARXIV_MCP_TEST_SKIP_WATCHDOG"] = "1"
+    os.environ["_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK"] = "1"
+    try:
+        with (
+            patch("requests.get", patched_get),
+            patch.object(
+                ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0
+            ),
+            patch.object(
+                ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f, **kw: f()
+            ),
+        ):
+            result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+        elapsed = time.monotonic() - start
+
+        # Socket timeout mechanism should enforce deadline
+        assert result is None, f"Expected None, got {result}"
+        assert elapsed < 3.5, f"Socket timeout took {elapsed:.2f}s, expected < 3.5s"
+        assert SlowHandler.request_count == 1
+    finally:
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_WATCHDOG", None)
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK", None)
+
+
+def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
+    """Watchdog alone (socket timeout and per-byte check disabled) enforces deadline."""
+    import os
+
+    SlowHandler.mode = "trickle-then-stall"  # Trickle then 25s stall
+    SlowHandler.request_count = 0
+
+    start = time.monotonic()
+    deadline = start + 4.0
+
+    original_get = __import__("requests").get
+
+    def patched_get(url, **kwargs):
+        if "export.arxiv.org" in url:
+            response = original_get(slow_server + "/metadata", **kwargs)
+            # Replace raw with mock that makes sock lookup return None
+            original_raw = response.raw
+            mock_raw = Mock()
+            mock_raw._fp = Mock()
+            mock_raw._fp.fp = Mock()
+            mock_raw._fp.fp.raw = Mock()
+            mock_raw._fp.fp.raw._sock = None
+            mock_raw.read = original_raw.read
+            mock_raw.stream = original_raw.stream
+            response.raw = mock_raw
+            return response
+        return original_get(url, **kwargs)
+
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    # Disable socket timeout and per-byte check
+    os.environ["_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT"] = "1"
+    os.environ["_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK"] = "1"
+    try:
+        with (
+            patch("requests.get", patched_get),
+            patch.object(
+                ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0
+            ),
+            patch.object(
+                ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f, **kw: f()
+            ),
+        ):
+            result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+        elapsed = time.monotonic() - start
+
+        # Watchdog should enforce deadline at ~3.2s (deadline - 0.8)
+        assert result is None, f"Expected None, got {result}"
+        assert elapsed < 4.5, f"Watchdog took {elapsed:.2f}s, expected < 4.5s"
+        assert SlowHandler.request_count == 1
+    finally:
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT", None)
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK", None)
+
+
+def test_per_byte_check_alone_enforces_deadline(slow_server):
+    """Per-byte check alone (watchdog and socket timeout disabled) enforces deadline."""
+    import os
+
+    SlowHandler.mode = "headers-then-stall"  # Send headers, then stall
+    SlowHandler.request_count = 0
+
+    start = time.monotonic()
+    deadline = start + 3.0
+
+    original_get = __import__("requests").get
+
+    def patched_get(url, **kwargs):
+        if "export.arxiv.org" in url:
+            response = original_get(slow_server + "/metadata", **kwargs)
+            # Replace raw with mock that makes sock lookup return None
+            original_raw = response.raw
+            mock_raw = Mock()
+            mock_raw._fp = Mock()
+            mock_raw._fp.fp = Mock()
+            mock_raw._fp.fp.raw = Mock()
+            mock_raw._fp.fp.raw._sock = None
+            mock_raw.read = original_raw.read
+            mock_raw.stream = original_raw.stream
+            response.raw = mock_raw
+            return response
+        return original_get(url, **kwargs)
+
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    # Disable watchdog and socket timeout
+    os.environ["_ARXIV_MCP_TEST_SKIP_WATCHDOG"] = "1"
+    os.environ["_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT"] = "1"
+    try:
+        with (
+            patch("requests.get", patched_get),
+            patch.object(
+                ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0
+            ),
+            patch.object(
+                ARXIV_RATE_LIMITER, "run_sync", side_effect=lambda f, **kw: f()
+            ),
+        ):
+            result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+        elapsed = time.monotonic() - start
+
+        # Per-byte check should enforce deadline
+        assert result is None, f"Expected None, got {result}"
+        assert elapsed < 3.5, f"Per-byte check took {elapsed:.2f}s, expected < 3.5s"
+        assert SlowHandler.request_count == 1
+    finally:
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_WATCHDOG", None)
+        os.environ.pop("_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT", None)
 
 
 def test_headers_stall_returns_none_within_deadline(slow_server):

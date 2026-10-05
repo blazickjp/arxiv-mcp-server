@@ -1282,24 +1282,30 @@ def _fetch_arxiv_metadata(
                 # Arm watchdog at deadline - margin (0.8s margin for cleanup and final chunk processing)
                 watchdog_delay = max(0.0, remaining - 0.8)
 
-                def close_on_timeout():
-                    logger.info(f"Metadata watchdog fired for {paper_id}")
-                    try:
-                        if sock is not None:
-                            try:
-                                import socket
+                # Injectable test flag: skip watchdog for testing
+                skip_watchdog = __import__("os").environ.get(
+                    "_ARXIV_MCP_TEST_SKIP_WATCHDOG"
+                )
+                if not skip_watchdog:
 
-                                sock.shutdown(socket.SHUT_RDWR)
-                                sock.close()
-                            except Exception:
-                                pass
-                        response.close()
-                    except Exception:
-                        pass
+                    def close_on_timeout():
+                        logger.info(f"Metadata watchdog fired for {paper_id}")
+                        try:
+                            if sock is not None:
+                                try:
+                                    import socket
 
-                watchdog = threading.Timer(watchdog_delay, close_on_timeout)
-                watchdog.daemon = True
-                watchdog.start()
+                                    sock.shutdown(socket.SHUT_RDWR)
+                                    sock.close()
+                                except Exception:
+                                    pass
+                            response.close()
+                        except Exception:
+                            pass
+
+                    watchdog = threading.Timer(watchdog_delay, close_on_timeout)
+                    watchdog.daemon = True
+                    watchdog.start()
 
             # Stream response body with dynamic socket timeout and per-byte deadline checks.
             # Set socket timeout before each read to remaining budget (platform-independent).
@@ -1308,7 +1314,10 @@ def _fetch_arxiv_metadata(
             chunks = []
 
             # If socket is unreachable, use thread-based backstop
-            if sock is None and deadline is not None:
+            skip_thread_backstop = __import__("os").environ.get(
+                "_ARXIV_MCP_TEST_SKIP_THREAD_BACKSTOP"
+            )
+            if sock is None and deadline is not None and not skip_thread_backstop:
                 # Hard backstop: run streaming read in daemon thread, abandon at deadline
                 result_container = {"chunks": None, "error": None}
 
@@ -1372,11 +1381,19 @@ def _fetch_arxiv_metadata(
                 # Socket is reachable - use normal streaming with socket timeout
                 try:
                     read_timeout = float(settings.get_request_timeout())
+                    # Injectable test flags
+                    skip_socket_timeout = __import__("os").environ.get(
+                        "_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT"
+                    )
+                    skip_perbyte_check = __import__("os").environ.get(
+                        "_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK"
+                    )
+
                     for chunk in response.iter_content(
                         chunk_size=1, decode_unicode=False
                     ):
                         # Per-byte deadline check (always runs, even if socket is unreachable)
-                        if deadline is not None:
+                        if deadline is not None and not skip_perbyte_check:
                             remaining = deadline - time.monotonic()
                             if remaining <= 0:
                                 logger.info(
@@ -1385,7 +1402,7 @@ def _fetch_arxiv_metadata(
                                 response.close()
                                 return None
                             # Set socket timeout to remaining budget before each read
-                            if sock is not None:
+                            if sock is not None and not skip_socket_timeout:
                                 try:
                                     sock.settimeout(
                                         max(0.05, min(read_timeout, remaining))

@@ -59,9 +59,16 @@ def test_stall(deadline_seconds):
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
             response = original_get(server_url + "/metadata", **kwargs)
-            # Hide _fp to trigger thread backstop
-            if hasattr(response.raw, "_fp"):
-                delattr(response.raw, "_fp")
+            # Replace raw with mock that makes sock lookup return None but keeps streaming
+            original_raw = response.raw
+            mock_raw = Mock()
+            mock_raw._fp = Mock()
+            mock_raw._fp.fp = Mock()
+            mock_raw._fp.fp.raw = Mock()
+            mock_raw._fp.fp.raw._sock = None
+            mock_raw.read = original_raw.read
+            mock_raw.stream = original_raw.stream
+            response.raw = mock_raw
             return response
         return original_get(url, **kwargs)
 
