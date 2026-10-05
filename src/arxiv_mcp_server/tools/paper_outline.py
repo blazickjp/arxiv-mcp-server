@@ -594,8 +594,8 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     Section body runs from the heading start through the character before the
     next heading of the same or higher level (lower or equal level number).
-    Scanning stops after a References/Bibliography heading so bibliography
-    lines (e.g. ``2023 USENIX ATC…``) are not treated as sections.
+    Bibliography lines (e.g. ``2023 USENIX ATC…``) and reference entries are
+    filtered by existing content guards and are not treated as sections.
     """
     if len(content) == 0:
         return [MdSection("1", 1, "(document)", 0, 0)]
@@ -683,9 +683,6 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                 if inline_match:
                     paper_numbering = inline_match.group(1)
                     last_section = tuple(int(p) for p in paper_numbering.split("."))
-
-            if _is_outline_terminator(title):
-                break
         index += consumed
 
     if not raw:

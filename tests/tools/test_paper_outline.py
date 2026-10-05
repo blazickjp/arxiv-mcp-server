@@ -558,8 +558,54 @@ Boston, MA
 ,
 pp. 551–564
 .
-Appendix
-Should not appear after references terminator.
+"""
+
+
+# Paper with appendices after References (regression #288)
+DPO_STYLE_WITH_APPENDIX = """# Abstract
+
+This paper presents Direct Preference Optimization.
+
+# Introduction
+
+DPO simplifies RLHF.
+
+# Background
+
+RLHF background.
+
+# DPO
+
+Our method details.
+
+# Experiments
+
+Experimental setup.
+
+# Results
+
+Performance results.
+
+# References
+
+[1] Schulman et al. Proximal Policy Optimization. 2017.
+[2] Ouyang et al. Training language models to follow instructions. 2022.
+
+# DPO Implementation Details and Hyperparameters
+
+We use the following hyperparameters for training.
+
+## Learning Rate Schedule
+
+We use a cosine learning rate schedule.
+
+## Model Architecture
+
+Models follow the standard transformer architecture.
+
+# Additional Experimental Results
+
+Further analysis of model performance.
 """
 
 
@@ -575,9 +621,8 @@ def test_outline_stops_at_references_and_keeps_method_subsections():
     assert "System Design Overview" in titles
     assert "Routing Path Predictor (RPP)" in titles
     assert "References" in titles
-    assert titles[-1] == "References"
+    # Bibliography venue lines should not become sections (#229)
     assert not any("USENIX" in t for t in titles)
-    assert "Appendix" not in titles
 
     method = next(s for s in sections if s.title == "Method")
     assert method.level == 1
@@ -614,12 +659,21 @@ More venue noise.
 
 
 def test_bibliography_terminator_alias():
+    """Bibliography is recognized as a References alias, but parsing continues.
+
+    Reference entries are filtered by existing content guards, not by early termination.
+    """
     sections = parse_markdown_sections(
-        "Introduction\n\nIntro.\n\nBibliography\n\n1 Some Paper Title Here\n"
+        "Introduction\n\nIntro.\n\nBibliography\n\n[1] Some Paper Title Here. 2023.\n\nAppendix\n\nMore details.\n"
     )
     titles = [s.title for s in sections]
-    assert titles[-1] == "Bibliography"
+    assert "Introduction" in titles
+    assert "Bibliography" in titles
+    assert "Appendix" in titles
+    # Reference entry with [1] format is not a section
     assert "Some Paper Title Here" not in titles
+    # Appendix comes after Bibliography
+    assert titles.index("Bibliography") < titles.index("Appendix")
 
 
 DAOP_IEEE_HTML_STYLE = """DAOP: Data-Aware Offloading title line
@@ -1797,3 +1851,179 @@ Final section.
 
     # Should have exactly 4 sections (not 6 with the fake body list items)
     assert len(titles) == 4, f"Expected 4 sections, got {len(titles)}: {titles}"
+
+
+def test_appendices_after_references_included():
+    """Regression for #288: Appendices after References must be included in outline.
+
+    Papers often have appendices after References/Bibliography. These must be
+    parsed and addressable by section title/ID. Reference entries (venue lines)
+    must still be filtered out.
+    """
+    sections = parse_markdown_sections(DPO_STYLE_WITH_APPENDIX)
+    titles = [s.title for s in sections]
+
+    # Core sections present
+    assert "Introduction" in titles
+    assert "DPO" in titles
+    assert "Results" in titles
+    assert "References" in titles
+
+    # Appendices after References are included (#288 fix)
+    assert "DPO Implementation Details and Hyperparameters" in titles
+    assert "Learning Rate Schedule" in titles
+    assert "Model Architecture" in titles
+    assert "Additional Experimental Results" in titles
+
+    # Reference entries still filtered
+    assert not any("Schulman" in t for t in titles)
+    assert not any("Ouyang" in t for t in titles)
+
+    # References section ends at the next section, not at document end
+    refs = next(s for s in sections if s.title == "References")
+    refs_body = DPO_STYLE_WITH_APPENDIX[refs.start : refs.end]
+    assert "[1] Schulman" in refs_body
+    assert "[2] Ouyang" in refs_body
+    # Appendix content not in References section
+    assert "Implementation Details" not in refs_body
+    assert "Learning Rate Schedule" not in refs_body
+
+    # Appendix sections are properly nested
+    by_title = {s.title: s for s in sections}
+    parent = by_title["DPO Implementation Details and Hyperparameters"]
+    lr_schedule = by_title["Learning Rate Schedule"]
+    model_arch = by_title["Model Architecture"]
+    assert lr_schedule.section_id.startswith(parent.section_id + ".")
+    assert model_arch.section_id.startswith(parent.section_id + ".")
+
+
+@pytest.mark.asyncio
+async def test_appendix_section_addressable_by_title(patch_storage):
+    """Regression for #288: Appendix sections must be addressable via read_paper_section."""
+    _write_paper(patch_storage, "2305.18290", DPO_STYLE_WITH_APPENDIX)
+
+    # get_paper_outline returns appendices
+    outline = json.loads(
+        (await handle_get_paper_outline({"paper_id": "2305.18290"}))[0].text
+    )
+    assert outline["status"] == "success"
+    titles = [s["title"] for s in outline["sections"]]
+    assert "DPO Implementation Details and Hyperparameters" in titles
+    assert "Additional Experimental Results" in titles
+
+    # read_paper_section by title works for appendices
+    appendix = json.loads(
+        (
+            await handle_read_paper_section(
+                {
+                    "paper_id": "2305.18290",
+                    "section_id": "DPO Implementation Details and Hyperparameters",
+                }
+            )
+        )[0].text
+    )
+    assert appendix["status"] == "success"
+    assert "hyperparameters for training" in appendix["content"]
+    assert (
+        appendix["section"]["title"] == "DPO Implementation Details and Hyperparameters"
+    )
+
+    # read_paper_section by section_id works for appendices
+    section_id = next(
+        s["id"]
+        for s in outline["sections"]
+        if s["title"] == "Additional Experimental Results"
+    )
+    appendix_by_id = json.loads(
+        (
+            await handle_read_paper_section(
+                {"paper_id": "2305.18290", "section_id": section_id}
+            )
+        )[0].text
+    )
+    assert appendix_by_id["status"] == "success"
+    assert "Further analysis" in appendix_by_id["content"]
+
+
+@pytest.mark.asyncio
+async def test_search_in_appendix_correct_attribution(patch_storage):
+    """Regression for #288: Search matches in appendices must be attributed correctly.
+
+    Before fix: matches in appendices were attributed to References section.
+    After fix: matches get correct appendix section_id and section_title.
+    """
+    _write_paper(patch_storage, "2305.18290", DPO_STYLE_WITH_APPENDIX)
+
+    # Search for text unique to appendix
+    search = json.loads(
+        (
+            await handle_search_paper_text(
+                {
+                    "paper_id": "2305.18290",
+                    "query": "cosine learning rate schedule",
+                }
+            )
+        )[0].text
+    )
+    assert search["status"] == "success"
+    assert search["returned_passages"] >= 1
+
+    # Match must be attributed to the appendix subsection, not References
+    passage = search["passages"][0]
+    assert passage["section_title"] != "References"
+    assert "Learning Rate Schedule" in passage["section_title"]
+    assert "cosine learning rate schedule" in passage["excerpt"]
+
+
+def test_bibliography_terminator_still_filters_entries():
+    """Regression guard: Bibliography entries must still be filtered after #288 fix.
+
+    The fix removes the early break at References, but venue/year lines must
+    still be filtered by existing content guards (year guards, Title Case, etc.).
+    """
+    md = """# Introduction
+
+Intro body.
+
+# Methods
+
+Methods body.
+
+# Bibliography
+
+[1] Schulman et al. Proximal Policy Optimization. 2017.
+
+2017 NeurIPS Conference Proceedings
+
+In Proceedings of the 35th International Conference on Machine Learning
+
+# Appendix A
+
+Appendix content.
+
+## A.1 Details
+
+More details.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Core sections and appendix present
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "Bibliography" in titles
+    assert "Appendix A" in titles
+    assert "A.1 Details" in titles
+
+    # Reference entries still filtered (existing guards work)
+    assert not any("Schulman" in t for t in titles)
+    assert not any("NeurIPS" in t for t in titles)
+    assert not any("Proceedings" in t for t in titles)
+
+    # Bibliography section ends at Appendix A
+    biblio = next(s for s in sections if s.title == "Bibliography")
+    biblio_body = md[biblio.start : biblio.end]
+    assert "[1] Schulman" in biblio_body
+    assert "2017 NeurIPS" in biblio_body
+    # Appendix not in Bibliography section
+    assert "Appendix content" not in biblio_body
