@@ -56,7 +56,25 @@ _ROMAN_INLINE_RE = re.compile(rf"^({_ROMAN_NUMERAL}(?:-[A-Z])*)[ \t]+(.+?)$")
 _FENCE_RE = re.compile(r"^```")
 _MAX_BARE_TITLE_CHARS = 80
 # Stop collecting headings once References/Bibliography is seen (ref-line pollution).
-_OUTLINE_TERMINATORS = frozenset({"reference", "references", "bibliography"})
+_OUTLINE_TERMINATORS = frozenset({"references", "bibliography"})
+# Post-References whitelist: exact standalone titles allowed after References/Bibliography
+_POST_REFERENCES_ALLOWLIST = frozenset(
+    {
+        "acknowledgment",
+        "acknowledgments",
+        "acknowledgement",
+        "acknowledgements",
+        "author contributions",
+        "supplementary material",
+        "supplementary materials",
+        "appendix",
+        "appendices",
+    }
+)
+# Pattern for lettered appendix (A, B, C, etc.) or numbered (A.1, A.2, B.1, etc.)
+_APPENDIX_LETTER_RE = re.compile(r"^([A-H])(?:\.(\d+(?:\.\d+)*))?$")
+# Pattern for "Appendix X" where X is A-H
+_APPENDIX_PREFIX_RE = re.compile(r"^(Appendix|Supplementary)\s+([A-H])$", re.IGNORECASE)
 # Top-level section indices stay small; years like 2023 USENIX… are common FPs.
 _MAX_SECTION_INDEX = 99
 # Minor words allowed lowercase inside otherwise Title-Case headings.
@@ -405,6 +423,16 @@ def _match_heading_line(line: str) -> tuple[int, str] | None:
             if remainder.endswith("."):
                 remainder = remainder[:-1]
             if remainder.strip().casefold() == candidate.casefold():
+                # Reject lowercase "reference"/"references" - only capitalized versions
+                # are valid section headings (regression blocker: DeepSeek-R1 2501.12948)
+                if candidate.casefold() in ("reference", "references"):
+                    if not candidate[0].isupper():
+                        return None
+                # Reject bare, all-lowercase, single-word lines (e.g., prompt template
+                # text like "conclusion"). Only applies to bare titles, not numbered,
+                # split-number, Appendix X, or capitalized lines.
+                if candidate.islower() and " " not in candidate:
+                    return None
                 return 1, candidate
 
     return None
@@ -558,6 +586,138 @@ def _is_bare_section_title_line(line: str) -> bool:
     return remainder.strip().casefold() == candidate.casefold()
 
 
+def _is_post_references_accepted(
+    title: str,
+    logical_line: str,
+    opened_appendices: set[str],
+) -> bool:
+    """Check if a heading is accepted in post-References mode (strict whitelist).
+
+    Args:
+        title: The normalized heading title.
+        logical_line: The original line (for checking ATX/numbered patterns).
+        opened_appendices: Set of appendix letters (A-H) already opened.
+
+    Returns:
+        True if the heading passes the post-References whitelist.
+    """
+    normalized = title.casefold()
+
+    # (c) Exact standalone title from allowlist
+    if normalized in _POST_REFERENCES_ALLOWLIST:
+        return True
+
+    # (a) "Appendix X" + title (inline, will be checked in two-line pattern separately)
+    # Check if title starts with "Appendix X " or "Supplementary X " or "Appendix X" (no trailing space)
+    appendix_prefix_match = re.match(
+        r"^(appendix|supplementary)\s+([a-h])(?:\s+|$)", normalized
+    )
+    if appendix_prefix_match:
+        letter = appendix_prefix_match.group(2).upper()
+        opened_appendices.add(letter)
+        return True
+
+    # (b) Dotted number X.n[.m] where X is an already-opened appendix letter
+    # OR opening a new appendix letter with a dotted subsection (e.g., A.1.1)
+    # Extract first token of title to check if it's a dotted appendix subsection
+    first_token = title.split()[0] if title.split() else ""
+    dotted_match = re.match(r"^([A-H])\.(\d+(?:\.\d+)*)$", first_token, re.IGNORECASE)
+    if dotted_match:
+        letter = dotted_match.group(1).upper()
+        # Allow opening a new appendix letter with a dotted subsection
+        opened_appendices.add(letter)
+        return True
+
+    return False
+
+
+def _match_two_line_appendix(
+    first_line: str,
+    second_line: str,
+    opened_appendices: set[str],
+) -> tuple[int, str] | None:
+    """Match two-line appendix pattern: 'Appendix B' followed by title.
+
+    Returns (level, combined_title) or None.
+    Level 1 for 'Appendix B Title', level 2 for 'B.1 Title'.
+
+    Args:
+        first_line: First line (e.g. "Appendix B" or "A.1").
+        second_line: Second line (title text).
+        opened_appendices: Set of appendix letters already opened (updated in place).
+    """
+    first = first_line.strip()
+    second = second_line.strip()
+
+    if not first or not second:
+        return None
+
+    # Second line should not be another heading marker or look like a table cell
+    if _ATX_HEADING_RE.match(second):
+        return None
+    if _NUMBERED_HEADING_RE.match(second):
+        return None
+
+    # Reject if second line is a numbered appendix marker or "Appendix X" pattern
+    # But allow bare keywords like "Acknowledgments" since they can be titles
+    if _APPENDIX_PREFIX_RE.match(second) or _APPENDIX_LETTER_RE.match(second):
+        return None
+
+    # Second line should look like a title (Title Case or known phrase)
+    # Reject punctuation-only or empty titles (regression: DeepSeek-R1 bibliography back-refs)
+    if not second or re.match(r"^[.,;:!?\s]+$", second):
+        return None
+    if not _title_looks_like_heading(
+        second,
+        line_len=len(second),
+        allow_sentence_case=False,
+        apply_content_guards=True,
+    ):
+        return None
+
+    # Check first line patterns - be strict about bare letters
+    # "Appendix B" / "Supplementary A" -> accept
+    prefix_match = _APPENDIX_PREFIX_RE.match(first)
+    if prefix_match:
+        prefix = prefix_match.group(1)
+        letter = prefix_match.group(2)
+        opened_appendices.add(letter)
+        title = f"{prefix} {letter} {second}"
+        return 1, _normalize_heading_title(title)
+
+    # Bare "Appendix" / "Supplementary" + title
+    normalized = _normalize_heading_title(first)
+    if normalized.casefold() in _POST_REFERENCES_ALLOWLIST:
+        title = f"{first} {second}"
+        return 1, _normalize_heading_title(title)
+
+    # Dotted letter patterns (A.1, B.2, C.3) - these look like subsections
+    letter_match = _APPENDIX_LETTER_RE.match(first)
+    if letter_match:
+        letter = letter_match.group(1)
+        subsection = letter_match.group(2)
+        # Only accept dotted forms (A.1, not bare A)
+        # Bare letters require "Appendix" prefix
+        if subsection:
+            # Allow opening a new appendix letter with a dotted subsection
+            opened_appendices.add(letter)
+            # A.1, B.2 -> level 2
+            level = min(6, 1 + subsection.count(".") + 1)
+            title = f"{first} {second}"
+            return level, _normalize_heading_title(title)
+
+    return None
+
+
+def _is_post_references_mode(raw: list[tuple[int, str, str, int]]) -> bool:
+    """True if we've seen References/Bibliography as a real section heading."""
+    if not raw:
+        return False
+    # Check if the last section added was References/Bibliography
+    last_title = raw[-1][2]
+    return _is_outline_terminator(last_title)
+
+
 def _bare_title_has_section_body(
     lines_meta: list[tuple[int, str]], after_index: int
 ) -> bool:
@@ -594,8 +754,11 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     Section body runs from the heading start through the character before the
     next heading of the same or higher level (lower or equal level number).
-    Scanning stops after a References/Bibliography heading so bibliography
-    lines (e.g. ``2023 USENIX ATC…``) are not treated as sections.
+
+    After References/Bibliography, enters post-References mode where only explicit
+    appendix-style headings are accepted (Appendix X + title, lettered subsections,
+    or exact allowlist keywords). This filters out table cells and bibliography
+    entry lines that would otherwise become fake sections.
     """
     if len(content) == 0:
         return [MdSection("1", 1, "(document)", 0, 0)]
@@ -604,6 +767,7 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
     raw: list[tuple[int, str, str, int]] = []
     counters = [0, 0, 0, 0, 0, 0]
     last_section: tuple[int, ...] | None = None
+    opened_appendices: set[str] = set()  # Track opened appendix letters (A-H)
 
     lines_meta: list[tuple[int, str]] = []
     offset = 0
@@ -613,6 +777,8 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     in_fence = False
     index = 0
+    post_references = False  # Track if we're after References/Bibliography
+
     while index < len(lines_meta):
         if len(raw) >= MAX_SECTION_COUNT:
             break
@@ -630,9 +796,11 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         matched = _match_heading_line(logical)
         consumed = 1
         is_split_numbered = False
+        is_two_line_appendix = False
 
-        if matched is None:
-            # Peek across blank lines for a title after a lone section number.
+        # Check for two-line appendix pattern ONLY after References
+        # Look ahead, skipping blank lines
+        if matched is None and post_references:
             peek = index + 1
             while peek < len(lines_meta):
                 _, peek_line = lines_meta[peek]
@@ -642,31 +810,87 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                     continue
                 if peek_logical.lstrip(" \t").startswith("```"):
                     break
-                matched = _match_split_numbered_heading(
-                    logical, peek_logical, last_section
+                # Try two-line appendix pattern
+                appendix_match = _match_two_line_appendix(
+                    logical, peek_logical, opened_appendices
                 )
-                if matched is not None:
+                if appendix_match is not None:
+                    matched = appendix_match
                     consumed = peek - index + 1
-                    is_split_numbered = True
+                    is_two_line_appendix = True
                 break
+
+        if matched is None:
+            # Peek across blank lines for a title after a lone section number.
+            # Skip this check in post-References mode (use two-line appendix instead).
+            if not post_references:
+                peek = index + 1
+                while peek < len(lines_meta):
+                    _, peek_line = lines_meta[peek]
+                    peek_logical = _logical_line(peek_line)
+                    if not peek_logical.strip():
+                        peek += 1
+                        continue
+                    if peek_logical.lstrip(" \t").startswith("```"):
+                        break
+                    matched = _match_split_numbered_heading(
+                        logical, peek_logical, last_section
+                    )
+                    if matched is not None:
+                        consumed = peek - index + 1
+                        is_split_numbered = True
+                    break
 
         if matched is not None:
             level, title = matched
+
+            # Belt and braces: even in post-References mode, a real capitalized
+            # References/Bibliography heading starts its own section
+            if post_references and _is_outline_terminator(title):
+                # Allow it through - it closes the previous appendix
+                pass
+            # In post-References mode, apply strict whitelist for other headings
+            elif post_references and not is_two_line_appendix:
+                # Use strict whitelist: only accept explicit appendix patterns
+                if not _is_post_references_accepted(title, logical, opened_appendices):
+                    # Reject everything else after References
+                    index += consumed
+                    continue
+
+            # Numbered prefix wins over keyword: "A.1.1 Acknowledgments" stays at level 3
+            # Count dots in the title prefix to determine actual level
+            title_parts = title.split()
+            if title_parts:
+                first_part = title_parts[0]
+                # Check if first part is a dotted number (A.1, A.1.1, etc.)
+                dotted_match = re.match(r"^([A-H])\.(\d+(?:\.\d+)*)$", first_part)
+                if dotted_match:
+                    # Level = 1 (A) + number of dots in subsection
+                    subsection = dotted_match.group(2)
+                    level = min(6, 1 + subsection.count(".") + 1)
+
             # Drop table-header false positives: bare ``Method`` between short
             # single-token cells (Model / Method / HellaS) is not a section.
             # Keep References/Bibliography even when the next line is ``[1]``.
             if (
                 _is_bare_section_title_line(logical)
                 and not _is_outline_terminator(title)
+                and not is_two_line_appendix
                 and not _bare_title_has_section_body(lines_meta, index + consumed)
             ):
                 index += 1
                 continue
+
             counters[level - 1] += 1
             for counter_index in range(level, 6):
                 counters[counter_index] = 0
             section_id = ".".join(str(value) for value in counters[:level])
             raw.append((level, section_id, title, start_offset))
+
+            # Enter post-References mode after seeing References/Bibliography
+            # ONLY if it was accepted as a real section heading
+            if _is_outline_terminator(title):
+                post_references = True
 
             # Track the paper's numbered sections (for sequence validation)
             # Extract the actual section number from inline/split numbered headings
@@ -683,9 +907,6 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
                 if inline_match:
                     paper_numbering = inline_match.group(1)
                     last_section = tuple(int(p) for p in paper_numbering.split("."))
-
-            if _is_outline_terminator(title):
-                break
         index += consumed
 
     if not raw:
@@ -716,6 +937,39 @@ def _find_section(sections: list[MdSection], section_id: str) -> MdSection | Non
     ]
     if len(matches) == 1:
         return matches[0]
+
+    # If multiple exact matches, reject with None (error will be raised by caller)
+    if len(matches) > 1:
+        return None
+
+    # Try matching without "Appendix X " prefix for appendix sections
+    # Allows lookup by bare title: "DPO Implementation Details" matches "Appendix B DPO Implementation Details"
+    appendix_prefix_pattern = re.compile(r"^appendix\s+[a-h]\s+", re.IGNORECASE)
+    bare_matches = []
+    for section in sections:
+        section_title_lower = section.title.casefold()
+        # Check if section title starts with "Appendix X "
+        if appendix_prefix_pattern.match(section_title_lower):
+            # Extract bare title without prefix
+            bare_title = appendix_prefix_pattern.sub("", section_title_lower)
+            bare_title = re.sub(r"\s+", " ", bare_title)
+            if bare_title == title_needle:
+                bare_matches.append(section)
+        # Also try matching without dotted prefix like "A.1 " or "C.2 "
+        dotted_prefix = re.match(r"^[a-h]\.\d+(\.\d+)*\s+", section_title_lower)
+        if dotted_prefix:
+            bare_title = section_title_lower[dotted_prefix.end() :]
+            bare_title = re.sub(r"\s+", " ", bare_title)
+            if bare_title == title_needle:
+                bare_matches.append(section)
+
+    if len(bare_matches) == 1:
+        return bare_matches[0]
+
+    # Multiple bare matches means ambiguous, return None
+    if len(bare_matches) > 1:
+        return None
+
     return None
 
 
@@ -1067,6 +1321,42 @@ async def handle_read_paper_section(
         sections = parse_markdown_sections(content)
         section = _find_section(sections, section_id)
         if section is None:
+            # Check if there are multiple matches for better error message
+            title_needle = re.sub(r"\s+", " ", section_id.strip()).casefold()
+
+            # Check for multiple exact title matches
+            exact_matches = [
+                s
+                for s in sections
+                if re.sub(r"\s+", " ", s.title).casefold() == title_needle
+            ]
+
+            # Check for multiple bare title matches (without prefix)
+            appendix_prefix_pattern = re.compile(r"^appendix\s+[a-h]\s+", re.IGNORECASE)
+            bare_matches = []
+            for s in sections:
+                section_title_lower = s.title.casefold()
+                if appendix_prefix_pattern.match(section_title_lower):
+                    bare_title = appendix_prefix_pattern.sub("", section_title_lower)
+                    bare_title = re.sub(r"\s+", " ", bare_title)
+                    if bare_title == title_needle:
+                        bare_matches.append(s)
+                dotted_prefix = re.match(r"^[a-h]\.\d+(\.\d+)*\s+", section_title_lower)
+                if dotted_prefix:
+                    bare_title = section_title_lower[dotted_prefix.end() :]
+                    bare_title = re.sub(r"\s+", " ", bare_title)
+                    if bare_title == title_needle:
+                        bare_matches.append(s)
+
+            candidates = exact_matches or bare_matches
+            if len(candidates) > 1:
+                candidate_list = [f"{s.section_id} ({s.title})" for s in candidates]
+                return _error(
+                    f"Section {section_id!r} is ambiguous. Multiple matches found: {', '.join(candidate_list)}. "
+                    f"Please use a section ID instead.",
+                    bare,
+                )
+
             return _error(
                 f"Section {section_id!r} not found; call get_paper_outline first",
                 bare,

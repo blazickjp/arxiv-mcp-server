@@ -8,6 +8,7 @@ import pytest
 
 from arxiv_mcp_server.tools import paper_outline as outline_module
 from arxiv_mcp_server.tools.paper_outline import (
+    _find_section,
     handle_get_paper_outline,
     handle_read_paper_section,
     handle_search_paper_text,
@@ -558,16 +559,339 @@ Boston, MA
 ,
 pp. 551–564
 .
+
 Appendix
-Should not appear after references terminator.
+
+Additional implementation details and proofs.
+"""
+
+
+# Paper with appendices after References (regression #288)
+DPO_STYLE_WITH_APPENDIX = """# Abstract
+
+This paper presents Direct Preference Optimization.
+
+# Introduction
+
+DPO simplifies RLHF.
+
+# Background
+
+RLHF background.
+
+# DPO
+
+Our method details.
+
+# Experiments
+
+Experimental setup.
+
+# Results
+
+Performance results.
+
+# References
+
+[1] Schulman et al. Proximal Policy Optimization. 2017.
+[2] Ouyang et al. Training language models to follow instructions. 2022.
+
+# DPO Implementation Details and Hyperparameters
+
+We use the following hyperparameters for training.
+
+## Learning Rate Schedule
+
+We use a cosine learning rate schedule.
+
+## Model Architecture
+
+Models follow the standard transformer architecture.
+
+# Additional Experimental Results
+
+Further analysis of model performance.
+"""
+
+
+# Real paper 2305.04388v2 (Turpin et al.) excerpt: References tail + appendices with table cells
+# Verbatim from arxiv-mcp-server HTML→text conversion
+TURPIN_REAL_EXCERPT = """References
+
+The best answer is: (B)
+✗
+Appendix A
+
+Additional Samples
+
+See
+
+Appendix B
+
+Verifying that Explanations Do Not Mention Biasing Features
+
+As discussed in
+
+Appendix C
+
+Qualitative Analysis Details
+
+Table 7:
+
+C.1
+
+BBH
+
+For each explanation reviewed, we annotate two features:
+
+Appendix D
+
+Results Tables
+
+We include the following extra results tables:
+
+Table 9:
+Accuracy on BBH broken down by task. The results are for examples with bias-contradicting labels.
+
+GPT-3.5
+
+Claude 1.0
+
+No-CoT
+
+CoT
+
+UB
+
+B
+
+UB
+
+B
+
+Web Of Lies
+
+Sugg. Ans.
+
+ZS
+
+46.2
+
+18.8
+
+FS
+
+56.4
+
+35.9
+
+Snarks
+
+Sugg. Ans.
+
+ZS
+
+66.2
+
+46.8
+
+Table 11:
+Number of failed samples per experimental setting, primarily due to CoT explanations not giving the answer in the correct format.
+
+# Failed
+
+No debiasing instruction
+
+GPT-3.5
+
+Zero-shot
+
+0
+
+Few-shot
+
+0
+
+Table 12:
+Number of failed samples per experimental setting.
+
+N Total
+
+# FS (Ans. A)
+
+Hyperbaton
+
+1
+
+0
+
+300
+
+7
+
+Snarks
+
+10
+
+0
+
+151
+
+14
+
+Web Of Lies
+
+0
+
+0
+
+220
+
+10
+
+Appendix E
+
+Prompting Details
+
+The following prompting details apply to both the BBH and BBQ experiments.
+
+Appendix F
+
+Additional BBH Experiment Details
+
+F.1
+
+F.1
+
+Data
+
+For most tasks, we pull from the original BIG-Bench data using Hugging Face datasets.
+"""
+
+
+# Real DPO 2305.18290v3 excerpt: References tail + appendices
+DPO_REAL_EXCERPT = """References
+
+D. M. Ziegler, N. Stiennon, J. Wu, T. B. Brown, A. Radford, D. Amodei,
+P. Christiano, and G. Irving.
+Fine-tuning language models from human preferences, 2020.
+
+Author Contributions
+
+All authors
+provided valuable contributions to designing, analyzing, and iterating on experiments, writing and editing the paper, and generally managing the project's progress.
+
+RR
+
+proposed using autoregressive reward models in discussions with
+
+EM
+
+; derived the DPO objective; proved the theoretical properties of the algorithm.
+
+CF, CM, & SE
+
+supervised the research, suggested ideas and experiments, and assisted in writing the paper.
+
+Appendix A
+
+Mathematical Derivations
+
+A.1
+
+A.1
+
+Deriving the Optimum of the KL-Constrained Reward Maximization Objective
+
+In this appendix, we will derive Eq. 4 . Analogously to Eq. 3 , we optimize the following objective:
+
+A.2
+
+Deriving the DPO Objective Under the Bradley-Terry Model
+
+It is straightforward to derive the DPO objective under the Bradley-Terry preference model as we have
+
+A.2
+
+, the normalization constant
+
+Z(x)
+
+Appendix B
+
+DPO Implementation Details and Hyperparameters
+
+DPO is relatively straightforward to implement; PyTorch code for the DPO loss is provided below:
+
+import torch.nn.functional as F
+
+Appendix C
+
+Further Details on the Experimental Set-Up
+
+In this section, we include additional details relevant to our experimental design.
+
+C.1
+
+IMDb Sentiment Experiment and Baseline Details
+
+The prompts are prefixes from the IMDB dataset of length 2-8 tokens.
+
+C.2
+
+GPT-4 prompts for computing summarization and dialogue win rates
+
+A key component of our experimental setup is GPT-4 win rate judgments.
+
+C.3
+
+Unlikelihood baseline
+
+While we include the unlikelihood baseline
+
+Appendix D
+
+Additional Empirical Results
+
+D.1
+
+Performance of Best of
+
+N
+
+baseline for Various
+
+N
+
+We find that the Best of
+
+N
+
+baseline is a strong baseline in our experiments.
+"""
+
+
+# Llama 2 2307.09288v2 excerpt: nested acknowledgments that must stay at level 3
+LLAMA2_REAL_EXCERPT = """We thank the
+
+GenAI executive team
+
+for their leadership and support: Ahmad Al-Dahle, Manohar Paluri.
+
+A.1.1
+
+Acknowledgments
+
+This work was made possible by a large group of contributors. We extend our gratitude to the following people for their assistance:
 """
 
 
 def test_outline_stops_at_references_and_keeps_method_subsections():
-    """Regression for #229: ExpertFlow-style HTML→text outlines.
+    """Regression for #229 and #288: ExpertFlow-style HTML→text outlines.
 
     Split ``3.`` / ``Method`` / ``3.1.`` lines must yield nested subsections,
-    and bibliography venue lines must not become outline sections.
+    bibliography venue lines must not become outline sections (#229), and
+    appendices after References must be included (#288).
     """
     sections = parse_markdown_sections(EXPERTFLOW_HTML_STYLE)
     titles = [s.title for s in sections]
@@ -575,9 +899,15 @@ def test_outline_stops_at_references_and_keeps_method_subsections():
     assert "System Design Overview" in titles
     assert "Routing Path Predictor (RPP)" in titles
     assert "References" in titles
-    assert titles[-1] == "References"
+
+    # Appendix after References is now included (#288)
+    assert "Appendix" in titles
+    assert titles.index("References") < titles.index("Appendix")
+
+    # Bibliography venue lines should not become sections (#229)
     assert not any("USENIX" in t for t in titles)
-    assert "Appendix" not in titles
+    assert not any("Aminabadi" in t for t in titles)
+    assert not any("2022" in t for t in titles)
 
     method = next(s for s in sections if s.title == "Method")
     assert method.level == 1
@@ -614,12 +944,21 @@ More venue noise.
 
 
 def test_bibliography_terminator_alias():
+    """Bibliography is recognized as a References alias, but parsing continues.
+
+    Reference entries are filtered by existing content guards, not by early termination.
+    """
     sections = parse_markdown_sections(
-        "Introduction\n\nIntro.\n\nBibliography\n\n1 Some Paper Title Here\n"
+        "Introduction\n\nIntro.\n\nBibliography\n\n[1] Some Paper Title Here. 2023.\n\nAppendix\n\nMore details.\n"
     )
     titles = [s.title for s in sections]
-    assert titles[-1] == "Bibliography"
+    assert "Introduction" in titles
+    assert "Bibliography" in titles
+    assert "Appendix" in titles
+    # Reference entry with [1] format is not a section
     assert "Some Paper Title Here" not in titles
+    # Appendix comes after Bibliography
+    assert titles.index("Bibliography") < titles.index("Appendix")
 
 
 DAOP_IEEE_HTML_STYLE = """DAOP: Data-Aware Offloading title line
@@ -1797,3 +2136,829 @@ Final section.
 
     # Should have exactly 4 sections (not 6 with the fake body list items)
     assert len(titles) == 4, f"Expected 4 sections, got {len(titles)}: {titles}"
+
+
+def test_appendices_after_references_included():
+    """Regression for #288: Appendices after References must be included in outline.
+
+    Papers often have appendices after References/Bibliography. These must be
+    parsed and addressable by section title/ID. Reference entries (venue lines)
+    must still be filtered out.
+    """
+    sections = parse_markdown_sections(DPO_REAL_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Core section present
+    assert "References" in titles
+
+    # Appendices after References are included (#288 fix)
+    assert any("Mathematical Derivations" in t for t in titles)
+    assert any("DPO Implementation" in t for t in titles)
+    assert any("Further Details" in t or "Experimental Set-Up" in t for t in titles)
+    assert any("Additional Empirical Results" in t for t in titles)
+
+    # Reference entries still filtered (#229)
+    assert not any("Ziegler" in t for t in titles)
+    assert not any("Stiennon" in t for t in titles)
+
+    # References section ends at the next section, not at document end
+    refs = next(s for s in sections if s.title == "References")
+    refs_body = DPO_REAL_EXCERPT[refs.start : refs.end]
+    assert "Ziegler" in refs_body
+    # Appendix content not in References section
+    assert "Mathematical Derivations" not in refs_body
+    assert "DPO Implementation" not in refs_body
+
+    # Appendix subsections are properly nested
+    by_title = {s.title: s for s in sections}
+
+    # A.1 subsection should exist under Appendix A
+    a_derivations = [
+        s for s in sections if "Deriving" in s.title and "KL-Constrained" in s.title
+    ]
+    assert len(a_derivations) == 1
+    assert a_derivations[0].level == 2  # subsection of Appendix A
+
+    # C.1 subsection should exist under Appendix C
+    c_imdb = [s for s in sections if "IMDb" in s.title]
+    assert len(c_imdb) == 1
+    assert c_imdb[0].level == 2  # subsection of Appendix C
+
+
+@pytest.mark.asyncio
+async def test_appendix_section_addressable_by_title(patch_storage):
+    """Regression for #288: Appendix sections must be addressable via read_paper_section."""
+    _write_paper(patch_storage, "2305.18290", DPO_REAL_EXCERPT)
+
+    # get_paper_outline returns appendices
+    outline = json.loads(
+        (await handle_get_paper_outline({"paper_id": "2305.18290"}))[0].text
+    )
+    assert outline["status"] == "success"
+    titles = [s["title"] for s in outline["sections"]]
+
+    # Check appendices are in outline
+    assert any("DPO Implementation" in t for t in titles)
+    assert any("Additional Empirical Results" in t for t in titles)
+
+    # read_paper_section by bare title works (without "Appendix B" prefix)
+    appendix = json.loads(
+        (
+            await handle_read_paper_section(
+                {
+                    "paper_id": "2305.18290",
+                    "section_id": "DPO Implementation Details and Hyperparameters",
+                }
+            )
+        )[0].text
+    )
+    assert appendix["status"] == "success"
+    assert "PyTorch" in appendix["content"] or "implement" in appendix["content"]
+    assert "DPO Implementation" in appendix["section"]["title"]
+
+
+@pytest.mark.asyncio
+async def test_search_in_appendix_correct_attribution(patch_storage):
+    """Regression for #288: Search matches in appendices must be attributed correctly.
+
+    Before fix: matches in appendices were attributed to References section.
+    After fix: matches get correct appendix section_id and section_title.
+    """
+    _write_paper(patch_storage, "2305.18290", DPO_REAL_EXCERPT)
+
+    # Search for text unique to appendix
+    search = json.loads(
+        (
+            await handle_search_paper_text(
+                {
+                    "paper_id": "2305.18290",
+                    "query": "PyTorch code",
+                }
+            )
+        )[0].text
+    )
+    assert search["status"] == "success"
+    assert search["returned_passages"] >= 1
+
+    # Match must be attributed to the appendix, not References
+    passage = search["passages"][0]
+    assert passage["section_title"] != "References"
+    assert (
+        "DPO Implementation" in passage["section_title"]
+        or "Appendix" in passage["section_title"]
+    )
+    assert "PyTorch" in passage["excerpt"]
+
+
+def test_bibliography_terminator_still_filters_entries():
+    """Regression guard: Bibliography entries must still be filtered after #288 fix.
+
+    The fix continues past References, but venue/year lines must
+    still be filtered by title guards and post-References mode.
+    """
+    # Simple fixture with References + bibliography lines + Appendix
+    md = """# Introduction
+
+Intro body.
+
+# Methods
+
+Methods body.
+
+# References
+
+Ziegler, D. M., Stiennon, N., Wu, J. Fine-tuning language models. 2020.
+
+2017 NeurIPS Conference Proceedings
+
+In Proceedings of the 35th International Conference on Machine Learning
+
+Appendix A
+
+Hyperparameters
+
+Detailed hyperparameters and training procedures.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Core sections and appendix present
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "References" in titles
+    assert any("Appendix" in t or "Hyperparameters" in t for t in titles)
+
+    # Reference entries still filtered (existing guards work)
+    assert not any("Ziegler" in t for t in titles)
+    assert not any("NeurIPS" in t for t in titles)
+    assert not any("Proceedings" in t for t in titles)
+
+    # References section ends at Appendix
+    refs = next(s for s in sections if s.title == "References")
+    refs_body = md[refs.start : refs.end]
+    assert "Ziegler" in refs_body
+    assert "2017 NeurIPS" in refs_body
+    # Appendix not in References section
+    assert "Appendix" not in refs_body
+    assert "Hyperparameters" not in refs_body
+
+
+def test_turpin_real_appendices_reject_atx_table_cells():
+    """Regression #288: Real Turpin et al. paper with ATX table cells after References.
+
+    Real HTML→markdown contains '# Failed' and '# FS (Ans. A)' as table cells.
+    These ATX lines must NOT become sections in post-References mode.
+    Only explicit appendix patterns should be accepted.
+    """
+    sections = parse_markdown_sections(TURPIN_REAL_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Appendices recognized (some with Title Case titles)
+    assert "References" in titles
+    assert "Appendix A Additional Samples" in titles or "Additional Samples" in titles
+    # Appendix B has sentence-case title, may be rejected (nice-to-have)
+    assert "Appendix C Qualitative Analysis Details" in titles or any(
+        "Qualitative" in t for t in titles
+    )
+    assert "Appendix D Results Tables" in titles or any(
+        "Results Tables" in t for t in titles
+    )
+    assert "Appendix E Prompting Details" in titles or any(
+        "Prompting Details" in t for t in titles
+    )
+    assert "Appendix F Additional BBH Experiment Details" in titles or any(
+        "Additional BBH" in t for t in titles
+    )
+
+    # ATX table cells rejected (blocker #288 round 3)
+    assert "Failed" not in titles
+    assert "FS (Ans. A)" not in titles
+    assert "# Failed" not in titles
+    assert "# FS (Ans. A)" not in titles
+
+    # Bare table cell combos rejected (blocker #288 round 3)
+    assert "Web Of Lies" not in titles
+    assert "B Web Of Lies" not in titles
+
+    # Bare table labels rejected (blocker #288 round 3)
+    assert "Snarks" not in titles
+    assert "Hyperbaton" not in titles
+    assert "Date Understanding" not in titles
+    assert "experiments" not in titles
+
+    # GPT/Claude model names rejected
+    assert "GPT-3.5" not in titles
+    assert "Claude 1.0" not in titles
+    assert "No-CoT" not in titles
+
+    # Subsections like C.1 and F.1 should be recognized
+    c1_found = any(
+        "C.1" in t or ("BBH" in t and "C" in s.section_id)
+        for s, t in zip(sections, titles)
+    )
+    assert c1_found
+
+    f1_found = any(
+        "F.1" in t or ("Data" in t and "F" in s.section_id)
+        for s, t in zip(sections, titles)
+    )
+    assert f1_found
+
+
+def test_dpo_real_appendices_and_bare_title_lookup():
+    """Regression #288: Real DPO paper with appendices.
+
+    Appendices are stored as 'Appendix B DPO Implementation...' but
+    lookup by 'DPO Implementation Details and Hyperparameters' should work.
+    """
+    sections = parse_markdown_sections(DPO_REAL_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Main appendices recognized
+    appendix_b_found = any("DPO Implementation" in t for t in titles)
+    assert appendix_b_found, f"Appendix B not found in {titles}"
+
+    appendix_c_found = any(
+        "Further Details" in t or "Experimental Set-Up" in t for t in titles
+    )
+    assert appendix_c_found
+
+    # Subsections recognized with correct levels
+    a1_titles = [t for t in titles if "A.1" in t or "Deriving" in t]
+    assert len(a1_titles) >= 1
+
+    c1_titles = [t for t in titles if "C.1" in t or "IMDb" in t]
+    assert len(c1_titles) >= 1
+
+    # Test bare title lookup (without "Appendix B " prefix)
+    section = _find_section(sections, "DPO Implementation Details and Hyperparameters")
+    assert section is not None, "Lookup by bare title should work"
+    assert "DPO Implementation" in section.title
+
+
+def test_llama2_acknowledgments_stays_at_level_3():
+    """Regression #288 blocker 4: A.1.1 Acknowledgments must be level 3, not top-level.
+
+    Numbered prefix wins over keyword: depth determined by dots, not keyword.
+    """
+    # Need References before A.1.1 to enable post-References mode
+    excerpt_with_refs = "# References\n\n" + LLAMA2_REAL_EXCERPT
+    sections = parse_markdown_sections(excerpt_with_refs)
+    titles = [s.title for s in sections]
+
+    # Find Acknowledgments section
+    ack_sections = [s for s in sections if "Acknowledgments" in s.title]
+    assert (
+        len(ack_sections) == 1
+    ), f"Expected 1 Acknowledgments, got {len(ack_sections)}: {titles}"
+
+    ack = ack_sections[0]
+    # A.1.1 = level 3 (A=1, .1=+1, .1=+1)
+    assert ack.level == 3, f"A.1.1 Acknowledgments should be level 3, got {ack.level}"
+    assert "A.1.1" in ack.section_id or ack.level == 3
+
+
+def test_post_references_guard_rejects_fakes():
+    """Regression #288: Post-References mode must reject table cells and ATX fakes.
+
+    This test verifies the guard is active. Disabling post-References filtering
+    should cause this test to fail by accepting fake sections.
+    """
+    sections = parse_markdown_sections(TURPIN_REAL_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # These table cells/ATX fakes must NOT be sections
+    forbidden = [
+        "Failed",
+        "# Failed",
+        "FS (Ans. A)",
+        "# FS (Ans. A)",
+        "GPT-3.5",
+        "Claude 1.0",
+        "No-CoT",
+        "CoT",
+    ]
+    for fake in forbidden:
+        assert (
+            fake not in titles
+        ), f"Post-References guard failed: '{fake}' became a section"
+
+    # But real appendices should be present
+    assert any(
+        "Appendix" in t or "Prompting Details" in t for t in titles
+    ), "Post-References mode should still accept real appendices"
+
+
+def test_bare_table_cells_after_references_rejected():
+    """Regression #288 blocker 1: Bare table cells after References must be rejected.
+
+    Real papers have bare table cells like 'MQA', 'Limitations', 'Method', 'Learning Rate'
+    that must not become sections after References.
+    """
+    md = """# Introduction
+
+Intro body.
+
+# Methods
+
+Methods body.
+
+# References
+
+[1] Someone et al. 2020.
+
+MQA
+
+Limitations
+
+Method
+
+Learning Rate
+
+0.001
+
+Appendix A
+
+Implementation Details
+
+More details here.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real sections present
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "References" in titles
+
+    # Bare table cells rejected
+    assert "MQA" not in titles, "Bare table cell 'MQA' should be rejected"
+    assert (
+        "Limitations" not in titles
+    ), "Bare table cell 'Limitations' should be rejected"
+    assert "Method" not in titles, "Bare table cell 'Method' should be rejected"
+    assert (
+        "Learning Rate" not in titles
+    ), "Bare table cell 'Learning Rate' should be rejected"
+    assert "0.001" not in titles
+
+    # Real appendix accepted
+    assert any("Implementation Details" in t or "Appendix A" in t for t in titles)
+
+
+def test_body_reference_does_not_trigger_post_references_mode():
+    """Regression #288 blocker 2: Lowercase 'reference' in body must not trigger mode.
+
+    A prompt template containing 'reference' before the real References heading
+    must not trigger post-References mode. The real References heading and
+    subsequent appendices must still be found.
+    """
+    md = """# Introduction
+
+Large language models are trained on diverse data.
+
+# Prompt Template
+
+The template contains the word reference in lowercase within instructions.
+
+User: Please provide a reference for this claim.
+Assistant: I will provide a reference for you.
+
+# Methods
+
+Our experimental setup.
+
+# Results
+
+Performance metrics.
+
+# References
+
+[1] Brown et al. Language Models are Few-Shot Learners. 2020.
+
+Appendix A
+
+Background
+
+Additional background details.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # All sections including those before References should be present
+    assert "Introduction" in titles
+    assert "Prompt Template" in titles
+    assert "Methods" in titles
+    assert "Results" in titles
+    assert "References" in titles
+
+    # Appendix after real References should be present
+    assert any("Background" in t or "Appendix A" in t for t in titles)
+
+    # Body lines with 'reference' should not trigger mode early
+    # (verified by the presence of Methods/Results sections which come after the prompt)
+    methods_idx = next(i for i, t in enumerate(titles) if t == "Methods")
+    refs_idx = next(i for i, t in enumerate(titles) if t == "References")
+    assert methods_idx < refs_idx, "Methods should come before References"
+
+
+def test_lowercase_references_line_after_references_rejected():
+    """Regression #288 blocker 2: Lowercase 'references' line after References is rejected."""
+    md = """# Introduction
+
+Intro.
+
+# References
+
+[1] Someone et al.
+
+references
+
+another reference line
+
+Appendix A
+
+Details
+
+More details.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real References section present
+    assert "References" in titles
+
+    # Lowercase 'references' line rejected (not a real heading)
+    # Count how many times "references" appears (should be once, the real heading)
+    refs_count = sum(1 for t in titles if t.lower() == "references")
+    assert refs_count == 1, "Only the real References heading should be present"
+
+    # Appendix still accepted
+    assert any("Details" in t or "Appendix A" in t for t in titles)
+
+
+def test_post_references_mutation_check():
+    """Mutation test: Removing post-References whitelist must cause failures.
+
+    If the strict whitelist is disabled (replaced with accept-all), several
+    tests should fail by accepting fake sections after References.
+    """
+    # This test documents the expected behavior; if you disable the whitelist,
+    # the following assertions should start failing:
+
+    # Test 1: Turpin excerpt should reject table cells
+    turpin_sections = parse_markdown_sections(TURPIN_REAL_EXCERPT)
+    turpin_titles = [s.title for s in turpin_sections]
+    assert "Snarks" not in turpin_titles, "Mutation: Snarks should be rejected"
+    assert "Hyperbaton" not in turpin_titles, "Mutation: Hyperbaton should be rejected"
+    assert (
+        "Web Of Lies" not in turpin_titles
+    ), "Mutation: Web Of Lies should be rejected"
+    assert "Failed" not in turpin_titles, "Mutation: Failed should be rejected"
+
+    # Test 2: Bare table cells fixture
+    table_cells_md = """# References
+
+[1] Paper
+
+MQA
+
+Method
+
+Appendix A
+
+Real Appendix
+"""
+    table_sections = parse_markdown_sections(table_cells_md)
+    table_titles = [s.title for s in table_sections]
+    assert "MQA" not in table_titles, "Mutation: MQA should be rejected"
+    assert "Method" not in table_titles, "Mutation: Method should be rejected"
+
+    # Appendix should still be present
+    assert any("Appendix" in t or "Real Appendix" in t for t in table_titles)
+
+
+def test_deepseek_r1_lowercase_conclusion_rejected():
+    """Regression blocker: DeepSeek-R1 2501.12948 lowercase single-word lines.
+
+    The real paper has prompt templates with lowercase 'conclusion' appearing
+    as a bare single-word line (offsets 71431, 71592). These must be rejected
+    as headings, while real capitalized section headings are kept.
+
+    Also verifies lowercase 'reference' is rejected and belt-and-braces:
+    References starts its own section even in post-References mode.
+    """
+    md = """# Introduction
+
+Introduction body.
+
+# Appendix A
+
+Background details before References.
+
+# Appendix B
+
+More appendix content.
+
+## B.3
+
+Subsection.
+
+### B.3.2
+
+Prompt Template
+
+its
+corresponding
+reference
+answer
+,
+and
+an
+answer
+requiring
+evaluation
+.
+
+## Answer Quality Classification
+
+You have to carefully analyze the reference answer.
+
+# Appendix H
+
+Detailed Analysis.
+
+## H.3 Conclusion
+
+Prompt:
+You
+are
+a
+helpful
+assistant
+.
+Please
+provide
+a
+comprehensive
+answer
+.
+
+Task
+:
+Analyze
+the
+Reference
+data
+.
+
+The
+conclusion
+is
+that the model performs well.
+
+References
+
+AI@Meta
+Llama 3.1 model card
+.
+External Links:
+Link
+Cited by:
+Appendix F
+.
+E. Akyürek, M. Damani, L. Qiu, H. Guo, Y. Kim, and J. Andreas
+The surprising effectiveness of test-time training for abstract reasoning
+.
+arXiv preprint arXiv:2411.07279
+.
+Cited by:
+Appendix H
+,
+§H.2
+.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Lowercase single-word 'conclusion' should NOT be a section
+    assert (
+        "conclusion" not in titles
+    ), "Lowercase single-word 'conclusion' should be rejected"
+
+    # Lowercase 'reference' should NOT be a section
+    assert "reference" not in titles, "Lowercase 'reference' should be rejected"
+
+    # Capitalized References should be accepted as its own section
+    assert "References" in titles, "Capitalized 'References' should be accepted"
+    refs_section = next(s for s in sections if s.title == "References")
+
+    # H.3 Conclusion should end before References starts (belt and braces test)
+    h3_section = next((s for s in sections if s.title == "H.3 Conclusion"), None)
+    assert h3_section is not None, "H.3 Conclusion should exist"
+    assert (
+        h3_section.end <= refs_section.start
+    ), "H.3 should end before References starts"
+
+    # References should run to EOF (no appendices after it in this paper)
+    assert refs_section.end == len(md), "References should run to EOF"
+
+    # Pre-References appendices should be present
+    assert "Appendix A" in titles
+    assert "Appendix B" in titles
+    assert "Appendix H" in titles
+
+
+def test_references_starts_new_section_after_appendix():
+    """Belt-and-braces: References starts its own section even in after-References mode.
+
+    When post-References mode is already active (e.g., from an earlier appendix),
+    a real capitalized References heading must still start its own section instead
+    of being filtered by the whitelist.
+    """
+    md = """# Introduction
+
+Introduction body.
+
+# References
+
+[1] Someone et al.
+
+Appendix A
+
+Implementation Details
+
+Some content here.
+
+References
+
+[1] Someone et al. (repeated reference section)
+[2] Another et al.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Should have two References sections
+    refs_count = sum(1 for t in titles if t == "References")
+    assert (
+        refs_count == 2
+    ), f"Expected 2 References sections, got {refs_count}: {titles}"
+
+    # Appendix A Implementation Details should exist (two-line pattern)
+    appendix_a = next((s for s in sections if "Appendix A" in s.title), None)
+    assert appendix_a is not None, f"Appendix A should exist in titles: {titles}"
+
+    # Find the second References section
+    refs_sections = [s for s in sections if s.title == "References"]
+    second_refs = refs_sections[1]
+
+    # Appendix A should end at or before the second References starts
+    assert (
+        appendix_a.end <= second_refs.start
+    ), f"Appendix A (end={appendix_a.end}) should end before second References (start={second_refs.start})"
+
+
+def test_lowercase_single_word_bare_title_rejected():
+    """Guard: reject bare, all-lowercase, single-word lines as headings.
+
+    Prevents prompt template text like 'conclusion' from becoming section headings,
+    while allowing capitalized headings and multi-word lowercase phrases that are
+    in BARE_SECTION_TITLES (like 'future work').
+    """
+    md = """# Introduction
+
+Body text.
+
+conclusion
+
+More body text.
+
+# Conclusion
+
+Real section heading (capitalized).
+
+method
+
+More text.
+
+# Method
+
+Another real section (capitalized).
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Lowercase single-word 'conclusion' should be rejected
+    assert (
+        titles.count("conclusion") == 0
+    ), "Lowercase single-word 'conclusion' should be rejected"
+
+    # Capitalized 'Conclusion' should be accepted
+    assert "Conclusion" in titles, "Capitalized 'Conclusion' should be accepted"
+
+    # Lowercase single-word 'method' should be rejected
+    assert (
+        titles.count("method") == 0
+    ), "Lowercase single-word 'method' should be rejected"
+
+    # Capitalized 'Method' should be accepted
+    assert "Method" in titles, "Capitalized 'Method' should be accepted"
+
+
+def test_punctuation_only_appendix_title_rejected():
+    """Regression guard: bibliography back-references like 'Appendix F\n.' must not become headings.
+
+    DeepSeek-R1 2501.12948 has 'Appendix F\n.' in the References section.
+    The two-line appendix pattern must reject punctuation-only titles.
+    """
+    md = """# References
+
+AI@Meta
+Llama 3.1 model card
+.
+External Links:
+Link
+Cited by:
+Appendix F
+.
+E. Akyürek et al.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Should only have References
+    assert titles == ["References"], f"Got unexpected sections: {titles}"
+
+    # 'Appendix F' with punctuation-only title '.' should NOT be a section
+    assert not any(
+        "Appendix F" in t for t in titles
+    ), "Punctuation-only appendix title should be rejected"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_bare_title_lookup_returns_error(patch_storage):
+    """Regression test: ambiguous bare title 'Data' matching both F.1 and G.1.
+
+    Real paper 2305.04388 (Turpin et al.) has both 'F.1 Data' and 'G.1 Data'.
+    Looking up by bare title 'Data' should return an error listing both candidates,
+    not silently picking the first match.
+    """
+    md = """# References
+
+[1] Someone et al.
+
+Appendix F
+
+Additional Results
+
+F.1
+
+Data
+
+First data section.
+
+Appendix G
+
+More Results
+
+G.1
+
+Data
+
+Second data section with same title.
+"""
+    _write_paper(patch_storage, "9999.99999", md)
+
+    # Try to read by bare title 'Data' - should return error listing both candidates
+    response = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "Data"}
+    )
+    result = json.loads(response[0].text)
+
+    # Should be an error, not success
+    assert result["status"] == "error", "Ambiguous lookup should return error"
+
+    # Error message must list BOTH candidates
+    error_msg = result["message"]
+    assert "ambiguous" in error_msg.lower(), "Error should mention ambiguity"
+    assert (
+        "F.1 Data" in error_msg or "2.1 (F.1 Data)" in error_msg
+    ), "Error must list F.1 Data candidate"
+    assert (
+        "G.1 Data" in error_msg or "3.1 (G.1 Data)" in error_msg
+    ), "Error must list G.1 Data candidate"
+
+    # Verify we can still look up by exact section ID
+    response_f = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "2.1"}
+    )
+    result_f = json.loads(response_f[0].text)
+    assert result_f["status"] == "success"
+    assert "F.1 Data" in result_f["section"]["title"]
+
+    response_g = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "3.1"}
+    )
+    result_g = json.loads(response_g[0].text)
+    assert result_g["status"] == "success"
+    assert "G.1 Data" in result_g["section"]["title"]
