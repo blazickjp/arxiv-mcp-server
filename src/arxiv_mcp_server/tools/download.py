@@ -1320,7 +1320,9 @@ def _fetch_arxiv_metadata(
             skip_thread_backstop = __import__("os").environ.get(
                 "_ARXIV_MCP_TEST_SKIP_THREAD_BACKSTOP"
             )
-            skip_watchdog = __import__("os").environ.get("_ARXIV_MCP_TEST_SKIP_WATCHDOG")
+            skip_watchdog = __import__("os").environ.get(
+                "_ARXIV_MCP_TEST_SKIP_WATCHDOG"
+            )
             import platform
 
             use_thread_backstop = (
