@@ -619,7 +619,10 @@ def _match_two_line_appendix(
         return None
     if _NUMBERED_HEADING_RE.match(second):
         return None
-    if _is_appendix_style_heading(second):
+
+    # Reject if second line is a numbered appendix marker or "Appendix X" pattern
+    # But allow bare keywords like "Acknowledgments" since they can be titles
+    if _APPENDIX_PREFIX_RE.match(second) or _APPENDIX_LETTER_RE.match(second):
         return None
 
     # Second line should look like a title (Title Case or known phrase)
