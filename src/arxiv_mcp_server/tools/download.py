@@ -1261,6 +1261,14 @@ def _fetch_arxiv_metadata(
         # Read body outside the gate with watchdog and per-chunk deadline checks.
         # The watchdog timer closes the connection at deadline - margin to unblock
         # a stuck read, so slow trickles (e.g. 1 byte/0.5s) don't overrun unboundedly.
+
+        # Cache the real socket once after headers arrive (used for timeout and watchdog)
+        sock = None
+        if hasattr(response, "raw") and hasattr(response.raw, "_fp"):
+            fp = response.raw._fp
+            if hasattr(fp, "fp") and hasattr(fp.fp, "raw"):
+                sock = getattr(fp.fp.raw, "_sock", None)
+
         watchdog = None
         try:
             if deadline is not None:
@@ -1273,13 +1281,6 @@ def _fetch_arxiv_metadata(
                     return None
                 # Arm watchdog at deadline - margin (0.8s margin for cleanup and final chunk processing)
                 watchdog_delay = max(0.0, remaining - 0.8)
-
-                # Cache the real socket once after headers arrive
-                sock = None
-                if hasattr(response, "raw") and hasattr(response.raw, "_fp"):
-                    fp = response.raw._fp
-                    if hasattr(fp, "fp") and hasattr(fp.fp, "raw"):
-                        sock = getattr(fp.fp.raw, "_sock", None)
 
                 def close_on_timeout():
                     logger.info(f"Metadata watchdog fired for {paper_id}")
@@ -1303,41 +1304,110 @@ def _fetch_arxiv_metadata(
             # Stream response body with dynamic socket timeout and per-byte deadline checks.
             # Set socket timeout before each read to remaining budget (platform-independent).
             # Watchdog as backstop; chunk_size=1 ensures per-byte deadline checks.
+            # When socket is unreachable, run streaming in a daemon thread with hard deadline.
             chunks = []
-            try:
-                read_timeout = float(settings.get_request_timeout())
-                for chunk in response.iter_content(chunk_size=1, decode_unicode=False):
-                    # Per-byte deadline check (always runs, even if socket is unreachable)
-                    if deadline is not None:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            logger.info(
-                                f"Metadata lookup timed out (deadline exceeded) for {paper_id}"
-                            )
-                            response.close()
-                            return None
-                        # Set socket timeout to remaining budget before each read
-                        if sock is not None:
-                            try:
-                                sock.settimeout(max(0.05, min(read_timeout, remaining)))
-                            except Exception:
-                                pass
-                    if chunk:
-                        chunks.append(chunk)
-            except (
-                __import__("socket").timeout,
-                __import__("requests").exceptions.ReadTimeout,
-                __import__("requests").exceptions.ConnectionError,
-            ):
-                logger.info(
-                    f"Metadata lookup timed out (socket timeout) for {paper_id}"
-                )
-                response.close()
-                return None
-            finally:
-                response.close()
+
+            # If socket is unreachable, use thread-based backstop
+            if sock is None and deadline is not None:
+                # Hard backstop: run streaming read in daemon thread, abandon at deadline
+                result_container = {"chunks": None, "error": None}
+
+                def stream_in_thread():
+                    try:
+                        thread_chunks = []
+                        read_timeout = float(settings.get_request_timeout())
+                        for chunk in response.iter_content(
+                            chunk_size=1, decode_unicode=False
+                        ):
+                            # Per-byte deadline check
+                            if deadline is not None:
+                                remaining = deadline - time.monotonic()
+                                if remaining <= 0:
+                                    logger.info(
+                                        f"Metadata lookup timed out (deadline exceeded) for {paper_id}"
+                                    )
+                                    response.close()
+                                    result_container["error"] = "deadline"
+                                    return
+                            if chunk:
+                                thread_chunks.append(chunk)
+                        result_container["chunks"] = thread_chunks
+                    except Exception as e:
+                        result_container["error"] = str(e)
+
+                stream_thread = threading.Thread(target=stream_in_thread, daemon=True)
+                stream_thread.start()
+
+                # Wait for thread to finish or deadline to expire
+                remaining = deadline - time.monotonic()
+                timeout = max(0.1, remaining)
+                stream_thread.join(timeout=timeout)
+
                 if watchdog is not None:
                     watchdog.cancel()
+
+                if stream_thread.is_alive():
+                    # Thread didn't finish - deadline exceeded
+                    logger.info(
+                        f"Metadata lookup timed out (thread abandoned) for {paper_id}"
+                    )
+                    response.close()
+                    return None
+
+                if result_container["error"]:
+                    logger.info(
+                        f"Metadata lookup failed in thread for {paper_id}: {result_container['error']}"
+                    )
+                    response.close()
+                    return None
+
+                if result_container["chunks"] is None:
+                    logger.info(f"Metadata lookup failed (no chunks) for {paper_id}")
+                    response.close()
+                    return None
+
+                chunks = result_container["chunks"]
+                response.close()
+            else:
+                # Socket is reachable - use normal streaming with socket timeout
+                try:
+                    read_timeout = float(settings.get_request_timeout())
+                    for chunk in response.iter_content(
+                        chunk_size=1, decode_unicode=False
+                    ):
+                        # Per-byte deadline check (always runs, even if socket is unreachable)
+                        if deadline is not None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                logger.info(
+                                    f"Metadata lookup timed out (deadline exceeded) for {paper_id}"
+                                )
+                                response.close()
+                                return None
+                            # Set socket timeout to remaining budget before each read
+                            if sock is not None:
+                                try:
+                                    sock.settimeout(
+                                        max(0.05, min(read_timeout, remaining))
+                                    )
+                                except Exception:
+                                    pass
+                        if chunk:
+                            chunks.append(chunk)
+                except (
+                    __import__("socket").timeout,
+                    __import__("requests").exceptions.ReadTimeout,
+                    __import__("requests").exceptions.ConnectionError,
+                ):
+                    logger.info(
+                        f"Metadata lookup timed out (socket timeout) for {paper_id}"
+                    )
+                    response.close()
+                    return None
+                finally:
+                    response.close()
+                    if watchdog is not None:
+                        watchdog.cancel()
 
             # Parse feed with lxml
             from lxml import etree

@@ -15,7 +15,7 @@ import http.server
 import socketserver
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -106,6 +106,19 @@ class SlowHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(FEED_XML)))
                 self.end_headers()
                 self.wfile.write(FEED_XML)
+            elif SlowHandler.mode == "headers-then-stall":
+                # Send headers immediately, then stall with no body bytes
+                self.send_response(200)
+                self.send_header("Content-Type", "application/atom+xml")
+                self.send_header("Content-Length", str(len(FEED_XML)))
+                self.end_headers()
+                # Stall for 25s without sending any body
+                time.sleep(25.0)
+                # If we get here, backstop failed
+                try:
+                    self.wfile.write(FEED_XML)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             else:
                 # Fast mode: return immediately
                 self.send_response(200)
@@ -238,8 +251,8 @@ def test_byte_by_byte_slow_returns_none_within_deadline(slow_server):
 
 
 def test_socket_unavailable_fallback_within_deadline(slow_server):
-    """When socket lookup fails, per-byte check should still enforce deadline."""
-    SlowHandler.mode = "trickle-then-stall"
+    """When socket lookup fails (hidden _fp), thread backstop enforces deadline on stall."""
+    SlowHandler.mode = "headers-then-stall"  # Send headers, then stall with no bytes
     SlowHandler.request_count = 0
 
     start = time.monotonic()
@@ -250,9 +263,9 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
             response = original_get(slow_server + "/metadata", **kwargs)
-            # Break socket traversal chain
-            if hasattr(response, "raw"):
-                response.raw = None
+            # Hide _fp to break socket traversal (not None, just missing)
+            if hasattr(response.raw, "_fp"):
+                delattr(response.raw, "_fp")
             return response
         return original_get(url, **kwargs)
 
@@ -267,8 +280,11 @@ def test_socket_unavailable_fallback_within_deadline(slow_server):
 
     elapsed = time.monotonic() - start
 
+    # Thread backstop should enforce deadline
     assert result is None, f"Expected None, got {result}"
-    assert elapsed < 4.5, f"Socket-unavailable took {elapsed:.2f}s, expected < 4.5s"
+    assert (
+        elapsed < 4.5
+    ), f"Socket-unavailable stall took {elapsed:.2f}s, expected < 4.5s"
     assert (
         SlowHandler.request_count == 1
     ), f"Expected 1 request, got {SlowHandler.request_count}"
