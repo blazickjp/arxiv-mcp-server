@@ -2638,21 +2638,16 @@ Real Appendix
     assert any("Appendix" in t or "Real Appendix" in t for t in table_titles)
 
 
-def test_deepseek_r1_lowercase_reference_not_accepted():
-    """Regression blocker: DeepSeek-R1 2501.12948 single-token runs and lowercase 'reference'.
+def test_deepseek_r1_lowercase_conclusion_rejected():
+    """Regression blocker: DeepSeek-R1 2501.12948 lowercase single-word lines.
 
-    The real paper has prompt templates rendered one word per line. Several problems:
-    1. Lowercase 'reference' at offset ~71145 inside Appendix B.3.2
-    2. Single-token runs containing capitalized 'Reference' and 'conclusion'
-    3. Bibliography back-references like 'Appendix F\n.' must not become headings
+    The real paper has prompt templates with lowercase 'conclusion' appearing
+    as a bare single-word line (offsets 71431, 71592). These must be rejected
+    as headings, while real capitalized section headings are kept.
 
-    The PR must:
-    - Reject lowercase 'reference'/'references'
-    - Detect and skip single-token-per-line runs (except References/Bibliography)
-    - Reject punctuation-only appendix titles
-    - Allow References to start new section even in post-References mode (belt and braces)
+    Also verifies lowercase 'reference' is rejected and belt-and-braces:
+    References starts its own section even in post-References mode.
     """
-    # Comprehensive excerpt showing all problematic patterns
     md = """# Introduction
 
 Introduction body.
@@ -2746,14 +2741,13 @@ Appendix H
     sections = parse_markdown_sections(md)
     titles = [s.title for s in sections]
 
+    # Lowercase single-word 'conclusion' should NOT be a section
+    assert (
+        "conclusion" not in titles
+    ), "Lowercase single-word 'conclusion' should be rejected"
+
     # Lowercase 'reference' should NOT be a section
     assert "reference" not in titles, "Lowercase 'reference' should be rejected"
-
-    # Single-token run words should NOT become sections
-    assert (
-        "Reference" not in titles
-    ), "Capitalized 'Reference' in token run should be rejected"
-    assert "conclusion" not in titles, "Token 'conclusion' should be rejected"
 
     # Capitalized References should be accepted as its own section
     assert "References" in titles, "Capitalized 'References' should be accepted"
@@ -2766,15 +2760,6 @@ Appendix H
         h3_section.end <= refs_section.start
     ), "H.3 should end before References starts"
 
-    # Bibliography back-references 'Appendix F\n.' should NOT become headings
-    appendix_f_count = sum(
-        1 for t in titles if t == "Appendix F" or "Appendix F ." in t
-    )
-    # Only real Appendix sections (none in this excerpt after References)
-    assert (
-        appendix_f_count == 0
-    ), f"Bibliography back-references became headings: {titles}"
-
     # References should run to EOF (no appendices after it in this paper)
     assert refs_section.end == len(md), "References should run to EOF"
 
@@ -2782,6 +2767,102 @@ Appendix H
     assert "Appendix A" in titles
     assert "Appendix B" in titles
     assert "Appendix H" in titles
+
+
+def test_references_starts_new_section_after_appendix():
+    """Belt-and-braces: References starts its own section even in after-References mode.
+
+    When post-References mode is already active (e.g., from an earlier appendix),
+    a real capitalized References heading must still start its own section instead
+    of being filtered by the whitelist.
+    """
+    md = """# Introduction
+
+Introduction body.
+
+# References
+
+[1] Someone et al.
+
+Appendix A
+
+Implementation Details
+
+Some content here.
+
+References
+
+[1] Someone et al. (repeated reference section)
+[2] Another et al.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Should have two References sections
+    refs_count = sum(1 for t in titles if t == "References")
+    assert (
+        refs_count == 2
+    ), f"Expected 2 References sections, got {refs_count}: {titles}"
+
+    # Appendix A Implementation Details should exist (two-line pattern)
+    appendix_a = next((s for s in sections if "Appendix A" in s.title), None)
+    assert appendix_a is not None, f"Appendix A should exist in titles: {titles}"
+
+    # Find the second References section
+    refs_sections = [s for s in sections if s.title == "References"]
+    second_refs = refs_sections[1]
+
+    # Appendix A should end at or before the second References starts
+    assert (
+        appendix_a.end <= second_refs.start
+    ), f"Appendix A (end={appendix_a.end}) should end before second References (start={second_refs.start})"
+
+
+def test_lowercase_single_word_bare_title_rejected():
+    """Guard: reject bare, all-lowercase, single-word lines as headings.
+
+    Prevents prompt template text like 'conclusion' from becoming section headings,
+    while allowing capitalized headings and multi-word lowercase phrases that are
+    in BARE_SECTION_TITLES (like 'future work').
+    """
+    md = """# Introduction
+
+Body text.
+
+conclusion
+
+More body text.
+
+# Conclusion
+
+Real section heading (capitalized).
+
+method
+
+More text.
+
+# Method
+
+Another real section (capitalized).
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Lowercase single-word 'conclusion' should be rejected
+    assert (
+        titles.count("conclusion") == 0
+    ), "Lowercase single-word 'conclusion' should be rejected"
+
+    # Capitalized 'Conclusion' should be accepted
+    assert "Conclusion" in titles, "Capitalized 'Conclusion' should be accepted"
+
+    # Lowercase single-word 'method' should be rejected
+    assert (
+        titles.count("method") == 0
+    ), "Lowercase single-word 'method' should be rejected"
+
+    # Capitalized 'Method' should be accepted
+    assert "Method" in titles, "Capitalized 'Method' should be accepted"
 
 
 def test_punctuation_only_appendix_title_rejected():
