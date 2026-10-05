@@ -37,14 +37,16 @@ class FakeResponse:
         self._sock = Mock()
         self._sock_timeout = None
         self.raw._fp.fp.raw._sock = self._sock
-        
+
         # Mock settimeout to track timeout value
         def mock_settimeout(timeout):
             self._sock_timeout = timeout
+
         self._sock.settimeout = mock_settimeout
 
     def iter_content(self, chunk_size=None, decode_unicode=False):
         import socket as socket_module
+
         for chunk in self.chunks:
             if self.chunk_delay:
                 self.clock.advance(self.chunk_delay)
