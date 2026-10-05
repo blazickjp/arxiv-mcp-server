@@ -2636,3 +2636,152 @@ Real Appendix
 
     # Appendix should still be present
     assert any("Appendix" in t or "Real Appendix" in t for t in table_titles)
+
+
+def test_deepseek_r1_lowercase_reference_not_accepted():
+    """Regression blocker: DeepSeek-R1 2501.12948 has lowercase 'reference' in prompt.
+
+    The real paper has a prompt template rendered one word per line, so a lone
+    line 'reference' appears inside Appendix B.3.2 at offset ~71145. Main already
+    accepted it as a level-1 heading and stopped. The PR must reject lowercase
+    'reference' and only accept capitalized 'References'.
+
+    Additionally, the bibliography has back-references like 'Appendix F\n.' that
+    must not become headings (punctuation-only titles rejected).
+    """
+    # Simplified excerpt with the problematic patterns
+    md = """# Introduction
+
+Introduction body.
+
+# Appendix A
+
+Background details before References.
+
+# Appendix B
+
+More appendix content.
+
+## B.3
+
+Subsection.
+
+### B.3.2
+
+Prompt Template
+
+its
+corresponding
+reference
+answer
+,
+and
+an
+answer
+requiring
+evaluation
+.
+
+## Answer Quality Classification
+
+You have to carefully analyze the reference answer.
+
+# References
+
+AI@Meta
+Llama 3.1 model card
+.
+External Links:
+Link
+Cited by:
+Appendix F
+.
+E. Akyürek, M. Damani, L. Qiu, H. Guo, Y. Kim, and J. Andreas
+The surprising effectiveness of test-time training for abstract reasoning
+.
+arXiv preprint arXiv:2411.07279
+.
+Cited by:
+Appendix H
+,
+§H.2
+.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Lowercase 'reference' should NOT be a section
+    assert "reference" not in titles, "Lowercase 'reference' should be rejected"
+
+    # Capitalized References should be accepted
+    assert "References" in titles, "Capitalized 'References' should be accepted"
+
+    # Bibliography back-references 'Appendix F\n.' should NOT become headings
+    appendix_f_count = sum(
+        1 for t in titles if t == "Appendix F" or "Appendix F ." in t
+    )
+    # Only real Appendix sections (none in this excerpt after References)
+    assert (
+        appendix_f_count == 0
+    ), f"Bibliography back-references became headings: {titles}"
+
+    # References should run to EOF (no appendices after it in this paper)
+    refs_section = next(s for s in sections if s.title == "References")
+    # End should be at document end
+    assert refs_section.end == len(md), "References should run to EOF"
+
+    # Pre-References appendices should be present
+    assert "Appendix A" in titles
+    assert "Appendix B" in titles
+
+
+def test_ambiguous_bare_title_lookup_returns_error():
+    """Regression test: ambiguous bare title 'Data' matching both F.1 and G.1.
+    
+    Real paper 2305.04388 (Turpin et al.) has both 'F.1 Data' and 'G.1 Data'.
+    Looking up by bare title 'Data' should return an error listing both candidates,
+    not silently picking the first match.
+    """
+    md = """# References
+
+[1] Someone et al.
+
+Appendix F
+
+Additional Results
+
+F.1
+
+Data
+
+First data section.
+
+Appendix G
+
+More Results
+
+G.1
+
+Data
+
+Second data section with same title.
+"""
+    sections = parse_markdown_sections(md)
+
+    # Verify both Data sections exist
+    data_sections = [s for s in sections if "Data" in s.title]
+    assert (
+        len(data_sections) == 2
+    ), f"Expected 2 Data sections, got {len(data_sections)}"
+
+    # Try to look up by bare title 'Data' - should return None (ambiguous)
+    from arxiv_mcp_server.tools.paper_outline import _find_section
+
+    result = _find_section(sections, "Data")
+    assert result is None, "Ambiguous lookup should return None"
+
+    # Verify both sections are actually there with different IDs
+    assert data_sections[0].section_id != data_sections[1].section_id
+    # One should be F.1 Data and one should be G.1 Data
+    assert "F.1 Data" in [s.title for s in data_sections]
+    assert "G.1 Data" in [s.title for s in data_sections]

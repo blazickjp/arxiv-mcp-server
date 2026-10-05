@@ -423,6 +423,11 @@ def _match_heading_line(line: str) -> tuple[int, str] | None:
             if remainder.endswith("."):
                 remainder = remainder[:-1]
             if remainder.strip().casefold() == candidate.casefold():
+                # Reject lowercase "reference"/"references" - only capitalized versions
+                # are valid section headings (regression blocker: DeepSeek-R1 2501.12948)
+                if candidate.casefold() in ("reference", "references"):
+                    if not candidate[0].isupper():
+                        return None
                 return 1, candidate
 
     return None
@@ -654,6 +659,9 @@ def _match_two_line_appendix(
         return None
 
     # Second line should look like a title (Title Case or known phrase)
+    # Reject punctuation-only or empty titles (regression: DeepSeek-R1 bibliography back-refs)
+    if not second or re.match(r"^[.,;:!?\s]+$", second):
+        return None
     if not _title_looks_like_heading(
         second,
         line_len=len(second),
