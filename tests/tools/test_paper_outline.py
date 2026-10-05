@@ -2735,9 +2735,10 @@ Appendix H
     assert "Appendix B" in titles
 
 
-def test_ambiguous_bare_title_lookup_returns_error():
+@pytest.mark.asyncio
+async def test_ambiguous_bare_title_lookup_returns_error(patch_storage):
     """Regression test: ambiguous bare title 'Data' matching both F.1 and G.1.
-    
+
     Real paper 2305.04388 (Turpin et al.) has both 'F.1 Data' and 'G.1 Data'.
     Looking up by bare title 'Data' should return an error listing both candidates,
     not silently picking the first match.
@@ -2766,22 +2767,38 @@ Data
 
 Second data section with same title.
 """
-    sections = parse_markdown_sections(md)
+    _write_paper(patch_storage, "9999.99999", md)
 
-    # Verify both Data sections exist
-    data_sections = [s for s in sections if "Data" in s.title]
+    # Try to read by bare title 'Data' - should return error listing both candidates
+    response = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "Data"}
+    )
+    result = json.loads(response[0].text)
+
+    # Should be an error, not success
+    assert result["status"] == "error", "Ambiguous lookup should return error"
+
+    # Error message must list BOTH candidates
+    error_msg = result["message"]
+    assert "ambiguous" in error_msg.lower(), "Error should mention ambiguity"
     assert (
-        len(data_sections) == 2
-    ), f"Expected 2 Data sections, got {len(data_sections)}"
+        "F.1 Data" in error_msg or "2.1 (F.1 Data)" in error_msg
+    ), "Error must list F.1 Data candidate"
+    assert (
+        "G.1 Data" in error_msg or "3.1 (G.1 Data)" in error_msg
+    ), "Error must list G.1 Data candidate"
 
-    # Try to look up by bare title 'Data' - should return None (ambiguous)
-    from arxiv_mcp_server.tools.paper_outline import _find_section
+    # Verify we can still look up by exact section ID
+    response_f = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "2.1"}
+    )
+    result_f = json.loads(response_f[0].text)
+    assert result_f["status"] == "success"
+    assert "F.1 Data" in result_f["section"]["title"]
 
-    result = _find_section(sections, "Data")
-    assert result is None, "Ambiguous lookup should return None"
-
-    # Verify both sections are actually there with different IDs
-    assert data_sections[0].section_id != data_sections[1].section_id
-    # One should be F.1 Data and one should be G.1 Data
-    assert "F.1 Data" in [s.title for s in data_sections]
-    assert "G.1 Data" in [s.title for s in data_sections]
+    response_g = await handle_read_paper_section(
+        {"paper_id": "9999.99999", "section_id": "3.1"}
+    )
+    result_g = json.loads(response_g[0].text)
+    assert result_g["status"] == "success"
+    assert "G.1 Data" in result_g["section"]["title"]
