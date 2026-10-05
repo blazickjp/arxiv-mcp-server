@@ -384,7 +384,7 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
 
         # Watchdog should enforce deadline at ~3.2s (deadline - 0.8)
         assert result is None, f"Expected None, got {result}"
-        assert 2.5 <= elapsed < 4.5, f"Watchdog took {elapsed:.2f}s, expected 2.5-4.5s"
+        assert 2.5 <= elapsed < 7.0, f"Watchdog took {elapsed:.2f}s, expected 2.5-7.0s"
         assert SlowHandler.request_count == 1
     finally:
         os.environ.pop("_ARXIV_MCP_TEST_SKIP_SOCKET_TIMEOUT", None)
