@@ -1258,8 +1258,8 @@ def _fetch_arxiv_metadata(
                     )
                     response.close()
                     return None
-                # Arm watchdog at deadline - margin (0.3s margin for cleanup)
-                watchdog_delay = max(0.0, remaining - 0.3)
+                # Arm watchdog at deadline - margin (0.8s margin for cleanup and final chunk processing)
+                watchdog_delay = max(0.0, remaining - 0.8)
 
                 def close_on_timeout():
                     logger.info(f"Metadata watchdog fired for {paper_id}")
@@ -1290,7 +1290,7 @@ def _fetch_arxiv_metadata(
                         configured_timeout = float(settings.get_request_timeout())
                         sock.settimeout(min(configured_timeout, remaining_timeout))
 
-                for chunk in response.iter_content(chunk_size=64, decode_unicode=False):
+                for chunk in response.iter_content(chunk_size=1, decode_unicode=False):
                     # Per-chunk deadline check
                     if deadline is not None:
                         if time.monotonic() >= deadline:

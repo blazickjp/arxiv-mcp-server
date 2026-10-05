@@ -49,18 +49,20 @@ class ArxivRateLimiter:
 
     def run_sync(self, operation: Callable[[], T], timeout: float | None = None) -> T:
         """Run a blocking operation inside the shared request gate.
-        
+
         Args:
             operation: Callable to execute inside the gate.
             timeout: Optional timeout in seconds for gate acquisition. If the gate
                 cannot be acquired within this time, returns the result of calling
                 operation() without acquiring the gate (operation should check for
                 timeout and return None if appropriate).
-        
+
         Returns:
             Result of the operation.
         """
-        acquired = self._lock.acquire(blocking=True, timeout=timeout if timeout is not None else -1)
+        acquired = self._lock.acquire(
+            blocking=True, timeout=timeout if timeout is not None else -1
+        )
         if not acquired:
             # Timeout expired waiting for gate
             return operation()

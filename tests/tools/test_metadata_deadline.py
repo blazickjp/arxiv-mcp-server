@@ -495,7 +495,9 @@ def test_metadata_gate_timeout_returns_none_without_request():
                     return operation()
 
                 mock_limiter.run_sync.side_effect = run_sync_with_timeout
-                mock_limiter.seconds_until_next_slot.return_value = 5.0  # 5s pending wait
+                mock_limiter.seconds_until_next_slot.return_value = (
+                    5.0  # 5s pending wait
+                )
 
                 fake_response = FakeResponse([feed_xml], clock, status_code=200)
                 mock_get.return_value = fake_response
