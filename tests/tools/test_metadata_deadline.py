@@ -29,11 +29,28 @@ class FakeResponse:
         self.chunk_delay = chunk_delay
         self.status_code = status_code
         self.closed = False
+        # Add fake socket structure for socket timeout mechanism
+        self.raw = Mock()
+        self.raw._fp = Mock()
+        self.raw._fp.fp = Mock()
+        self.raw._fp.fp.raw = Mock()
+        self._sock = Mock()
+        self._sock_timeout = None
+        self.raw._fp.fp.raw._sock = self._sock
+        
+        # Mock settimeout to track timeout value
+        def mock_settimeout(timeout):
+            self._sock_timeout = timeout
+        self._sock.settimeout = mock_settimeout
 
     def iter_content(self, chunk_size=None, decode_unicode=False):
+        import socket as socket_module
         for chunk in self.chunks:
             if self.chunk_delay:
                 self.clock.advance(self.chunk_delay)
+            # Check if socket timeout would trigger
+            if self._sock_timeout is not None and self._sock_timeout <= 0.05:
+                raise socket_module.timeout("Socket timeout")
             yield chunk
 
     def raise_for_status(self):
