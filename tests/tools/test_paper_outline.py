@@ -909,3 +909,891 @@ def test_roman_inline_and_reject_colon_bare_titles():
     titles = [s.title for s in colon]
     assert "Result" not in titles
     assert "Introduction" in titles and "Conclusion" in titles
+
+
+KAN_HTML_STYLE = """1
+Introduction
+
+Inspired by the Kolmogorov-Arnold representation theorem.
+
+2
+Kolmogorov-Arnold Networks
+
+We propose Kolmogorov-Arnold Networks (KANs).
+
+2.2
+KAN architecture
+
+KANs have strong mathematical and computational foundations.
+
+3
+KANs are accurate
+
+First KAN body.
+
+4
+KANs are interpretable
+
+Second KAN body.
+
+5
+Related works
+
+Prior work on representation.
+
+6
+Discussion
+
+We discuss performance.
+
+Acknowledgement
+
+We thank the reviewers.
+
+References
+
+[1] Someone et al.
+"""
+
+
+def test_kan_split_numbered_headings_without_trailing_period():
+    """Regression #284 bug 1: split section numbers without trailing period (KAN 2404.19756v5).
+
+    HTML→text emits ``2\\nKolmogorov-Arnold Networks`` and ``2.2\\nKAN Architecture``
+    without a trailing period after the number. Must recognize these as sections.
+    """
+    sections = parse_markdown_sections(KAN_HTML_STYLE)
+    titles = [s.title for s in sections]
+    # All real sections recognized (sentence case from real paper)
+    assert "Introduction" in titles
+    assert "Kolmogorov-Arnold Networks" in titles
+    assert "KAN architecture" in titles
+    assert "KANs are accurate" in titles
+    assert "KANs are interpretable" in titles
+    assert "Related works" in titles
+    assert "Discussion" in titles
+    assert "References" in titles
+
+    by_title = {s.title: s for s in sections}
+    # Proper numbering: split numbers without trailing period are recognized
+    assert by_title["Introduction"].section_id == "1"
+    assert by_title["Kolmogorov-Arnold Networks"].section_id == "2"
+    assert by_title["KAN architecture"].section_id == "2.1"
+    assert by_title["KANs are accurate"].section_id == "3"
+    assert by_title["KANs are interpretable"].section_id == "4"
+
+    # Introduction ends before section 2
+    intro = by_title["Introduction"]
+    intro_body = KAN_HTML_STYLE[intro.start : intro.end]
+    assert "Kolmogorov-Arnold representation theorem" in intro_body
+    assert "Kolmogorov-Arnold Networks (KANs)" not in intro_body
+    assert intro.end <= by_title["Kolmogorov-Arnold Networks"].start
+
+
+@pytest.mark.asyncio
+async def test_kan_sections_addressable_via_read_section(patch_storage):
+    """Regression #284 bug 1: KAN sections 2, 2.2, 3, 4 must be addressable."""
+    _write_paper(patch_storage, "2404.19756v5", KAN_HTML_STYLE)
+
+    outline = json.loads(
+        (await handle_get_paper_outline({"paper_id": "2404.19756v5"}))[0].text
+    )
+    assert outline["status"] == "success"
+    titles = [s["title"] for s in outline["sections"]]
+    assert "KAN architecture" in titles
+
+    # read_paper_section by section_id
+    kan_arch = json.loads(
+        (
+            await handle_read_paper_section(
+                {"paper_id": "2404.19756v5", "section_id": "2.1", "max_chars": 500}
+            )
+        )[0].text
+    )
+    assert kan_arch["status"] == "success"
+    assert "KAN architecture" in kan_arch["section"]["title"]
+    assert "strong mathematical" in kan_arch["content"]
+
+    # read_paper_section by title
+    kan_arch_title = json.loads(
+        (
+            await handle_read_paper_section(
+                {
+                    "paper_id": "2404.19756v5",
+                    "section_id": "KAN architecture",
+                    "max_chars": 500,
+                }
+            )
+        )[0].text
+    )
+    assert kan_arch_title["status"] == "success"
+    assert "strong mathematical" in kan_arch_title["content"]
+
+
+def test_kan_outline_preserves_numbered_list_protection():
+    """Regression #284 bug 1: split-number fix must not promote numbered body lists."""
+    # Must still reject trailing-period body-list markers (sentence case is now OK for split numbers)
+    md = """1
+Introduction
+
+Intro body.
+
+2
+Kolmogorov-Arnold Networks
+
+KAN body.
+
+3.
+Our approach always used identical homogeneous experts.
+
+4
+KANs are interpretable
+
+Done.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Kolmogorov-Arnold Networks" in titles
+    assert "KANs are interpretable" in titles
+    assert "Our approach always used identical homogeneous experts" not in titles
+    assert len(titles) == 3
+
+
+def test_split_body_list_without_trailing_period_rejected():
+    """Regression #284 round 2 blocker 2: reject split-form body lists without trailing period."""
+    # A split number "1" followed by a sentence like "We propose..." is a body list, not a heading
+    md = """1
+Introduction
+
+Research overview.
+
+1
+We propose a new method for routing tokens to experts.
+
+2
+Related works
+
+Prior work.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real headings, not the body list
+    assert "Introduction" in titles
+    assert "Related works" in titles
+    assert "We propose a new method for routing tokens to experts" not in titles
+    # Body list stays in Introduction section
+    intro = sections[0]
+    intro_body = md[intro.start : intro.end]
+    assert "We propose a new method" in intro_body
+
+
+def test_guard_percent_sign_rejection():
+    """Guard test: reject split numbers with % in title (e.g. 'Impro. (%)')."""
+    # Sequence would accept 2, but % guard rejects it
+    md = """1
+Introduction
+
+First section.
+
+2
+Impro. (%)
+
+Real second section follows.
+
+3
+Methods
+
+Third section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject table row with percentage (guard blocks it)
+    assert "Impro. (%)" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
+
+
+def test_guard_equals_sign_rejection():
+    """Guard test: reject split numbers with = in title (e.g. pseudocode lines)."""
+    # Sequence would accept 2, but = guard rejects it
+    md = """1
+Introduction
+
+First section.
+
+2
+ExpsGPU = getActiveExperts(layer)
+
+Real second section follows.
+
+3
+Methods
+
+Third section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject pseudocode line (guard blocks it)
+    assert "ExpsGPU = getActiveExperts(layer)" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
+
+
+def test_guard_colon_digit_rejection():
+    """Guard test: reject split numbers with : followed by digits (e.g. 'Loss: 0.42')."""
+    md = """1
+Introduction
+
+First section.
+
+1
+Loss: 0.42
+
+2
+Methods
+
+Second section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject metric line
+    assert "Loss: 0.42" not in titles
+
+
+def test_guard_model_name_rejection():
+    """Guard test: reject model names with dotted versions like 'Phi-3.5 MoE'."""
+    # Sequence would accept 2, but dotted-version guard rejects it
+    md = """1
+Introduction
+
+First section.
+
+2
+Phi-3.5 MoE
+
+Real second section follows.
+
+3
+Methods
+
+Third section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject model name (dotted-version guard blocks it)
+    assert "Phi-3.5 MoE" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
+
+
+def test_guard_table_label_rejection():
+    """Guard test: reject table labels like 'Ours', 'Baseline'."""
+    # Sequence would accept 2, but table-label guard rejects it
+    md = """1
+Introduction
+
+First section.
+
+2
+Ours
+
+Real second section follows.
+
+3
+Methods
+
+Third section.
+"""
+    titles = [s.title for s in parse_markdown_sections(md)]
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    # Reject table label (guard blocks it)
+    assert "Ours" not in titles
+    # Should have 2 sections (1 and 3)
+    assert len(titles) == 2
+
+
+def test_daop_style_table_cells_rejected():
+    """Regression #284 round 2: DAOP paper should not gain fake sections from table rows.
+
+    Real DAOP has 21 sections; round 1 produced 29 by accepting table cells like
+    'Mixtral 8x7B', 'Avg. Accuracy: 84.11%', 'SwapNum = 0.5' as fake headings.
+    """
+    md = """1
+Introduction
+
+Intro body.
+
+2
+Background
+
+Background body.
+
+1
+Mixtral 8x7B
+
+1
+Avg. Accuracy: 84.11%
+
+1
+SwapNum = 0.5
+
+3
+Speedup
+
+Real section body.
+
+4
+Energy
+
+Energy body.
+
+5
+Accuracy
+
+Accuracy body.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real sections, no table rows
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Speedup" in titles
+    assert "Energy" in titles
+    assert "Accuracy" in titles
+    # Reject table/data rows
+    assert "Mixtral 8x7B" not in titles
+    assert "Avg. Accuracy: 84.11%" not in titles
+    assert "SwapNum = 0.5" not in titles
+    # Should have 5 real sections, not 8
+    assert len(sections) == 5
+
+
+def test_switch_style_model_labels_rejected():
+    """Regression #284 round 2: Switch paper should not gain fake sections from model rows.
+
+    Real Switch has 7 sections; round 1 produced 46 by accepting model labels like
+    'T5-Large', 'T5-XL', 'T5-XXL', 'Switch-C' as fake headings.
+    """
+    md = """1
+Introduction
+
+Intro body.
+
+1
+T5-Large
+
+1
+T5-XL
+
+1
+T5-XXL
+
+1
+Switch-Base
+
+1
+Switch-Large
+
+1
+Switch-C
+
+1
+Model
+
+2
+Methods
+
+Methods body.
+
+3
+Evaluation
+
+Eval body.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+    # Only real sections, no model labels
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "Evaluation" in titles
+    # Reject model labels
+    assert "T5-Large" not in titles
+    assert "T5-XL" not in titles
+    assert "T5-XXL" not in titles
+    assert "Switch-Base" not in titles
+    assert "Switch-Large" not in titles
+    assert "Switch-C" not in titles
+    assert "Model" not in titles
+    # Should have 3 real sections, not 10
+    assert len(sections) == 3
+
+
+def test_switch_table_number_rejection():
+    """Regression #284 round 3: Switch table numbers 12/16/64 must not become sections."""
+    from tests.fixtures.paper_outlines import SWITCH_EXCERPT
+
+    sections = parse_markdown_sections(SWITCH_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real sections are kept
+    assert "Introduction" in titles
+    assert "Switch Transformer" in titles
+    assert "Simplifying Sparse Routing" in titles
+    assert "Scaling Properties" in titles
+
+    # Table numbers rejected
+    assert "T5-Large" not in titles
+    assert "T5-XL" not in titles
+    assert "Switch-C" not in titles
+    assert "Model" not in titles
+
+    # Should have 4 sections (1, 2, 2.1, 3), not 8
+    assert len(sections) == 4
+
+
+def test_lora_table_row_rejection():
+    """Regression #284 round 3/4: LoRA 5.2 is a REAL heading, not a table row."""
+    from tests.fixtures.paper_outlines import LORA_EXCERPT
+
+    sections = parse_markdown_sections(LORA_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real sections kept
+    assert "Introduction" in titles
+    assert "Problem Statement" in titles
+    assert "Aren't Existing Solutions Good Enough?" in titles
+    assert "Our Method" in titles
+    assert "Empirical Experiments" in titles
+    assert "Baselines" in titles
+    assert "RoBERTa base/large" in titles  # Real heading 5.2
+    assert "Related Works" in titles
+
+    # Should have 8 sections
+    assert len(sections) == 8
+
+
+def test_cot_dataset_row_rejection():
+    """Regression #284 round 3: CoT 60/80 rows must not become sections."""
+    from tests.fixtures.paper_outlines import COT_EXCERPT
+
+    sections = parse_markdown_sections(COT_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real sections kept
+    assert "Introduction" in titles
+    assert "Chain-of-Thought Prompting" in titles
+    assert "Arithmetic Reasoning" in titles
+
+    # Dataset rows rejected (60/80 way out of sequence)
+    assert "GSM8K" not in titles
+    assert "Model scale" not in titles
+
+    # Should have 3 sections (1, 2, 3)
+    assert len(sections) == 3
+
+
+def test_attention_model_architecture_kept():
+    """Regression #284 round 3: Attention '3 Model Architecture' must be kept."""
+    from tests.fixtures.paper_outlines import ATTENTION_EXCERPT
+
+    sections = parse_markdown_sections(ATTENTION_EXCERPT)
+    titles = [s.title for s in sections]
+    section_ids = [s.section_id for s in sections]
+
+    # All real sections kept
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Model Architecture" in titles
+    assert "Encoder and Decoder Stacks" in titles
+
+    # Proper numbering
+    by_title = {s.title: s for s in sections}
+    assert by_title["Model Architecture"].section_id == "3"
+    assert by_title["Encoder and Decoder Stacks"].section_id == "3.1"
+
+    assert len(sections) == 4
+
+
+def test_mistral_architectural_details_kept():
+    """Regression #284 round 3: Mistral '2 Architectural details' must be kept."""
+    from tests.fixtures.paper_outlines import MISTRAL_EXCERPT
+
+    sections = parse_markdown_sections(MISTRAL_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All real sections kept
+    assert "Introduction" in titles
+    assert "Architectural details" in titles
+    assert "Sliding Window Attention" in titles
+    assert "Results" in titles
+
+    # Proper numbering
+    by_title = {s.title: s for s in sections}
+    assert by_title["Architectural details"].section_id == "2"
+    assert by_title["Sliding Window Attention"].section_id == "2.1"
+
+    assert len(sections) == 4
+
+
+def test_deepseek_r1_zero_kept():
+    """Regression #284 round 3: DeepSeek-R1 '2 DeepSeek-R1-Zero' must be kept."""
+    from tests.fixtures.paper_outlines import DEEPSEEK_R1_EXCERPT
+
+    sections = parse_markdown_sections(DEEPSEEK_R1_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All real sections kept (Abstract is unnumbered, doesn't interfere)
+    assert "Abstract" in titles
+    assert "Introduction" in titles
+    assert "DeepSeek-R1-Zero" in titles
+    assert "Group Relative Policy Optimization" in titles
+    assert "DeepSeek-R1" in titles
+
+    # Proper numbering - Abstract is treated as section 1
+    by_title = {s.title: s for s in sections}
+    assert by_title["Abstract"].section_id == "1"
+    assert by_title["Introduction"].section_id == "2"
+    assert by_title["DeepSeek-R1-Zero"].section_id == "3"
+    assert by_title["Group Relative Policy Optimization"].section_id == "3.1"
+    assert by_title["DeepSeek-R1"].section_id == "4"
+
+    assert len(sections) == 5
+
+
+def test_llama2_subsections_kept():
+    """Regression #284 round 3: Llama 2 subsections must be kept."""
+    from tests.fixtures.paper_outlines import LLAMA2_EXCERPT
+
+    sections = parse_markdown_sections(LLAMA2_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All sections and subsections kept
+    assert "Introduction" in titles
+    assert "Pretraining" in titles
+    assert "Pretraining Data" in titles
+    assert "Training Details" in titles
+    assert "Training Hardware & Carbon Footprint" in titles
+    assert "Fine-tuning" in titles
+    assert "Supervised Fine-Tuning (SFT)" in titles
+
+    # Check structure
+    by_title = {s.title: s for s in sections}
+    assert by_title["Pretraining Data"].section_id == "2.1"
+    assert by_title["Training Details"].section_id == "2.2"
+    assert by_title["Training Hardware & Carbon Footprint"].section_id == "2.2.1"
+
+    assert len(sections) == 7
+
+
+def test_mamba_subsections_kept():
+    """Regression #284 round 3: Mamba subsections must be kept."""
+    from tests.fixtures.paper_outlines import MAMBA_EXCERPT
+
+    sections = parse_markdown_sections(MAMBA_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All sections kept
+    assert "Introduction" in titles
+    assert "State Space Models" in titles
+    assert "Discretization" in titles
+    assert "Selective State Space Models" in titles
+    assert "Motivation: Selection as a Means of Compression" in titles
+
+    # Check structure
+    by_title = {s.title: s for s in sections}
+    assert by_title["Discretization"].section_id == "2.1"
+    assert (
+        by_title["Motivation: Selection as a Means of Compression"].section_id == "3.1"
+    )
+
+    assert len(sections) == 5
+
+
+def test_daop_no_table_fakes():
+    """Regression #284 round 3: DAOP must reject table cells, keep 5 sections."""
+    from tests.fixtures.paper_outlines import DAOP_EXCERPT
+
+    sections = parse_markdown_sections(DAOP_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real sections kept
+    assert "Abstract" in titles
+    assert "Introduction" in titles
+    assert "Related Work" in titles
+    assert "Methodology" in titles
+    assert "Experiments" in titles
+    assert "Results" in titles
+
+    # Table rows rejected
+    assert "Mixtral 8x7B" not in titles
+    assert "Avg. Accuracy: 84.11%" not in titles
+    assert "SwapNum = 0.5" not in titles
+
+    # Should have 6 sections (Abstract + 5 numbered)
+    assert len(sections) == 6
+
+
+def test_skipped_section_numbers_allowed():
+    """Allow nested sections to skip numbers (e.g. 2 → 2.2 without 2.1)."""
+    md = """1
+Introduction
+
+First section.
+
+2
+Methods
+
+Second section, skips to 2.2.
+
+2.2
+Implementation
+
+Subsection 2.2, no 2.1.
+
+2.5
+Evaluation
+
+Subsection 2.5, skipping 2.3 and 2.4.
+
+3
+Results
+
+Third section.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # All sections kept despite nested skips (top-level is sequential)
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "Implementation" in titles
+    assert "Evaluation" in titles
+    assert "Results" in titles
+
+    by_title = {s.title: s for s in sections}
+    assert by_title["Introduction"].section_id == "1"
+    assert by_title["Methods"].section_id == "2"
+    assert by_title["Implementation"].section_id == "2.1"
+    assert by_title["Evaluation"].section_id == "2.2"
+    assert by_title["Results"].section_id == "3"
+
+    assert len(sections) == 5
+
+
+def test_inline_headings_with_special_content_kept():
+    """Real inline headings with colons or digits must be kept."""
+    md = """1 Introduction
+
+Intro body.
+
+2 Results: 2D Benchmarks
+
+Results with colon and digits in title.
+
+3 Scaling to 100% Data
+
+Section with percent and number.
+
+4 Conclusion
+
+Done.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # All sections kept - content guards only apply to split numbers
+    assert "Introduction" in titles
+    assert "Results: 2D Benchmarks" in titles
+    assert "Scaling to 100% Data" in titles
+    assert "Conclusion" in titles
+
+    assert len(sections) == 4
+
+
+def test_mutation_sequence_rule():
+    """Removing sequence validation must cause at least one test to fail."""
+    # This is the KAN case - without sequence validation, table numbers get through
+    md = """1
+Introduction
+
+Intro body.
+
+12
+T5-Large
+
+2
+Methods
+
+Real section.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # With sequence validation, 12 is rejected (top-level must be last + 1)
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "T5-Large" not in titles
+    assert len(sections) == 2
+
+
+def test_top_level_strictly_sequential():
+    """Top-level sections must be strictly sequential (no skipping allowed)."""
+    # Table numbers after section 2 should be rejected
+    md = """1
+Introduction
+
+First section.
+
+2
+Background
+
+Second section.
+
+12
+T5-XL
+
+16
+Switch-Base
+
+3
+Methods
+
+Real section 3.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # 1, 2, 3 accepted; 12 and 16 rejected (top-level must be sequential)
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Methods" in titles
+    assert "T5-XL" not in titles
+    assert "Switch-Base" not in titles
+    assert len(sections) == 3
+
+
+def test_kan_golden_outline():
+    """Golden test: KAN fixture produces exact expected outline."""
+    from tests.fixtures.paper_outlines import KAN_EXCERPT
+
+    sections = parse_markdown_sections(KAN_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # All real headings present
+    assert titles == [
+        "Abstract",
+        "Introduction",
+        "Kolmogorov–Arnold Networks (KAN)",
+        "Kolmogorov-Arnold Representation theorem",
+        "KAN architecture",
+        "KANs are accurate",
+        "KANs are interpretable",
+    ]
+
+
+def test_switch_golden_outline():
+    """Golden test: Switch fixture produces exact expected outline."""
+    from tests.fixtures.paper_outlines import SWITCH_EXCERPT
+
+    sections = parse_markdown_sections(SWITCH_EXCERPT)
+    titles = [s.title for s in sections]
+
+    # Real headings present, table numbers rejected
+    assert "Introduction" in titles
+    assert "Switch Transformer" in titles
+    assert "Simplifying Sparse Routing" in titles
+    assert "Scaling Properties" in titles
+    # Table numbers rejected
+    assert "T5-Large" not in titles
+    assert "T5-XXL" not in titles
+    assert "Switch-Base" not in titles
+    assert "Model" not in titles
+    assert len(titles) == 4
+
+
+def test_daop_guards_golden_outline():
+    """Golden test: DAOP guards fixture rejects pseudocode and table labels."""
+    from tests.fixtures.paper_outlines import DAOP_EXCERPT_GUARDS
+
+    sections = parse_markdown_sections(DAOP_EXCERPT_GUARDS)
+    titles = [s.title for s in sections]
+
+    # Real headings present
+    assert "Experimental Evaluation" in titles
+    assert "Experimental Setup" in titles
+    assert "Speedup" in titles
+    assert "Energy Efficiency" in titles
+    assert "Accuracy Results" in titles
+    assert "Discussion" in titles
+    # Pseudocode and table data rejected
+    assert "SwapNum = 0.5" not in titles
+    assert "HotExps = getTopKActiveExperts(ExpsCPU, SwapNum);" not in titles
+    assert "ColdExps = getBottomKActiveExperts(ExpsGPU, SwapNum);" not in titles
+    assert "Impro. (%)" not in titles
+    assert "Mixtral 8x7B" not in titles
+    assert "Phi-3.5 MoE" not in titles
+    assert "Ours" not in titles
+    assert "14.37" not in titles
+    assert "27.07" not in titles
+
+
+def test_sequence_check_applied_to_period_form_split_numbers():
+    """Sequence check prevents period-form body lists from being promoted.
+
+    Regression test for issue #284: period-form body list items like
+    "1. Load The Model" (Title Case) after section 3 should be rejected by
+    sequence validation. Without this check, they would be promoted to fake headings.
+
+    This test fails if the sequence check is bypassed for period-form split numbers.
+    Uses Title Case to avoid rejection by the sentence-case rule.
+    """
+    # Markdown with a real section 3, then a period-form body list that doesn't
+    # continue the sequence (1. and 2. after section 3), using Title Case
+    md = """# Introduction
+
+Some text.
+
+# Background
+
+More text.
+
+3.
+Methods
+
+We describe our approach:
+
+1.
+Load The Model
+
+2.
+Run The Inference
+
+# Results
+
+Final section.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real headings should be present
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Methods" in titles
+    assert "Results" in titles
+
+    # Fake body-list headings should NOT be present (rejected by sequence check)
+    # These are Title Case so they would pass the sentence-case rule
+    assert (
+        "Load The Model" not in titles
+    ), "Sequence check failed: 1. promoted after section 3"
+    assert (
+        "Run The Inference" not in titles
+    ), "Sequence check failed: 2. promoted after section 3"
+
+    # Should have exactly 4 sections (not 6 with the fake body list items)
+    assert len(titles) == 4, f"Expected 4 sections, got {len(titles)}: {titles}"

@@ -78,9 +78,16 @@ def get_arxiv_client(num_retries=None):
     session = getattr(client, "_session", None)
     if isinstance(session, requests.Session):
         _orig_get = session.get
+        settings = Settings()
 
         def _get_with_timeout(url, **kwargs):
-            kwargs.setdefault("timeout", (5.0, 30.0))
+            kwargs.setdefault(
+                "timeout",
+                (
+                    float(settings.ARXIV_CONNECT_TIMEOUT),
+                    float(settings.get_request_timeout()),
+                ),
+            )
             return _orig_get(url, **kwargs)
 
         session.get = _get_with_timeout

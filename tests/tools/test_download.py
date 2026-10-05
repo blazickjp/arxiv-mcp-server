@@ -21,6 +21,17 @@ from arxiv_mcp_server.tools.download import (
 )
 
 
+@pytest.fixture
+def zero_rate_limit():
+    """Zero out the arXiv rate limiter's min_interval for fast tests."""
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    original_interval = ARXIV_RATE_LIMITER.min_interval
+    ARXIV_RATE_LIMITER.min_interval = 0.0
+    yield
+    ARXIV_RATE_LIMITER.min_interval = original_interval
+
+
 def _write_cached_paper(storage, paper_id, content, extractor_version=None):
     """Write markdown plus a sidecar stamped with an extractor version."""
     (storage / f"{paper_id}.md").write_text(content, encoding="utf-8")
@@ -223,6 +234,166 @@ async def test_shutdown_waits_for_running_index_worker(mocker):
     assert not returned_while_worker_running
     assert not download_module._index_tasks
     assert download_module._index_semaphore is None
+
+
+@pytest.mark.asyncio
+async def test_metadata_honors_remaining_deadline_after_html(mocker, temp_storage_path):
+    """Regression #284 bug 2: metadata fetch checks deadline and skips when exhausted.
+
+    Test fails without the fix: metadata lookup doesn't check the deadline parameter.
+    No real sleeps; verifies the deadline was passed and checked.
+    """
+    import time
+    from arxiv_mcp_server.tools import download as download_module
+
+    mocker.patch.object(
+        download_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+
+    # Mock configuration: tight budget to force skip
+    test_settings = MagicMock()
+    test_settings.STORAGE_PATH = temp_storage_path
+    test_settings.ARXIV_MAX_TOTAL_TIME = 2
+    test_settings.ARXIV_REQUEST_TIMEOUT = 1
+    test_settings.ARXIV_CONNECT_TIMEOUT = 10
+    test_settings.ARXIV_MAX_RETRIES = 0
+    test_settings.get_request_timeout = lambda: 1
+    mocker.patch.object(download_module, "settings", test_settings)
+
+    # Mock rate limiter: 1.5s wait (forcing metadata skip)
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "seconds_until_next_slot",
+        return_value=1.5,
+    )
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda op: op(),
+    )
+
+    # Mock HTML fetch: immediate success
+    mocker.patch.object(
+        download_module, "_fetch_html_content", return_value="# Paper\n\nContent here."
+    )
+
+    # Mock get_arxiv_client to avoid real API calls
+    mock_client = MagicMock()
+    mocker.patch.object(download_module, "get_arxiv_client", return_value=mock_client)
+
+    # Track whether deadline was passed to metadata fetch
+    metadata_args = {"deadline": None}
+
+    real_fetch_metadata = download_module._fetch_arxiv_metadata
+
+    def track_metadata_call(paper_id, deadline=None):
+        metadata_args["deadline"] = deadline
+        # Call real implementation which should skip
+        return real_fetch_metadata(paper_id, deadline)
+
+    mocker.patch.object(
+        download_module, "_fetch_arxiv_metadata", side_effect=track_metadata_call
+    )
+
+    # Mock cleanup and indexing
+    mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
+
+    def close_coroutine(coro):
+        """Close coroutine to silence 'never awaited' warning."""
+        coro.close()
+
+    mocker.patch.object(download_module, "_track_index_task", close_coroutine)
+
+    response = await handle_download({"paper_id": "2404.19756"})
+    result = json.loads(response[0].text)
+
+    # Must succeed even when metadata is skipped
+    assert result["status"] == "success"
+    assert result["source"] == "html"
+
+    # CRITICAL: deadline must have been passed (fix adds this parameter)
+    assert (
+        metadata_args["deadline"] is not None
+    ), "Deadline parameter was not passed to metadata fetch"
+
+
+@pytest.mark.asyncio
+async def test_metadata_skipped_gracefully_when_budget_exhausted(
+    mocker, temp_storage_path
+):
+    """Regression #284 bug 2: budget check prevents metadata when time is insufficient.
+
+    Test fails without the fix: metadata is attempted regardless of remaining budget.
+    Verifies that when deadline + rate limiter wait exceeds budget, metadata returns None.
+    """
+    import time
+    from arxiv_mcp_server.tools import download as download_module
+
+    mocker.patch.object(
+        download_module.settings,
+        "_get_storage_path_from_args",
+        lambda: temp_storage_path,
+    )
+
+    test_settings = MagicMock()
+    test_settings.STORAGE_PATH = temp_storage_path
+    test_settings.ARXIV_MAX_TOTAL_TIME = 3
+    test_settings.ARXIV_REQUEST_TIMEOUT = 1
+    test_settings.ARXIV_CONNECT_TIMEOUT = 10
+    test_settings.ARXIV_MAX_RETRIES = 0
+    test_settings.get_request_timeout = lambda: 1
+    mocker.patch.object(download_module, "settings", test_settings)
+
+    # Rate limiter says 2.5s wait needed; with 3s total budget and 1s min_attempt_time,
+    # metadata should be skipped (need 3.5s, have 3s)
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "seconds_until_next_slot",
+        return_value=2.5,
+    )
+    mocker.patch.object(
+        download_module.ARXIV_RATE_LIMITER,
+        "run_sync",
+        side_effect=lambda op: op(),
+    )
+
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        return_value="# Paper\n\nContent here.",
+    )
+
+    # Track whether metadata tried to call arxiv API (it shouldn't)
+    api_called = {"value": False}
+
+    def mock_get_client(num_retries=None):
+        api_called["value"] = True
+        raise AssertionError("Metadata should have been skipped, not call arxiv API")
+
+    mocker.patch.object(
+        download_module, "get_arxiv_client", side_effect=mock_get_client
+    )
+    mocker.patch.object(download_module, "_cleanup_versioned_aliases", lambda _: None)
+
+    def close_coroutine(coro):
+        """Close coroutine to silence 'never awaited' warning."""
+        coro.close()
+
+    mocker.patch.object(download_module, "_track_index_task", close_coroutine)
+
+    response = await handle_download({"paper_id": "2404.19756"})
+    result = json.loads(response[0].text)
+
+    # Should succeed with HTML content, metadata skipped
+    assert result["status"] == "success"
+    assert result["source"] == "html"
+    assert "Content here" in result["content"]
+    # CRITICAL: API must not have been called (fix prevents this)
+    assert not api_called[
+        "value"
+    ], "Metadata should have been skipped due to insufficient budget"
 
 
 def test_same_paper_pdf_conversions_are_serialized(mocker):
@@ -613,7 +784,9 @@ async def test_download_existence_check_500_no_url_leak(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, mocker):
+async def test_download_pdf_metadata_lookup_406_no_url_leak(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup 406 should be rate_limited, not leak URL (#166, #277)."""
     from arxiv_mcp_server.tools import download as download_module
     from arxiv_mcp_server.tools.search import ArxivRateLimitError
@@ -655,7 +828,9 @@ async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, m
 
 
 @pytest.mark.asyncio
-async def test_download_pdf_metadata_lookup_500_no_url_leak(temp_storage_path, mocker):
+async def test_download_pdf_metadata_lookup_500_no_url_leak(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup 500 should not leak URL (#166, #277)."""
     from arxiv_mcp_server.tools import download as download_module
     import arxiv
@@ -691,7 +866,7 @@ async def test_download_pdf_metadata_lookup_500_no_url_leak(temp_storage_path, m
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_500_on_2406_id_not_406_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 500 on paper 2406.xxxxx must NOT be reported as 406 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -730,7 +905,7 @@ async def test_pdf_metadata_500_on_2406_id_not_406_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_500_on_2503_id_not_503_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 500 on paper 2503.xxxxx must NOT be reported as 503 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -769,7 +944,7 @@ async def test_pdf_metadata_500_on_2503_id_not_503_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_502_on_2406_id_not_406_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 502 on paper 2406.xxxxx must NOT be reported as 406 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -807,7 +982,7 @@ async def test_pdf_metadata_502_on_2406_id_not_406_rate_limit(
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_502_on_2503_id_not_503_rate_limit(
-    temp_storage_path, mocker
+    temp_storage_path, mocker, zero_rate_limit
 ):
     """HTTP 502 on paper 2503.xxxxx must NOT be reported as 503 rate limit (#277)."""
     from arxiv_mcp_server.tools import download as download_module
@@ -844,7 +1019,9 @@ async def test_pdf_metadata_502_on_2503_id_not_503_rate_limit(
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocker):
+async def test_pdf_metadata_connection_error_on_2406_id(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Connection error on paper 2406.xxxxx must not be falsely identified (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -881,7 +1058,9 @@ async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocker):
+async def test_pdf_metadata_connection_error_on_2503_id(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Connection error on paper 2503.xxxxx must not be falsely identified (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -918,7 +1097,9 @@ async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_406_minimal_retries(temp_storage_path, mocker):
+async def test_pdf_metadata_406_minimal_retries(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup on 406 should use minimal retries (1 retry = 2 total) (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import arxiv
@@ -953,7 +1134,9 @@ async def test_pdf_metadata_406_minimal_retries(temp_storage_path, mocker):
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocker):
+async def test_pdf_metadata_network_error_clean_message(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Network errors during PDF metadata lookup should report cleanly without URL or traceback (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -989,7 +1172,7 @@ async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocke
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_network_error_no_traceback_or_url_in_logs(
-    temp_storage_path, mocker, caplog
+    temp_storage_path, mocker, caplog, zero_rate_limit
 ):
     """Network errors during PDF metadata lookup should not log traceback or URL (#277)."""
     from arxiv_mcp_server.tools import download as download_module

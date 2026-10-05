@@ -252,13 +252,22 @@ async def handle_watch_topic(arguments: Dict[str, Any]) -> List[types.TextConten
         if not topic:
             return [types.TextContent(type="text", text="Error: topic is required")]
 
-        max_results = min(int(arguments.get("max_results", 10)), settings.MAX_RESULTS)
-
         payload = _load_watches()
         topics = payload.get("topics", [])
         existing_index = next(
             (idx for idx, item in enumerate(topics) if item.get("topic") == topic), None
         )
+
+        # On update, only replace max_results when the key is present so omitted
+        # max_results preserves the stored cap. Apply default only on create.
+        if "max_results" in arguments:
+            max_results = min(
+                int(arguments.get("max_results", 10)), settings.MAX_RESULTS
+            )
+        elif existing_index is not None:
+            max_results = topics[existing_index].get("max_results", 10)
+        else:
+            max_results = 10
 
         # On update, only replace categories when the key is present so omitted
         # categories preserve the stored filters. Explicit [] still clears.

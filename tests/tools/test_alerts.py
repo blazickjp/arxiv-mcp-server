@@ -70,6 +70,61 @@ async def test_watch_topic_update_omitted_categories_preserved(alerts_test_env):
 
 
 @pytest.mark.asyncio
+async def test_watch_topic_update_omitted_max_results_preserved(alerts_test_env):
+    """Regression #284 bug 3: update without max_results must preserve the stored cap."""
+    create = await alerts_module.handle_watch_topic(
+        {
+            "topic": "arxiv-qa-do-not-check",
+            "categories": ["cs.LG"],
+            "max_results": 2,
+        }
+    )
+    created = json.loads(create[0].text)["topic"]
+    assert created["max_results"] == 2
+
+    # Update only categories, omit max_results
+    update = await alerts_module.handle_watch_topic(
+        {"topic": "arxiv-qa-do-not-check", "categories": ["cs.AI"]}
+    )
+    updated = json.loads(update[0].text)["topic"]
+    assert updated["categories"] == ["cs.AI"]
+    assert updated["max_results"] == 2
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["max_results"] == 2
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_update_explicit_max_results_changes(alerts_test_env):
+    """Regression #284 bug 3: explicit max_results update must change the stored value."""
+    create = await alerts_module.handle_watch_topic(
+        {"topic": "change-cap", "max_results": 5}
+    )
+    created = json.loads(create[0].text)["topic"]
+    assert created["max_results"] == 5
+
+    update = await alerts_module.handle_watch_topic(
+        {"topic": "change-cap", "max_results": 15}
+    )
+    updated = json.loads(update[0].text)["topic"]
+    assert updated["max_results"] == 15
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["max_results"] == 15
+
+
+@pytest.mark.asyncio
+async def test_watch_topic_create_defaults_max_results(alerts_test_env):
+    """Regression #284 bug 3: new watch without max_results gets default of 10."""
+    create = await alerts_module.handle_watch_topic({"topic": "default-cap"})
+    created = json.loads(create[0].text)["topic"]
+    assert created["max_results"] == 10
+
+    stored = alerts_module._load_watches()["topics"][0]
+    assert stored["max_results"] == 10
+
+
+@pytest.mark.asyncio
 async def test_watch_topic_update_explicit_empty_categories_clears(alerts_test_env):
     """Regression #222: explicit categories=[] still clears on update."""
     await alerts_module.handle_watch_topic(
