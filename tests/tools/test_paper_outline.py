@@ -2330,17 +2330,21 @@ def test_turpin_real_appendices_reject_atx_table_cells():
         "Additional BBH" in t for t in titles
     )
 
-    # ATX table cells rejected
+    # ATX table cells rejected (blocker #288 round 3)
     assert "Failed" not in titles
     assert "FS (Ans. A)" not in titles
     assert "# Failed" not in titles
     assert "# FS (Ans. A)" not in titles
 
-    # Bare letter + table cell combos rejected
+    # Bare table cell combos rejected (blocker #288 round 3)
+    assert "Web Of Lies" not in titles
     assert "B Web Of Lies" not in titles
 
-    # Table standalone labels - "Snarks" appears as a bare title, check if rejected
-    # Note: may appear if it passes bare title checks
+    # Bare table labels rejected (blocker #288 round 3)
+    assert "Snarks" not in titles
+    assert "Hyperbaton" not in titles
+    assert "Date Understanding" not in titles
+    assert "experiments" not in titles
 
     # GPT/Claude model names rejected
     assert "GPT-3.5" not in titles
@@ -2443,3 +2447,192 @@ def test_post_references_guard_rejects_fakes():
     assert any(
         "Appendix" in t or "Prompting Details" in t for t in titles
     ), "Post-References mode should still accept real appendices"
+
+
+def test_bare_table_cells_after_references_rejected():
+    """Regression #288 blocker 1: Bare table cells after References must be rejected.
+
+    Real papers have bare table cells like 'MQA', 'Limitations', 'Method', 'Learning Rate'
+    that must not become sections after References.
+    """
+    md = """# Introduction
+
+Intro body.
+
+# Methods
+
+Methods body.
+
+# References
+
+[1] Someone et al. 2020.
+
+MQA
+
+Limitations
+
+Method
+
+Learning Rate
+
+0.001
+
+Appendix A
+
+Implementation Details
+
+More details here.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real sections present
+    assert "Introduction" in titles
+    assert "Methods" in titles
+    assert "References" in titles
+
+    # Bare table cells rejected
+    assert "MQA" not in titles, "Bare table cell 'MQA' should be rejected"
+    assert (
+        "Limitations" not in titles
+    ), "Bare table cell 'Limitations' should be rejected"
+    assert "Method" not in titles, "Bare table cell 'Method' should be rejected"
+    assert (
+        "Learning Rate" not in titles
+    ), "Bare table cell 'Learning Rate' should be rejected"
+    assert "0.001" not in titles
+
+    # Real appendix accepted
+    assert any("Implementation Details" in t or "Appendix A" in t for t in titles)
+
+
+def test_body_reference_does_not_trigger_post_references_mode():
+    """Regression #288 blocker 2: Lowercase 'reference' in body must not trigger mode.
+
+    A prompt template containing 'reference' before the real References heading
+    must not trigger post-References mode. The real References heading and
+    subsequent appendices must still be found.
+    """
+    md = """# Introduction
+
+Large language models are trained on diverse data.
+
+# Prompt Template
+
+The template contains the word reference in lowercase within instructions.
+
+User: Please provide a reference for this claim.
+Assistant: I will provide a reference for you.
+
+# Methods
+
+Our experimental setup.
+
+# Results
+
+Performance metrics.
+
+# References
+
+[1] Brown et al. Language Models are Few-Shot Learners. 2020.
+
+Appendix A
+
+Background
+
+Additional background details.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # All sections including those before References should be present
+    assert "Introduction" in titles
+    assert "Prompt Template" in titles
+    assert "Methods" in titles
+    assert "Results" in titles
+    assert "References" in titles
+
+    # Appendix after real References should be present
+    assert any("Background" in t or "Appendix A" in t for t in titles)
+
+    # Body lines with 'reference' should not trigger mode early
+    # (verified by the presence of Methods/Results sections which come after the prompt)
+    methods_idx = next(i for i, t in enumerate(titles) if t == "Methods")
+    refs_idx = next(i for i, t in enumerate(titles) if t == "References")
+    assert methods_idx < refs_idx, "Methods should come before References"
+
+
+def test_lowercase_references_line_after_references_rejected():
+    """Regression #288 blocker 2: Lowercase 'references' line after References is rejected."""
+    md = """# Introduction
+
+Intro.
+
+# References
+
+[1] Someone et al.
+
+references
+
+another reference line
+
+Appendix A
+
+Details
+
+More details.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real References section present
+    assert "References" in titles
+
+    # Lowercase 'references' line rejected (not a real heading)
+    # Count how many times "references" appears (should be once, the real heading)
+    refs_count = sum(1 for t in titles if t.lower() == "references")
+    assert refs_count == 1, "Only the real References heading should be present"
+
+    # Appendix still accepted
+    assert any("Details" in t or "Appendix A" in t for t in titles)
+
+
+def test_post_references_mutation_check():
+    """Mutation test: Removing post-References whitelist must cause failures.
+
+    If the strict whitelist is disabled (replaced with accept-all), several
+    tests should fail by accepting fake sections after References.
+    """
+    # This test documents the expected behavior; if you disable the whitelist,
+    # the following assertions should start failing:
+
+    # Test 1: Turpin excerpt should reject table cells
+    turpin_sections = parse_markdown_sections(TURPIN_REAL_EXCERPT)
+    turpin_titles = [s.title for s in turpin_sections]
+    assert "Snarks" not in turpin_titles, "Mutation: Snarks should be rejected"
+    assert "Hyperbaton" not in turpin_titles, "Mutation: Hyperbaton should be rejected"
+    assert (
+        "Web Of Lies" not in turpin_titles
+    ), "Mutation: Web Of Lies should be rejected"
+    assert "Failed" not in turpin_titles, "Mutation: Failed should be rejected"
+
+    # Test 2: Bare table cells fixture
+    table_cells_md = """# References
+
+[1] Paper
+
+MQA
+
+Method
+
+Appendix A
+
+Real Appendix
+"""
+    table_sections = parse_markdown_sections(table_cells_md)
+    table_titles = [s.title for s in table_sections]
+    assert "MQA" not in table_titles, "Mutation: MQA should be rejected"
+    assert "Method" not in table_titles, "Mutation: Method should be rejected"
+
+    # Appendix should still be present
+    assert any("Appendix" in t or "Real Appendix" in t for t in table_titles)
