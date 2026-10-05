@@ -132,6 +132,113 @@ async def test_older_version_with_force_may_replace(temp_storage_path, mocker):
 
 
 @pytest.mark.asyncio
+async def test_html_download_with_metadata_prevents_downgrade(
+    temp_storage_path, mocker
+):
+    """HTML download with metadata (from _fetch_arxiv_metadata) prevents downgrade.
+
+    Regression test for issue #206: unversioned HTML downloads should parse
+    arxiv_version from the metadata feed's entry id, so a subsequent request
+    for an older version refuses downgrade rather than silently overwriting.
+    """
+    _patch_download_path(mocker, temp_storage_path)
+
+    # Mock HTML fetch to return content
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        return_value="# Test Paper v5\nThis is version 5 content.",
+    )
+
+    # Mock metadata fetch to return feed with v5 in the entry id
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/2404.19756v5</id>
+  <title>Test Paper</title>
+  <summary>Test summary</summary>
+  <published>2024-04-30T00:00:00Z</published>
+  <author><name>Test Author</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    def mock_get_with_feed(url, **kwargs):
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.iter_content = lambda chunk_size=None, decode_unicode=False: [
+            feed_xml
+        ]
+        mock_response.raise_for_status = lambda: None
+        mock_response.close = lambda: None
+        mock_response.raw = mocker.Mock()
+        return mock_response
+
+    mocker.patch("requests.get", side_effect=mock_get_with_feed)
+    mock_limiter = mocker.patch.object(download_module, "ARXIV_RATE_LIMITER")
+    mock_limiter.run_sync.side_effect = lambda op: op()
+    mock_limiter.seconds_until_next_slot.return_value = 0.0
+    mocker.patch("time.monotonic", return_value=1000.0)
+
+    # First download: unversioned request, should get v5 from metadata
+    response1 = await handle_download({"paper_id": "2404.19756", "force": True})
+    result1 = json.loads(response1[0].text)
+
+    assert result1["status"] == "success"
+    assert result1["arxiv_version"] == "v5"
+    assert result1["versioned_id"] == "2404.19756v5"
+
+    # Check sidecar has arxiv_version
+    sidecar = json.loads(
+        (temp_storage_path / "2404.19756.meta.json").read_text(encoding="utf-8")
+    )
+    assert sidecar["arxiv_version"] == "v5"
+
+    # Mock HTML fetch for v1 (older version)
+    mocker.patch.object(
+        download_module,
+        "_fetch_html_content",
+        return_value="# Test Paper v1\nThis is version 1 content.",
+    )
+
+    # Mock metadata fetch to return v1
+    feed_xml_v1 = feed_xml.replace(b"2404.19756v5", b"2404.19756v1")
+
+    def mock_get_with_feed_v1(url, **kwargs):
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.iter_content = lambda chunk_size=None, decode_unicode=False: [
+            feed_xml_v1
+        ]
+        mock_response.raise_for_status = lambda: None
+        mock_response.close = lambda: None
+        mock_response.raw = mocker.Mock()
+        return mock_response
+
+    mocker.patch("requests.get", side_effect=mock_get_with_feed_v1)
+
+    # Second download: request v1 without force, should refuse downgrade
+    response2 = await handle_download({"paper_id": "2404.19756v1"})
+    result2 = json.loads(response2[0].text)
+
+    assert result2["status"] == "success"
+    assert result2["source"] == "cache"
+    assert result2["downgrade_refused"] is True
+    assert result2["requested_version"] == "v1"
+    assert result2["arxiv_version"] == "v5"
+    assert result2["versioned_id"] == "2404.19756v5"
+    # Content should still be v5, not v1
+    assert "version 5 content" in result2["content"]
+    assert "version 1 content" not in result2["content"]
+
+    # Sidecar should still have v5
+    sidecar_after = json.loads(
+        (temp_storage_path / "2404.19756.meta.json").read_text(encoding="utf-8")
+    )
+    assert sidecar_after["arxiv_version"] == "v5"
+
+
+@pytest.mark.asyncio
 async def test_newer_version_without_force_may_upgrade(temp_storage_path, mocker):
     """Requesting a newer version replaces an older bare-ID cache without force."""
     _patch_download_path(mocker, temp_storage_path)

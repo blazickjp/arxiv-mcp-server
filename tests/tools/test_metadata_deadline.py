@@ -257,3 +257,206 @@ def test_metadata_mutation_check_without_per_chunk_deadline():
     # successfully but after ~7.5s, exceeding the 7s budget. The mutation
     # test in CI verifies that removing the per-chunk check causes this test
     # to fail (result would be not None).
+
+
+def test_metadata_parses_arxiv_version_from_entry_id():
+    """arxiv_version is parsed from entry id for downgrade protection (#206)."""
+    clock = FakeClock()
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/2404.19756v5</id>
+  <title>Test Paper</title>
+  <summary>Test summary</summary>
+  <published>2024-04-30T00:00:00Z</published>
+  <author><name>Test Author</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
+
+                result = _fetch_arxiv_metadata("2404.19756", deadline=None)
+
+    assert result is not None
+    assert result["arxiv_version"] == "v5", "Should parse version from entry id"
+    assert result["arxiv_url"] == "http://arxiv.org/abs/2404.19756v5"
+
+
+def test_metadata_collapses_whitespace_in_title():
+    """Title whitespace is collapsed to match _metadata_from_arxiv_result."""
+    clock = FakeClock()
+
+    # Title with newlines and multiple spaces
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test   Paper
+  with   wrapped
+    title</title>
+  <summary>Test   summary
+  with   newlines</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>  Test   Author
+  </name></author>
+  <author><name>Second Author</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
+
+                result = _fetch_arxiv_metadata("1234.5678", deadline=None)
+
+    assert result is not None
+    # Whitespace should be collapsed
+    assert result["title"] == "Test Paper with wrapped title"
+    assert result["summary"] == "Test summary with newlines"
+    # Author names should also be collapsed
+    assert "Test Author" in result["authors"]
+    assert "Second Author" in result["authors"]
+
+
+def test_metadata_formats_dates_with_timezone_offset():
+    """Published/updated dates use +00:00 format (not Z) for consistency."""
+    clock = FakeClock()
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-04-30T00:00:00Z</published>
+  <updated>2024-05-01T00:00:00Z</updated>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
+
+                result = _fetch_arxiv_metadata("1234.5678", deadline=None)
+
+    assert result is not None
+    # Should use +00:00 format (consistent with _metadata_from_arxiv_result)
+    assert result["published"] == "2024-04-30T00:00:00+00:00"
+    assert result["updated"] == "2024-05-01T00:00:00+00:00"
+
+
+def test_metadata_sends_user_agent_header():
+    """Requests include User-Agent header as requested by arXiv."""
+    clock = FakeClock()
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
+
+                result = _fetch_arxiv_metadata("1234.5678", deadline=None)
+
+    assert result is not None
+    # Check that User-Agent header was sent
+    mock_get.assert_called_once()
+    call_kwargs = mock_get.call_args[1]
+    assert "headers" in call_kwargs
+    assert "User-Agent" in call_kwargs["headers"]
+    assert "arxiv-mcp-server" in call_kwargs["headers"]["User-Agent"]
+
+
+def test_metadata_watchdog_closes_connection_on_deadline():
+    """Watchdog timer closes response at deadline - margin even if chunks arrive slowly."""
+    clock = FakeClock()
+    deadline = clock() + 7.0
+
+    feed_xml = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Test</title><summary>Test</summary></entry></feed>'
+
+    # Create a response that will be closed by the watchdog
+    fake_response = Mock()
+    fake_response.status_code = 200
+    fake_response.closed = False
+
+    def raise_for_status():
+        if fake_response.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"HTTP {fake_response.status_code}")
+
+    fake_response.raise_for_status = raise_for_status
+
+    # Mock iter_content to never yield (simulating a stall)
+    # The watchdog should fire and close the response
+    def iter_content_stall(chunk_size=None, decode_unicode=False):
+        # Advance clock past deadline to simulate slow trickle
+        clock.advance(10.0)
+        # This should never be reached because watchdog fires
+        yield feed_xml
+
+    fake_response.iter_content = iter_content_stall
+    fake_response.close = Mock()
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                mock_limiter.run_sync.side_effect = lambda op: op()
+                mock_limiter.seconds_until_next_slot.return_value = 0.0
+
+                # Use a real threading.Timer for the watchdog
+                with patch(
+                    "threading.Timer", wraps=__import__("threading").Timer
+                ) as mock_timer:
+                    mock_get.return_value = fake_response
+
+                    result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # The watchdog should have been created
+    assert mock_timer.called, "Watchdog timer should be created when deadline is set"
+    # Response should be closed (either by watchdog or finally block)
+    assert fake_response.close.called, "Response should be closed"

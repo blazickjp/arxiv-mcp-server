@@ -1145,17 +1145,21 @@ def _fetch_arxiv_metadata(
 ) -> dict[str, Any] | None:
     """Best-effort arXiv metadata lookup used after an HTML download.
 
-    Makes a direct GET to the arXiv API with streaming and per-chunk deadline
-    checks to handle slow trickle. Metadata is optional: on deadline or error,
+    Makes a direct GET to the arXiv API with streaming, a wall-clock watchdog
+    timer, and per-chunk deadline checks. The rate limiter gate is released
+    after the request is sent (headers received), so slow body reads don't
+    block other arXiv operations. Metadata is optional: on deadline or error,
     returns None without failing the download.
 
     Args:
         paper_id: arXiv paper ID.
         deadline: Optional wall-clock deadline (time.monotonic()). When provided,
                   enforces the remaining budget across gate acquisition, request
-                  connect, and streaming read with per-chunk deadline checks.
+                  connect, and streaming read with both per-chunk checks and a
+                  watchdog timer.
     """
     import requests
+    from datetime import datetime
 
     try:
         # Check if we have enough time budget remaining before attempting gate acquisition.
@@ -1167,16 +1171,21 @@ def _fetch_arxiv_metadata(
             pending_wait = ARXIV_RATE_LIMITER.seconds_until_next_slot()
             remaining = deadline - time.monotonic()
             min_attempt_time = 1.0
+            # Also check gate timeout if available
+            gate_timeout = max(0.0, remaining - min_attempt_time)
             if remaining < pending_wait + min_attempt_time:
                 logger.info(
                     "Metadata lookup skipped: insufficient time budget "
                     f"(need {pending_wait + min_attempt_time:.1f}s, have {remaining:.1f}s)"
                 )
                 return None
+        else:
+            gate_timeout = None
 
-        # Make direct GET to arXiv API inside the rate limiter gate.
+        # Acquire the rate limiter gate and send the request.
+        # The gate is released after headers arrive, before body read.
         # No retries: exactly 1 request. On 406, return None (issue #277: IP throttling).
-        def fetch_with_streaming_deadline_check():
+        def initiate_request():
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining < 1.0:
@@ -1188,6 +1197,9 @@ def _fetch_arxiv_metadata(
 
             # Direct GET to export API with streaming and clamped timeouts
             url = f"https://export.arxiv.org/api/query?id_list={paper_id}"
+            headers = {
+                "User-Agent": f"arxiv-mcp-server/{settings.APP_VERSION or '0.8.0'}"
+            }
             timeout_tuple = None
             if deadline is not None:
                 remaining = deadline - time.monotonic()
@@ -1206,7 +1218,9 @@ def _fetch_arxiv_metadata(
                 )
 
             try:
-                response = requests.get(url, stream=True, timeout=timeout_tuple)
+                response = requests.get(
+                    url, headers=headers, stream=True, timeout=timeout_tuple
+                )
 
                 # On 406, return None immediately (issue #277: IP throttling, no retry)
                 if response.status_code == 406:
@@ -1215,106 +1229,200 @@ def _fetch_arxiv_metadata(
                     return None
 
                 response.raise_for_status()
-
-                # Stream response body with per-chunk deadline checks
-                # (requests read timeout is max gap between chunks, not total time)
-                # Use small chunk_size to ensure frequent deadline checks
-                chunks = []
-                try:
-                    for chunk in response.iter_content(
-                        chunk_size=64, decode_unicode=False
-                    ):
-                        if deadline is not None and time.monotonic() >= deadline:
-                            logger.info(
-                                f"Metadata lookup timed out (slow trickle) for {paper_id}"
-                            )
-                            response.close()
-                            return None
-                        if chunk:
-                            chunks.append(chunk)
-                finally:
-                    response.close()
-
-                # Parse feed with lxml (already a dependency of arxiv package)
-                from lxml import etree
-
-                feed_bytes = b"".join(chunks)
-
-                try:
-                    parser = etree.XMLParser(
-                        resolve_entities=False, no_network=True, huge_tree=False
-                    )
-                    root = etree.fromstring(feed_bytes, parser=parser)
-                except etree.XMLSyntaxError as exc:
-                    logger.info(f"Metadata XML parse error for {paper_id}: {exc}")
-                    return None
-
-                # Atom and arXiv namespaces
-                ns = {
-                    "atom": "http://www.w3.org/2005/Atom",
-                    "arxiv": "http://arxiv.org/schemas/atom",
-                }
-
-                # Find first entry element
-                entry = root.find("atom:entry", ns)
-                if entry is None:
-                    logger.info(f"No metadata entries found for {paper_id}")
-                    return None
-
-                # Extract metadata fields
-                def get_text(elem, path):
-                    found = elem.find(path, ns)
-                    return (
-                        found.text.strip() if found is not None and found.text else ""
-                    )
-
-                title = get_text(entry, "atom:title")
-                summary = get_text(entry, "atom:summary")
-                published = get_text(entry, "atom:published")
-                updated = get_text(entry, "atom:updated")
-                arxiv_url = get_text(entry, "atom:id")
-
-                # Extract authors
-                authors = []
-                for author_elem in entry.iterfind("atom:author", ns):
-                    name = get_text(author_elem, "atom:name")
-                    if name:
-                        authors.append(name)
-
-                # Extract primary category
-                primary_cat_elem = entry.find("arxiv:primary_category", ns)
-                primary_category = (
-                    primary_cat_elem.get("term", "")
-                    if primary_cat_elem is not None
-                    else ""
-                )
-
-                # Extract all categories
-                categories = []
-                for cat_elem in entry.iterfind("atom:category", ns):
-                    term = cat_elem.get("term")
-                    if term:
-                        categories.append(term)
-
-                return {
-                    "title": title,
-                    "authors": authors,
-                    "summary": summary,
-                    "published": published,
-                    "updated": updated,
-                    "primary_category": primary_category,
-                    "categories": categories,
-                    "arxiv_url": arxiv_url,
-                }
+                # Gate released here (request sent, headers received)
+                return response
             except requests.exceptions.Timeout:
-                logger.info(f"Metadata lookup timed out for {paper_id}")
+                logger.info(
+                    f"Metadata request timed out (connect/headers) for {paper_id}"
+                )
                 return None
             except requests.exceptions.RequestException as exc:
                 logger.info(f"Metadata request failed for {paper_id}: {exc}")
                 return None
 
-        metadata = ARXIV_RATE_LIMITER.run_sync(fetch_with_streaming_deadline_check)
-        return metadata
+        # Initiate request inside the rate limiter gate
+        response = ARXIV_RATE_LIMITER.run_sync(initiate_request)
+        if response is None:
+            return None
+
+        # Read body outside the gate with watchdog and per-chunk deadline checks.
+        # The watchdog timer closes the connection at deadline - margin to unblock
+        # a stuck read, so slow trickles (e.g. 1 byte/0.5s) don't overrun unboundedly.
+        watchdog = None
+        try:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.info(
+                        f"Metadata lookup deadline exceeded before body read for {paper_id}"
+                    )
+                    response.close()
+                    return None
+                # Arm watchdog at deadline - margin (0.3s margin for cleanup)
+                watchdog_delay = max(0.0, remaining - 0.3)
+
+                def close_on_timeout():
+                    logger.info(f"Metadata watchdog fired for {paper_id}")
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+
+                watchdog = threading.Timer(watchdog_delay, close_on_timeout)
+                watchdog.daemon = True
+                watchdog.start()
+
+            # Stream response body with per-chunk deadline checks and dynamic read timeout.
+            # requests read timeout is per recv(), not total time, so we also need the watchdog.
+            chunks = []
+            try:
+                # Update socket timeout dynamically to remaining budget
+                if (
+                    deadline is not None
+                    and hasattr(response.raw, "_fp")
+                    and hasattr(response.raw._fp, "fp")
+                ):
+                    sock = getattr(response.raw._fp.fp, "raw", None) or getattr(
+                        response.raw._fp.fp, "_sock", None
+                    )
+                    if sock and hasattr(sock, "settimeout"):
+                        remaining_timeout = max(0.1, deadline - time.monotonic())
+                        configured_timeout = float(settings.get_request_timeout())
+                        sock.settimeout(min(configured_timeout, remaining_timeout))
+
+                for chunk in response.iter_content(chunk_size=64, decode_unicode=False):
+                    # Per-chunk deadline check
+                    if deadline is not None:
+                        if time.monotonic() >= deadline:
+                            logger.info(
+                                f"Metadata lookup timed out (slow trickle) for {paper_id}"
+                            )
+                            response.close()
+                            return None
+                        # Update socket timeout for next read
+                        if hasattr(response.raw, "_fp") and hasattr(
+                            response.raw._fp, "fp"
+                        ):
+                            sock = getattr(response.raw._fp.fp, "raw", None) or getattr(
+                                response.raw._fp.fp, "_sock", None
+                            )
+                            if sock and hasattr(sock, "settimeout"):
+                                remaining_timeout = max(
+                                    0.1, deadline - time.monotonic()
+                                )
+                                configured_timeout = float(
+                                    settings.get_request_timeout()
+                                )
+                                sock.settimeout(
+                                    min(configured_timeout, remaining_timeout)
+                                )
+                    if chunk:
+                        chunks.append(chunk)
+            finally:
+                response.close()
+                if watchdog is not None:
+                    watchdog.cancel()
+
+            # Parse feed with lxml
+            from lxml import etree
+
+            feed_bytes = b"".join(chunks)
+
+            try:
+                parser = etree.XMLParser(
+                    resolve_entities=False, no_network=True, huge_tree=False
+                )
+                root = etree.fromstring(feed_bytes, parser=parser)
+            except etree.XMLSyntaxError as exc:
+                logger.info(f"Metadata XML parse error for {paper_id}: {exc}")
+                return None
+
+            # Atom and arXiv namespaces
+            ns = {
+                "atom": "http://www.w3.org/2005/Atom",
+                "arxiv": "http://arxiv.org/schemas/atom",
+            }
+
+            # Find first entry element
+            entry = root.find("atom:entry", ns)
+            if entry is None:
+                logger.info(f"No metadata entries found for {paper_id}")
+                return None
+
+            # Extract metadata fields
+            def get_text(elem, path):
+                found = elem.find(path, ns)
+                return found.text.strip() if found is not None and found.text else ""
+
+            title_raw = get_text(entry, "atom:title")
+            summary_raw = get_text(entry, "atom:summary")
+            published_raw = get_text(entry, "atom:published")
+            updated_raw = get_text(entry, "atom:updated")
+            entry_id = get_text(entry, "atom:id")
+
+            # Collapse whitespace in title and summary to match _metadata_from_arxiv_result
+            title = " ".join(title_raw.split()) if title_raw else ""
+            summary = " ".join(summary_raw.split()) if summary_raw else ""
+
+            # Format published and updated dates consistently (isoformat with +00:00, not Z)
+            def format_date(date_str: str) -> str:
+                if not date_str:
+                    return ""
+                try:
+                    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    return dt.isoformat()
+                except Exception:
+                    return date_str
+
+            published = format_date(published_raw)
+            updated = format_date(updated_raw)
+
+            # Parse arxiv_version from entry id (e.g. https://arxiv.org/abs/2404.19756v5 -> v5)
+            arxiv_version = None
+            if entry_id:
+                arxiv_version = arxiv_version_suffix(entry_id)
+
+            # Extract authors (collapse whitespace in names)
+            authors = []
+            for author_elem in entry.iterfind("atom:author", ns):
+                name_raw = get_text(author_elem, "atom:name")
+                if name_raw:
+                    authors.append(" ".join(name_raw.split()))
+
+            # Extract primary category
+            primary_cat_elem = entry.find("arxiv:primary_category", ns)
+            primary_category = (
+                primary_cat_elem.get("term", "") if primary_cat_elem is not None else ""
+            )
+
+            # Extract all categories
+            categories = []
+            for cat_elem in entry.iterfind("atom:category", ns):
+                term = cat_elem.get("term")
+                if term:
+                    categories.append(term)
+
+            return {
+                "title": title,
+                "authors": authors,
+                "summary": summary,
+                "published": published,
+                "updated": updated,
+                "primary_category": primary_category,
+                "categories": categories,
+                "arxiv_url": entry_id,
+                "arxiv_version": arxiv_version,
+            }
+        except Exception as exc:
+            if watchdog is not None:
+                watchdog.cancel()
+            logger.info(f"Metadata body read failed for {paper_id}: {exc}")
+            try:
+                response.close()
+            except Exception:
+                pass
+            return None
+
     except Exception as exc:
         logger.info("Could not fetch metadata for %s: %s", paper_id, exc)
         return None

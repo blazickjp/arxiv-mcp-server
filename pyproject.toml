@@ -41,6 +41,8 @@ dependencies = [
     "starlette>=0.27.0",
     "sse-starlette>=1.8.2",
     "anyio>=4.2.0",
+    "lxml>=4.6.0",
+    "requests>=2.25.0",
 ]
 
 [project.urls]

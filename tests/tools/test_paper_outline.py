@@ -1740,3 +1740,58 @@ def test_daop_guards_golden_outline():
     assert "Ours" not in titles
     assert "14.37" not in titles
     assert "27.07" not in titles
+
+
+def test_sequence_check_applied_to_period_form_split_numbers():
+    """Sequence check prevents period-form body lists from being promoted.
+
+    Regression test for issue #284: period-form body list items like
+    "1. Load the model" after section 3 should be rejected by sequence
+    validation. Without this check, they would be promoted to fake headings.
+
+    This test fails if the sequence check is bypassed for period-form split numbers.
+    """
+    # Markdown with a real section 3, then a period-form body list that doesn't
+    # continue the sequence (1. and 2. after section 3)
+    md = """# Introduction
+
+Some text.
+
+# Background
+
+More text.
+
+3.
+Methods
+
+We describe our approach:
+
+1.
+Load the model
+
+2.
+Run the inference
+
+# Results
+
+Final section.
+"""
+    sections = parse_markdown_sections(md)
+    titles = [s.title for s in sections]
+
+    # Real headings should be present
+    assert "Introduction" in titles
+    assert "Background" in titles
+    assert "Methods" in titles
+    assert "Results" in titles
+
+    # Body list items should NOT be promoted (sequence check should reject them)
+    assert (
+        "Load the model" not in titles
+    ), "Body list item '1. Load the model' should be rejected by sequence check"
+    assert (
+        "Run the inference" not in titles
+    ), "Body list item '2. Run the inference' should be rejected by sequence check"
+
+    # Should have exactly 4 sections (not 6 with the fake body list items)
+    assert len(titles) == 4, f"Expected 4 sections, got {len(titles)}: {titles}"
