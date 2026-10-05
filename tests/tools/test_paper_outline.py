@@ -1746,13 +1746,14 @@ def test_sequence_check_applied_to_period_form_split_numbers():
     """Sequence check prevents period-form body lists from being promoted.
 
     Regression test for issue #284: period-form body list items like
-    "1. Load the model" after section 3 should be rejected by sequence
-    validation. Without this check, they would be promoted to fake headings.
+    "1. Load The Model" (Title Case) after section 3 should be rejected by
+    sequence validation. Without this check, they would be promoted to fake headings.
 
     This test fails if the sequence check is bypassed for period-form split numbers.
+    Uses Title Case to avoid rejection by the sentence-case rule.
     """
     # Markdown with a real section 3, then a period-form body list that doesn't
-    # continue the sequence (1. and 2. after section 3)
+    # continue the sequence (1. and 2. after section 3), using Title Case
     md = """# Introduction
 
 Some text.
@@ -1767,10 +1768,10 @@ Methods
 We describe our approach:
 
 1.
-Load the model
+Load The Model
 
 2.
-Run the inference
+Run The Inference
 
 # Results
 
@@ -1785,13 +1786,14 @@ Final section.
     assert "Methods" in titles
     assert "Results" in titles
 
-    # Body list items should NOT be promoted (sequence check should reject them)
+    # Fake body-list headings should NOT be present (rejected by sequence check)
+    # These are Title Case so they would pass the sentence-case rule
     assert (
-        "Load the model" not in titles
-    ), "Body list item '1. Load the model' should be rejected by sequence check"
+        "Load The Model" not in titles
+    ), "Sequence check failed: 1. promoted after section 3"
     assert (
-        "Run the inference" not in titles
-    ), "Body list item '2. Run the inference' should be rejected by sequence check"
+        "Run The Inference" not in titles
+    ), "Sequence check failed: 2. promoted after section 3"
 
     # Should have exactly 4 sections (not 6 with the fake body list items)
     assert len(titles) == 4, f"Expected 4 sections, got {len(titles)}: {titles}"

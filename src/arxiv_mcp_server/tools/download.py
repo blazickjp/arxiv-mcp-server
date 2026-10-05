@@ -1277,6 +1277,18 @@ def _fetch_arxiv_metadata(
                 def close_on_timeout():
                     logger.info(f"Metadata watchdog fired for {paper_id}")
                     try:
+                        sock = None
+                        if hasattr(response, "raw") and hasattr(response.raw, "_fp"):
+                            fp = response.raw._fp
+                            if hasattr(fp, "fp") and hasattr(fp.fp, "raw"):
+                                sock = getattr(fp.fp.raw, "_sock", None)
+                        if sock is not None:
+                            try:
+                                import socket
+
+                                sock.shutdown(socket.SHUT_RDWR)
+                            except Exception:
+                                pass
                         response.close()
                     except Exception:
                         pass
@@ -1285,26 +1297,12 @@ def _fetch_arxiv_metadata(
                 watchdog.daemon = True
                 watchdog.start()
 
-            # Stream response body with per-chunk deadline checks and dynamic read timeout.
-            # requests read timeout is per recv(), not total time, so we also need the watchdog.
+            # Stream response body with per-byte deadline checks.
+            # The watchdog timer handles stalls; chunk_size=1 ensures per-byte deadline checks.
             chunks = []
             try:
-                # Update socket timeout dynamically to remaining budget
-                if (
-                    deadline is not None
-                    and hasattr(response.raw, "_fp")
-                    and hasattr(response.raw._fp, "fp")
-                ):
-                    sock = getattr(response.raw._fp.fp, "raw", None) or getattr(
-                        response.raw._fp.fp, "_sock", None
-                    )
-                    if sock and hasattr(sock, "settimeout"):
-                        remaining_timeout = max(0.1, deadline - time.monotonic())
-                        configured_timeout = float(settings.get_request_timeout())
-                        sock.settimeout(min(configured_timeout, remaining_timeout))
-
                 for chunk in response.iter_content(chunk_size=1, decode_unicode=False):
-                    # Per-chunk deadline check
+                    # Per-byte deadline check
                     if deadline is not None:
                         if time.monotonic() >= deadline:
                             logger.info(
@@ -1312,23 +1310,6 @@ def _fetch_arxiv_metadata(
                             )
                             response.close()
                             return None
-                        # Update socket timeout for next read
-                        if hasattr(response.raw, "_fp") and hasattr(
-                            response.raw._fp, "fp"
-                        ):
-                            sock = getattr(response.raw._fp.fp, "raw", None) or getattr(
-                                response.raw._fp.fp, "_sock", None
-                            )
-                            if sock and hasattr(sock, "settimeout"):
-                                remaining_timeout = max(
-                                    0.1, deadline - time.monotonic()
-                                )
-                                configured_timeout = float(
-                                    settings.get_request_timeout()
-                                )
-                                sock.settimeout(
-                                    min(configured_timeout, remaining_timeout)
-                                )
                     if chunk:
                         chunks.append(chunk)
             finally:

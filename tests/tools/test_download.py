@@ -21,6 +21,17 @@ from arxiv_mcp_server.tools.download import (
 )
 
 
+@pytest.fixture
+def zero_rate_limit():
+    """Zero out the arXiv rate limiter's min_interval for fast tests."""
+    from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
+
+    original_interval = ARXIV_RATE_LIMITER.min_interval
+    ARXIV_RATE_LIMITER.min_interval = 0.0
+    yield
+    ARXIV_RATE_LIMITER.min_interval = original_interval
+
+
 def _write_cached_paper(storage, paper_id, content, extractor_version=None):
     """Write markdown plus a sidecar stamped with an extractor version."""
     (storage / f"{paper_id}.md").write_text(content, encoding="utf-8")
@@ -773,7 +784,9 @@ async def test_download_existence_check_500_no_url_leak(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, mocker):
+async def test_download_pdf_metadata_lookup_406_no_url_leak(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup 406 should be rate_limited, not leak URL (#166, #277)."""
     from arxiv_mcp_server.tools import download as download_module
     from arxiv_mcp_server.tools.search import ArxivRateLimitError
@@ -815,7 +828,9 @@ async def test_download_pdf_metadata_lookup_406_no_url_leak(temp_storage_path, m
 
 
 @pytest.mark.asyncio
-async def test_download_pdf_metadata_lookup_500_no_url_leak(temp_storage_path, mocker):
+async def test_download_pdf_metadata_lookup_500_no_url_leak(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup 500 should not leak URL (#166, #277)."""
     from arxiv_mcp_server.tools import download as download_module
     import arxiv
@@ -1004,7 +1019,9 @@ async def test_pdf_metadata_502_on_2503_id_not_503_rate_limit(
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocker):
+async def test_pdf_metadata_connection_error_on_2406_id(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Connection error on paper 2406.xxxxx must not be falsely identified (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -1041,7 +1058,9 @@ async def test_pdf_metadata_connection_error_on_2406_id(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocker):
+async def test_pdf_metadata_connection_error_on_2503_id(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Connection error on paper 2503.xxxxx must not be falsely identified (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -1078,7 +1097,9 @@ async def test_pdf_metadata_connection_error_on_2503_id(temp_storage_path, mocke
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_406_minimal_retries(temp_storage_path, mocker):
+async def test_pdf_metadata_406_minimal_retries(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """PDF metadata lookup on 406 should use minimal retries (1 retry = 2 total) (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import arxiv
@@ -1113,7 +1134,9 @@ async def test_pdf_metadata_406_minimal_retries(temp_storage_path, mocker):
 
 
 @pytest.mark.asyncio
-async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocker):
+async def test_pdf_metadata_network_error_clean_message(
+    temp_storage_path, mocker, zero_rate_limit
+):
     """Network errors during PDF metadata lookup should report cleanly without URL or traceback (#277)."""
     from arxiv_mcp_server.tools import download as download_module
     import requests
@@ -1149,7 +1172,7 @@ async def test_pdf_metadata_network_error_clean_message(temp_storage_path, mocke
 
 @pytest.mark.asyncio
 async def test_pdf_metadata_network_error_no_traceback_or_url_in_logs(
-    temp_storage_path, mocker, caplog
+    temp_storage_path, mocker, caplog, zero_rate_limit
 ):
     """Network errors during PDF metadata lookup should not log traceback or URL (#277)."""
     from arxiv_mcp_server.tools import download as download_module
