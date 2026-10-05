@@ -460,3 +460,49 @@ def test_metadata_watchdog_closes_connection_on_deadline():
     assert mock_timer.called, "Watchdog timer should be created when deadline is set"
     # Response should be closed (either by watchdog or finally block)
     assert fake_response.close.called, "Response should be closed"
+
+
+def test_metadata_gate_timeout_returns_none_without_request():
+    """Gate timeout prevents metadata lookup when gate wait would exceed budget."""
+    clock = FakeClock()
+    deadline = clock() + 7.0  # 7s budget
+
+    feed_xml = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+<entry>
+  <id>http://arxiv.org/abs/1234.5678v1</id>
+  <title>Test</title>
+  <summary>Test</summary>
+  <published>2024-01-01T00:00:00Z</published>
+  <author><name>Test</name></author>
+  <arxiv:primary_category term="cs.LG"/>
+</entry>
+</feed>"""
+
+    with patch("time.monotonic", clock):
+        with patch("requests.get") as mock_get:
+            with patch(
+                "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
+            ) as mock_limiter:
+                # Simulate gate being held by another operation
+                # The gate timeout will expire, causing initiate_request to be called
+                # without acquiring the gate
+                def run_sync_with_timeout(operation, timeout=None):
+                    if timeout is not None:
+                        # Simulate timeout - advance clock past the gate wait
+                        clock.advance(timeout + 0.1)
+                    # Call operation (which checks remaining time and returns None)
+                    return operation()
+
+                mock_limiter.run_sync.side_effect = run_sync_with_timeout
+                mock_limiter.seconds_until_next_slot.return_value = 5.0  # 5s pending wait
+
+                fake_response = FakeResponse([feed_xml], clock, status_code=200)
+                mock_get.return_value = fake_response
+
+                result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
+
+    # Should return None (deadline exceeded after gate timeout)
+    assert result is None
+    # Should make 0 requests (deadline check before request)
+    assert mock_get.call_count == 0

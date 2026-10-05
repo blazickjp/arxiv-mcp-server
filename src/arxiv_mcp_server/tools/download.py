@@ -1240,8 +1240,8 @@ def _fetch_arxiv_metadata(
                 logger.info(f"Metadata request failed for {paper_id}: {exc}")
                 return None
 
-        # Initiate request inside the rate limiter gate
-        response = ARXIV_RATE_LIMITER.run_sync(initiate_request)
+        # Initiate request inside the rate limiter gate with bounded wait
+        response = ARXIV_RATE_LIMITER.run_sync(initiate_request, timeout=gate_timeout)
         if response is None:
             return None
 
