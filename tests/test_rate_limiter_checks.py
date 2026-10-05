@@ -7,15 +7,14 @@ from unittest.mock import MagicMock, patch
 
 def test_rate_limiter_zero_pending_wait_proceeds():
     """With zero pending wait and 2.5s budget, the attempt proceeds."""
-    from arxiv_mcp_server.tools.download import _fetch_html_content
-    from arxiv_mcp_server import arxiv_api
+    from arxiv_mcp_server.tools import download
 
     # Mock rate limiter to say no wait needed
     with (
         patch.object(
-            arxiv_api.ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0
+            download.ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=0.0
         ),
-        patch.object(arxiv_api.ARXIV_RATE_LIMITER, "run_sync") as mock_run_sync,
+        patch.object(download.ARXIV_RATE_LIMITER, "run_sync") as mock_run_sync,
         patch("arxiv_mcp_server.tools.download.time.monotonic", return_value=0.0),
     ):
         # Deadline at 2.5s (0.0 + 2.5)
@@ -25,7 +24,7 @@ def test_rate_limiter_zero_pending_wait_proceeds():
         mock_run_sync.return_value = "<html>test</html>"
 
         # Should proceed since pending_wait (0) + min_attempt (1) = 1s < 2.5s remaining
-        result = _fetch_html_content("2103.12345", deadline)
+        result = download._fetch_html_content("2103.12345", deadline)
 
         # Should have called run_sync (proceeded with attempt)
         assert mock_run_sync.called
@@ -34,22 +33,21 @@ def test_rate_limiter_zero_pending_wait_proceeds():
 
 def test_rate_limiter_wait_exceeds_budget_returns_immediately():
     """When seconds_until_next_slot exceeds budget minus 1s, returns timeout without calling transport."""
-    from arxiv_mcp_server.tools.download import _fetch_html_content
-    from arxiv_mcp_server import arxiv_api
+    from arxiv_mcp_server.tools import download
 
     # Mock rate limiter to say 2s wait needed
     with (
         patch.object(
-            arxiv_api.ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=2.0
+            download.ARXIV_RATE_LIMITER, "seconds_until_next_slot", return_value=2.0
         ),
-        patch.object(arxiv_api.ARXIV_RATE_LIMITER, "run_sync") as mock_run_sync,
+        patch.object(download.ARXIV_RATE_LIMITER, "run_sync") as mock_run_sync,
         patch("arxiv_mcp_server.tools.download.time.monotonic", return_value=0.0),
     ):
         # Deadline at 2.5s (0.0 + 2.5)
         deadline = 2.5
 
         # Should skip since pending_wait (2) + min_attempt (1) = 3s > 2.5s remaining
-        result = _fetch_html_content("2103.12345", deadline)
+        result = download._fetch_html_content("2103.12345", deadline)
 
         # Should NOT have called run_sync (skipped attempt)
         assert not mock_run_sync.called
