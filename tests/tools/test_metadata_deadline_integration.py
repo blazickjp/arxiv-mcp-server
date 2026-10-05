@@ -336,7 +336,9 @@ def test_socket_timeout_mechanism_alone_enforces_deadline(slow_server):
 
         # Socket timeout mechanism should enforce deadline
         assert result is None, f"Expected None, got {result}"
-        assert elapsed < 3.5, f"Socket timeout took {elapsed:.2f}s, expected < 3.5s"
+        assert (
+            2.5 <= elapsed < 3.5
+        ), f"Socket timeout took {elapsed:.2f}s, expected 2.5-3.5s"
         assert SlowHandler.request_count == 1
     finally:
         os.environ.pop("_ARXIV_MCP_TEST_SKIP_WATCHDOG", None)
@@ -358,18 +360,8 @@ def test_watchdog_mechanism_alone_enforces_deadline(slow_server):
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
             response = original_get(slow_server + "/metadata", **kwargs)
-            # Replace raw with mock that makes sock lookup return None
-            original_raw = response.raw
-            mock_raw = Mock()
-            mock_raw._fp = Mock()
-            mock_raw._fp.fp = Mock()
-            mock_raw._fp.fp.raw = Mock()
-            mock_raw._fp.fp.raw._sock = None
-            mock_raw.read = original_raw.read
-            mock_raw.stream = original_raw.stream
-            response.raw = mock_raw
-            return response
-        return original_get(url, **kwargs)
+            # Keep real sock - just disable the other mechanisms
+            return original_get(slow_server + "/metadata", **kwargs)
 
     from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
 
@@ -403,7 +395,7 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
     """Per-byte check alone (watchdog and socket timeout disabled) enforces deadline."""
     import os
 
-    SlowHandler.mode = "headers-then-stall"  # Send headers, then stall
+    SlowHandler.mode = "trickle"  # 10 bytes every 0.5s
     SlowHandler.request_count = 0
 
     start = time.monotonic()
@@ -414,18 +406,8 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
     def patched_get(url, **kwargs):
         if "export.arxiv.org" in url:
             response = original_get(slow_server + "/metadata", **kwargs)
-            # Replace raw with mock that makes sock lookup return None
-            original_raw = response.raw
-            mock_raw = Mock()
-            mock_raw._fp = Mock()
-            mock_raw._fp.fp = Mock()
-            mock_raw._fp.fp.raw = Mock()
-            mock_raw._fp.fp.raw._sock = None
-            mock_raw.read = original_raw.read
-            mock_raw.stream = original_raw.stream
-            response.raw = mock_raw
-            return response
-        return original_get(url, **kwargs)
+            # Keep real sock - just disable the other mechanisms
+            return original_get(slow_server + "/metadata", **kwargs)
 
     from arxiv_mcp_server.tools.download import ARXIV_RATE_LIMITER
 
@@ -448,7 +430,9 @@ def test_per_byte_check_alone_enforces_deadline(slow_server):
 
         # Per-byte check should enforce deadline
         assert result is None, f"Expected None, got {result}"
-        assert elapsed < 3.5, f"Per-byte check took {elapsed:.2f}s, expected < 3.5s"
+        assert (
+            2.5 <= elapsed < 3.5
+        ), f"Per-byte check took {elapsed:.2f}s, expected 2.5-3.5s"
         assert SlowHandler.request_count == 1
     finally:
         os.environ.pop("_ARXIV_MCP_TEST_SKIP_WATCHDOG", None)

@@ -1321,6 +1321,10 @@ def _fetch_arxiv_metadata(
                 # Hard backstop: run streaming read in daemon thread, abandon at deadline
                 result_container = {"chunks": None, "error": None}
 
+                skip_perbyte_check = __import__("os").environ.get(
+                    "_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK"
+                )
+
                 def stream_in_thread():
                     try:
                         thread_chunks = []
@@ -1329,7 +1333,7 @@ def _fetch_arxiv_metadata(
                             chunk_size=1, decode_unicode=False
                         ):
                             # Per-byte deadline check
-                            if deadline is not None:
+                            if deadline is not None and not skip_perbyte_check:
                                 remaining = deadline - time.monotonic()
                                 if remaining <= 0:
                                     logger.info(
@@ -1389,10 +1393,22 @@ def _fetch_arxiv_metadata(
                         "_ARXIV_MCP_TEST_SKIP_PERBYTE_CHECK"
                     )
 
+                    # Arm socket timeout before first read
+                    if (
+                        sock is not None
+                        and deadline is not None
+                        and not skip_socket_timeout
+                    ):
+                        try:
+                            remaining = deadline - time.monotonic()
+                            sock.settimeout(max(0.05, min(read_timeout, remaining)))
+                        except Exception:
+                            pass
+
                     for chunk in response.iter_content(
                         chunk_size=1, decode_unicode=False
                     ):
-                        # Per-byte deadline check (always runs, even if socket is unreachable)
+                        # Per-byte deadline check
                         if deadline is not None and not skip_perbyte_check:
                             remaining = deadline - time.monotonic()
                             if remaining <= 0:
@@ -1401,14 +1417,19 @@ def _fetch_arxiv_metadata(
                                 )
                                 response.close()
                                 return None
-                            # Set socket timeout to remaining budget before each read
-                            if sock is not None and not skip_socket_timeout:
-                                try:
-                                    sock.settimeout(
-                                        max(0.05, min(read_timeout, remaining))
-                                    )
-                                except Exception:
-                                    pass
+
+                        # Refresh socket timeout for next read
+                        if (
+                            sock is not None
+                            and deadline is not None
+                            and not skip_socket_timeout
+                        ):
+                            try:
+                                remaining = deadline - time.monotonic()
+                                sock.settimeout(max(0.05, min(read_timeout, remaining)))
+                            except Exception:
+                                pass
+
                         if chunk:
                             chunks.append(chunk)
                 except (
