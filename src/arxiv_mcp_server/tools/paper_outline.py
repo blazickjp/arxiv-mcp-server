@@ -604,15 +604,14 @@ def _match_two_line_appendix(
 
     Returns (level, combined_title) or None.
     Level 1 for 'Appendix B Title', level 2 for 'B.1 Title'.
+
+    Bare letters (A, B, C) are only accepted if preceded by "Appendix" keyword.
+    Dotted numbers (A.1, B.2) are accepted if they look like subsection markers.
     """
     first = first_line.strip()
     second = second_line.strip()
 
     if not first or not second:
-        return None
-
-    # Check if first line is an appendix marker
-    if not _is_appendix_style_heading(first):
         return None
 
     # Second line should not be another heading marker or look like a table cell
@@ -632,27 +631,10 @@ def _match_two_line_appendix(
     ):
         return None
 
-    # Determine level based on first line pattern
-    # "Appendix B" / "Supplementary A" -> level 1
-    # "A" / "B" -> level 1
-    # "A.1" / "B.2" -> level 2
-    letter_match = _APPENDIX_LETTER_RE.match(first)
-    if letter_match:
-        letter = letter_match.group(1)
-        subsection = letter_match.group(2)
-        if subsection:
-            # A.1, B.2 -> level 2
-            level = min(6, 1 + subsection.count(".") + 1)
-        else:
-            # A, B -> level 1
-            level = 1
-        # Combine letter and title
-        title = f"{letter} {second}" if not subsection else f"{first} {second}"
-        return level, _normalize_heading_title(title)
-
+    # Check first line patterns - be strict about bare letters
+    # "Appendix B" / "Supplementary A" -> accept
     prefix_match = _APPENDIX_PREFIX_RE.match(first)
     if prefix_match:
-        # "Appendix B Title" -> level 1
         prefix = prefix_match.group(1)
         letter = prefix_match.group(2)
         title = f"{prefix} {letter} {second}"
@@ -663,6 +645,19 @@ def _match_two_line_appendix(
     if normalized.casefold() in _APPENDIX_MARKERS:
         title = f"{first} {second}"
         return 1, _normalize_heading_title(title)
+
+    # Dotted letter patterns (A.1, B.2, C.3) - these look like subsections
+    letter_match = _APPENDIX_LETTER_RE.match(first)
+    if letter_match:
+        letter = letter_match.group(1)
+        subsection = letter_match.group(2)
+        # Only accept dotted forms (A.1, not bare A)
+        # Bare letters require "Appendix" prefix
+        if subsection:
+            # A.1, B.2 -> level 2
+            level = min(6, 1 + subsection.count(".") + 1)
+            title = f"{first} {second}"
+            return level, _normalize_heading_title(title)
 
     return None
 
@@ -712,8 +707,11 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
 
     Section body runs from the heading start through the character before the
     next heading of the same or higher level (lower or equal level number).
-    Bibliography lines (e.g. ``2023 USENIX ATC…``) and reference entries are
-    filtered by existing content guards and are not treated as sections.
+
+    After References/Bibliography, enters post-References mode where only explicit
+    appendix-style headings are accepted (Appendix X + title, lettered subsections,
+    or Acknowledgments/Supplementary keywords). This filters out table cells and
+    bibliography entry lines that would otherwise become fake sections.
     """
     if len(content) == 0:
         return [MdSection("1", 1, "(document)", 0, 0)]
@@ -752,9 +750,9 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         is_split_numbered = False
         is_two_line_appendix = False
 
-        # Check for two-line appendix pattern (Appendix B / title)
+        # Check for two-line appendix pattern ONLY after References
         # Look ahead, skipping blank lines
-        if matched is None:
+        if matched is None and post_references:
             peek = index + 1
             while peek < len(lines_meta):
                 _, peek_line = lines_meta[peek]
@@ -794,24 +792,51 @@ def parse_markdown_sections(content: str) -> list[MdSection]:
         if matched is not None:
             level, title = matched
 
-            # In post-References mode, only accept appendix-style headings
-            # or ATX/numbered headings at level 1 (same as main sections)
+            # In post-References mode, only accept explicit appendix-style headings
+            # Reject ATX/numbered unless they contain appendix markers
             if post_references and not is_two_line_appendix:
-                # Check if this is an appendix-style title
+                # Check if title contains appendix-style keywords or patterns
                 normalized = _normalize_heading_title(title)
-                is_appendix_title = normalized.casefold() in _APPENDIX_MARKERS
+                normalized_lower = normalized.casefold()
 
-                # Also accept ATX headings (# markers) or numbered headings at top level
-                is_atx = _ATX_HEADING_RE.match(logical.strip()) is not None
-                is_numbered_top = (
-                    _NUMBERED_HEADING_RE.match(logical.strip()) is not None
-                    and level == 1
+                # Accept: explicit appendix/supplementary/acknowledgments titles
+                is_appendix_keyword = normalized_lower in _APPENDIX_MARKERS
+
+                # Accept: titles starting with letter+dot pattern (A.1, B.2, etc.)
+                # But only if it's a continuation of existing appendix structure
+                is_lettered_subsection = (
+                    _APPENDIX_LETTER_RE.match(normalized.split()[0])
+                    if normalized
+                    else False
                 )
 
-                # Reject if not appendix-style and not a high-level heading
-                if not is_appendix_title and not is_atx and not is_numbered_top:
-                    index += consumed
-                    continue
+                # Reject ATX or numbered headings that don't have appendix markers
+                if not is_appendix_keyword and not is_lettered_subsection:
+                    # ATX heading without appendix content is rejected
+                    is_atx = _ATX_HEADING_RE.match(logical.strip()) is not None
+                    if is_atx:
+                        index += consumed
+                        continue
+
+                    # Numbered heading that's not a clear appendix pattern is rejected
+                    is_numbered = (
+                        _NUMBERED_HEADING_RE.match(logical.strip()) is not None
+                    )
+                    if is_numbered:
+                        index += consumed
+                        continue
+
+            # Numbered prefix wins over keyword: "A.1.1 Acknowledgments" stays at level 3
+            # Count dots in the title prefix to determine actual level
+            title_parts = title.split()
+            if title_parts:
+                first_part = title_parts[0]
+                # Check if first part is a dotted number (A.1, A.1.1, etc.)
+                dotted_match = re.match(r"^([A-H])\.(\d+(?:\.\d+)*)$", first_part)
+                if dotted_match:
+                    # Level = 1 (A) + number of dots in subsection
+                    subsection = dotted_match.group(2)
+                    level = min(6, 1 + subsection.count(".") + 1)
 
             # Drop table-header false positives: bare ``Method`` between short
             # single-token cells (Model / Method / HellaS) is not a section.
@@ -880,6 +905,27 @@ def _find_section(sections: list[MdSection], section_id: str) -> MdSection | Non
     ]
     if len(matches) == 1:
         return matches[0]
+
+    # Try matching without "Appendix X " prefix for appendix sections
+    # Allows lookup by bare title: "DPO Implementation Details" matches "Appendix B DPO Implementation Details"
+    appendix_prefix_pattern = re.compile(r"^appendix\s+[a-h]\s+", re.IGNORECASE)
+    for section in sections:
+        section_title_lower = section.title.casefold()
+        # Check if section title starts with "Appendix X "
+        if appendix_prefix_pattern.match(section_title_lower):
+            # Extract bare title without prefix
+            bare_title = appendix_prefix_pattern.sub("", section_title_lower)
+            bare_title = re.sub(r"\s+", " ", bare_title)
+            if bare_title == title_needle:
+                return section
+        # Also try matching without dotted prefix like "A.1 " or "C.2 "
+        dotted_prefix = re.match(r"^[a-h]\.\d+(\.\d+)*\s+", section_title_lower)
+        if dotted_prefix:
+            bare_title = section_title_lower[dotted_prefix.end() :]
+            bare_title = re.sub(r"\s+", " ", bare_title)
+            if bare_title == title_needle:
+                return section
+
     return None
 
 
