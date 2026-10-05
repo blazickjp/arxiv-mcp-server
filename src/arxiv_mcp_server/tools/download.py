@@ -1241,7 +1241,20 @@ def _fetch_arxiv_metadata(
                 return None
 
         # Initiate request inside the rate limiter gate with bounded wait
-        response = ARXIV_RATE_LIMITER.run_sync(initiate_request, timeout=gate_timeout)
+        try:
+            response = ARXIV_RATE_LIMITER.run_sync(
+                initiate_request, timeout=gate_timeout
+            )
+        except Exception as e:
+            # GateTimeout or other rate limiter error
+            from ..arxiv_api import GateTimeout
+
+            if isinstance(e, GateTimeout):
+                logger.info(
+                    f"Metadata lookup skipped: gate timeout after {gate_timeout:.1f}s wait for {paper_id}"
+                )
+                return None
+            raise
         if response is None:
             return None
 

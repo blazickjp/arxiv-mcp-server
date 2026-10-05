@@ -76,3 +76,39 @@ async def test_sync_and_async_requests_share_the_same_gate():
     )
 
     assert max_active == 1
+
+
+def test_run_sync_timeout_raises_gate_timeout_without_calling_operation():
+    """Gate acquisition timeout raises GateTimeout without calling operation."""
+    from arxiv_mcp_server.arxiv_api import GateTimeout
+
+    limiter = ArxivRateLimiter(min_interval=0.0)
+    operation_called = False
+
+    def operation():
+        nonlocal operation_called
+        operation_called = True
+        return "result"
+
+    # Acquire the lock in another thread
+    def hold_lock():
+        limiter._lock.acquire()
+        time.sleep(0.2)
+        limiter._lock.release()
+
+    import threading
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+
+    # Give holder time to acquire the lock
+    time.sleep(0.05)
+
+    # Attempt to run operation with a short timeout
+    with pytest.raises(GateTimeout):
+        limiter.run_sync(operation, timeout=0.05)
+
+    holder.join()
+
+    # Operation should never be called (preserving rate limiting)
+    assert not operation_called

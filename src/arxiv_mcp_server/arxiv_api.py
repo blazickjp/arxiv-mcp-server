@@ -16,6 +16,12 @@ logger = logging.getLogger("arxiv-mcp-server")
 T = TypeVar("T")
 
 
+class GateTimeout(Exception):
+    """Raised when acquiring the rate limiter gate times out."""
+
+    pass
+
+
 class ArxivRateLimiter:
     """Serialize and space arXiv API requests across sync and async callers."""
 
@@ -53,19 +59,24 @@ class ArxivRateLimiter:
         Args:
             operation: Callable to execute inside the gate.
             timeout: Optional timeout in seconds for gate acquisition. If the gate
-                cannot be acquired within this time, returns the result of calling
-                operation() without acquiring the gate (operation should check for
-                timeout and return None if appropriate).
+                cannot be acquired within this time, raises GateTimeout without
+                calling operation (preserving request spacing).
 
         Returns:
             Result of the operation.
+
+        Raises:
+            GateTimeout: If timeout is provided and gate acquisition times out.
         """
         acquired = self._lock.acquire(
             blocking=True, timeout=timeout if timeout is not None else -1
         )
         if not acquired:
-            # Timeout expired waiting for gate
-            return operation()
+            # Timeout expired waiting for gate - preserve rate limiting by not
+            # calling operation
+            raise GateTimeout(
+                f"Could not acquire rate limiter gate within {timeout}s timeout"
+            )
         try:
             delay = self._remaining_delay()
             if delay:

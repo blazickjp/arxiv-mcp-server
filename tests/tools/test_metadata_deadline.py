@@ -484,14 +484,15 @@ def test_metadata_gate_timeout_returns_none_without_request():
             with patch(
                 "arxiv_mcp_server.tools.download.ARXIV_RATE_LIMITER"
             ) as mock_limiter:
-                # Simulate gate being held by another operation
-                # The gate timeout will expire, causing initiate_request to be called
-                # without acquiring the gate
+                # Simulate gate timeout - raise GateTimeout without calling operation
                 def run_sync_with_timeout(operation, timeout=None):
                     if timeout is not None:
-                        # Simulate timeout - advance clock past the gate wait
-                        clock.advance(timeout + 0.1)
-                    # Call operation (which checks remaining time and returns None)
+                        # Gate acquisition times out
+                        from arxiv_mcp_server.arxiv_api import GateTimeout
+
+                        raise GateTimeout(
+                            f"Could not acquire rate limiter gate within {timeout}s timeout"
+                        )
                     return operation()
 
                 mock_limiter.run_sync.side_effect = run_sync_with_timeout
@@ -504,7 +505,7 @@ def test_metadata_gate_timeout_returns_none_without_request():
 
                 result = _fetch_arxiv_metadata("1234.5678", deadline=deadline)
 
-    # Should return None (deadline exceeded after gate timeout)
+    # Should return None (gate timeout)
     assert result is None
-    # Should make 0 requests (deadline check before request)
+    # Should make 0 requests (operation never called, preserving rate limiting)
     assert mock_get.call_count == 0
