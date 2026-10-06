@@ -106,6 +106,7 @@ _TITLE_CASE_MINOR_WORDS = frozenset(
         "onto",
         "over",
         "than",
+        "that",
         "upon",
         "de",
         "von",
