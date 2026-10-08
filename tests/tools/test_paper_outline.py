@@ -630,7 +630,7 @@ Appendix B
 
 Verifying that Explanations Do Not Mention Biasing Features
 
-As discussed in
+We find zero instances of explanations mentioning the bias.
 
 Appendix C
 
@@ -2316,7 +2316,10 @@ def test_turpin_real_appendices_reject_atx_table_cells():
     # Appendices recognized (some with Title Case titles)
     assert "References" in titles
     assert "Appendix A Additional Samples" in titles or "Additional Samples" in titles
-    # Appendix B has sentence-case title, may be rejected (nice-to-have)
+    assert (
+        "Appendix B Verifying that Explanations Do Not Mention Biasing Features"
+        in titles
+    )
     assert "Appendix C Qualitative Analysis Details" in titles or any(
         "Qualitative" in t for t in titles
     )
@@ -2962,3 +2965,88 @@ Second data section with same title.
     result_g = json.loads(response_g[0].text)
     assert result_g["status"] == "success"
     assert "G.1 Data" in result_g["section"]["title"]
+
+
+@pytest.mark.asyncio
+async def test_turpin_appendix_b_outline_reads_and_search(patch_storage):
+    """The literal Appendix B title/body excerpt must stay out of Appendix A.
+
+    Source: https://arxiv.org/html/2305.04388v2 (Appendix B).
+    The lowercase connective "that" is valid within an otherwise Title Case title.
+    """
+    _write_paper(patch_storage, "2305.04388", TURPIN_REAL_EXCERPT)
+    title = "Verifying that Explanations Do Not Mention Biasing Features"
+    full_title = f"Appendix B {title}"
+    body = "We find zero instances of explanations mentioning the bias."
+    outline = json.loads(
+        (await handle_get_paper_outline({"paper_id": "2305.04388"}))[0].text
+    )
+    assert outline["status"] == "success"
+    appendix = next(s for s in outline["sections"] if s["title"] == full_title)
+
+    for selector in (appendix["id"], full_title, title, title.lower()):
+        result = json.loads(
+            (
+                await handle_read_paper_section(
+                    {"paper_id": "2305.04388", "section_id": selector}
+                )
+            )[0].text
+        )
+        assert result["status"] == "success"
+        assert result["section"]["title"] == full_title
+        assert body in result["content"]
+        assert "Qualitative Analysis Details" not in result["content"]
+
+    previous = json.loads(
+        (
+            await handle_read_paper_section(
+                {"paper_id": "2305.04388", "section_id": "Additional Samples"}
+            )
+        )[0].text
+    )
+    assert previous["status"] == "success"
+    assert body not in previous["content"]
+    assert title not in previous["content"]
+
+    search = json.loads(
+        (
+            await handle_search_paper_text(
+                {"paper_id": "2305.04388", "query": "zero instances"}
+            )
+        )[0].text
+    )
+    assert search["status"] == "success"
+    assert search["returned_passages"] == 1
+    assert search["passages"][0]["section_title"] == full_title
+    assert search["passages"][0]["section_id"] == appendix["id"]
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_appendix_title_with_lowercase_connective(separator):
+    title = "Verifying that Explanations Do Not Mention Biasing Features"
+    md = f"References\n\nAppendix B{separator}{title}\n\nAppendix body.\n"
+    assert [s.title for s in parse_markdown_sections(md)] == [
+        "References",
+        f"Appendix B {title}",
+    ]
+
+
+@pytest.mark.parametrize(
+    "noise",
+    [
+        "Appendix B\nWe find that explanations omit the bias",
+        "Appendix B\nVerifying that explanations omit the bias",
+        "B\nWeb Of Lies",
+        "B Web Of Lies",
+        "# Failed",
+        "# FS (Ans. A)",
+        "1 Some Paper Title Here",
+        "1 Evidence that Explanations Omit Bias",
+    ],
+)
+def test_lowercase_connective_does_not_relax_post_reference_guards(noise):
+    md = f"References\n\n{noise}\n\nText.\n\nAppendix C\nValid Title\n\nBody.\n"
+    assert [s.title for s in parse_markdown_sections(md)] == [
+        "References",
+        "Appendix C Valid Title",
+    ]
