@@ -472,8 +472,16 @@ The server binds to `127.0.0.1` by default and enables MCP DNS-rebinding protect
 | `ALLOWED_HOSTS` | empty | Additional accepted HTTP Host values |
 | `ALLOWED_ORIGINS` | empty | Additional accepted HTTP Origin values |
 | `SEMANTIC_SCHOLAR_API_KEY` | empty | Free Semantic Scholar API key for `citation_graph`. Get one at https://www.semanticscholar.org/product/api#api-key to avoid rate limits. Unauthenticated requests work until quota exhausted. |
-
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model ID for semantic search. Changing the model requires rebuilding the semantic index with `reindex` and `clear_existing=True`. |
 Environment variable names are case-insensitive through Pydantic settings. `--storage-path` is a command-line option rather than an environment setting.
+
+
+#### Embedding model configuration
+- ARXIV_MCP_EMBEDDING_MODEL (optional): sentence-transformers model id used for local semantic embeddings. Example:
+  - export ARXIV_MCP_EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+- You can also set EMBEDDING_MODEL via environment variables (pydantic Settings).
+- Important: Changing the embedding model requires rebuilding the semantic index because stored vectors are model-dependent and may have different dimensions. Run the `reindex` tool with `clear_existing=True` after changing the model.
+
 
 ## Security
 

@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: str = ""
     ALLOWED_ORIGINS: str = ""
     SEMANTIC_SCHOLAR_API_KEY: str = ""
+    # Default sentence-transformers model id. Can be overridden via
+    # ARXIV_MCP_EMBEDDING_MODEL env var or EMBEDDING_MODEL env var.
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     model_config = SettingsConfigDict(extra="allow")
 
     def model_post_init(self, __context) -> None:
