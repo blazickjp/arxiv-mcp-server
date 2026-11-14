@@ -90,25 +90,29 @@ def test_run_sync_timeout_raises_gate_timeout_without_calling_operation():
         operation_called = True
         return "result"
 
-    # Acquire the lock in another thread
-    def hold_lock():
-        limiter._lock.acquire()
-        time.sleep(0.2)
-        limiter._lock.release()
-
     import threading
+
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+
+    # Hold the gate in another thread until the assertion has run, so the
+    # test does not depend on thread scheduling or sleep accuracy.
+    def hold_lock():
+        with limiter._lock:
+            lock_held.set()
+            release_lock.wait(timeout=5)
 
     holder = threading.Thread(target=hold_lock)
     holder.start()
+    try:
+        assert lock_held.wait(timeout=5), "holder thread never acquired the gate"
 
-    # Give holder time to acquire the lock
-    time.sleep(0.05)
-
-    # Attempt to run operation with a short timeout
-    with pytest.raises(GateTimeout):
-        limiter.run_sync(operation, timeout=0.05)
-
-    holder.join()
+        # Attempt to run operation with a short timeout
+        with pytest.raises(GateTimeout):
+            limiter.run_sync(operation, timeout=0.05)
+    finally:
+        release_lock.set()
+        holder.join()
 
     # Operation should never be called (preserving rate limiting)
     assert not operation_called
